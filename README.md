@@ -17,6 +17,9 @@ under the License. -->
 
 # rya-ng
 
+[![CI](https://github.com/dgreco/rya-ng/actions/workflows/ci.yml/badge.svg)](https://github.com/dgreco/rya-ng/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://dgreco.github.io/rya-ng/badge.json)](https://dgreco.github.io/rya-ng/coverage/)
+
 rya-ng is an RDF triple store on [Apache Accumulo](https://accumulo.apache.org/). It has two parts:
 - an [RDF4J](https://rdf4j.org/) Sail you can embed;
 - a standalone [SPARQL 1.1 Protocol](https://www.w3.org/TR/sparql11-protocol/) endpoint for queries and updates.
@@ -48,7 +51,14 @@ mvn test                         # unit tests only (fast, no Accumulo)
 mvn install -DskipTests
 mvn -pl rya.api test -Dtest=TypeEncodingDelimiterTest
 mvn -pl rya.accumulo verify -Dit.test=AccumuloRyaDAOIT -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false
+
+# coverage of the unit and integration tests together, in rya.coverage/target/site/jacoco-aggregate
+mvn clean verify -Pcoverage
 ```
+
+GitHub Actions (`.github/workflows/ci.yml`) runs `mvn clean verify -Pcoverage` on every push and pull request:
+- Each run's summary lists the tests and the coverage per module, and the HTML coverage report is attached to the run.
+- For pushes to `main`, the report is published at <https://dgreco.github.io/rya-ng/coverage/>, and the badge above shows its line coverage.
 
 The endpoint is packaged as `rya.sparql/target/rya.sparql-<version>.jar`.
 

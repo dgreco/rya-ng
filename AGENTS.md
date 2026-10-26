@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-rya-ng is an RDF triple store on Accumulo. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with six modules, groupId `io.github.dgreco.rya`, version `1.0.0-SNAPSHOT`, Java packages under `io.github.dgreco.rya`.
+rya-ng is an RDF triple store on Accumulo. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with six modules (plus `rya.coverage` under `-Pcoverage`), groupId `io.github.dgreco.rya`, version `1.0.0-SNAPSHOT`, Java packages under `io.github.dgreco.rya`.
 
 | Component | Version | Notes |
 |---|---|---|
@@ -31,6 +31,10 @@ mvn -pl rya.sail verify -Dit.test=InferenceIT -Dtest=none -Dsurefire.failIfNoSpe
 ```
 
 - **Naming:** `*Test` = pure unit test, `*IT` = needs Accumulo. There is no IT profile; `verify` always runs ITs.
+- **Coverage and CI:**
+  - `-Pcoverage` attaches JaCoCo's agent to surefire (`target/jacoco.exec`) and failsafe (`target/jacoco-it.exec`). It also adds `rya.coverage`, whose `report-aggregate` merges both into `rya.coverage/target/site/jacoco-aggregate`.
+  - The agent travels in the `argLine` property, so failsafe's `argLine` must keep `@{argLine}`. Any new surefire/failsafe `argLine` must include it too.
+  - `.github/workflows/ci.yml` runs `mvn clean verify -Pcoverage`. `.github/scripts/ci_summary.py` turns the test XML and `jacoco.csv` into the run summary and the badge JSON. Pushes to `main` deploy the report to GitHub Pages (`/coverage/`, `/badge.json`).
 - **IT base classes:**
   - `rya.test.accumulo`'s `AccumuloITBase` gives each test a root `AccumuloClient` and a unique table prefix (tables are deleted afterwards), plus `grantAuthorizations(...)`. A real cluster rejects scans with auths the user lacks, so any visibility test must call it.
   - `rya.sail` tests use `RyaSailITBase`, which adds `newConf()`, `newDao(conf)` and `newStore(conf, inference)`.

@@ -67,6 +67,10 @@ under the License.
         <version.maven-site-plugin>3.22.0</version.maven-site-plugin>
         <version.maven-enforcer-plugin>3.6.3</version.maven-enforcer-plugin>
         <version.maven-antrun-plugin>3.2.0</version.maven-antrun-plugin>
+        <version.jacoco-maven-plugin>0.8.15</version.jacoco-maven-plugin>
+
+        <!-- JVM options of the forked test JVMs. Empty unless -Pcoverage, where JaCoCo puts its agent here. -->
+        <argLine></argLine>
 
         <accumulo.version>2.1.6</accumulo.version>
         <!-- Accumulo 2.1.6 ships Hadoop 3.3.x, which fails on JDK 23+ ("getSubject is not supported").
@@ -298,6 +302,11 @@ under the License.
                     <version>${version.maven-antrun-plugin}</version>
                 </plugin>
                 <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>${version.jacoco-maven-plugin}</version>
+                </plugin>
+                <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${version.maven-surefire-plugin}</version>
@@ -317,7 +326,8 @@ under the License.
                             <java.net.preferIPv4Stack>true</java.net.preferIPv4Stack>
                         </systemPropertyVariables>
                         <forkedProcessTimeoutInSeconds>1200</forkedProcessTimeoutInSeconds>
-                        <argLine>-Xmx2G</argLine>
+                        <!-- @{argLine}: the JaCoCo agent under -Pcoverage, resolved when the tests start. -->
+                        <argLine>@{argLine} -Xmx2G</argLine>
                     </configuration>
                 </plugin>
             </plugins>
@@ -360,4 +370,38 @@ under the License.
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- mvn verify -Pcoverage: records the coverage of the unit tests (target/jacoco.exec) and of the
+             integration tests (target/jacoco-it.exec) of every module, and merges them into one report in
+             rya.coverage/target/site/jacoco-aggregate (HTML, XML, CSV). CI runs this. -->
+        <profile>
+            <id>coverage</id>
+            <modules>
+                <module>rya.coverage</module>
+            </modules>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.jacoco</groupId>
+                        <artifactId>jacoco-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>prepare-agent</id>
+                                <goals>
+                                    <goal>prepare-agent</goal>
+                                </goals>
+                            </execution>
+                            <execution>
+                                <id>prepare-agent-integration</id>
+                                <goals>
+                                    <goal>prepare-agent-integration</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

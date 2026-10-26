@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright 2026 David Greco
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>io.github.dgreco.rya</groupId>
+        <artifactId>rya-ng</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <!-- Only built with -Pcoverage: merges every module's unit and integration test coverage into one report. -->
+    <artifactId>rya.coverage</artifactId>
+    <packaging>pom</packaging>
+    <name>rya-ng Coverage Report</name>
+    <description>Aggregated JaCoCo report of the unit and integration tests of every module.</description>
+
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.accumulo</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.sail</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.sparql</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.loader</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>report-aggregate</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report-aggregate</goal>
+                        </goals>
+                        <configuration>
+                            <title>rya-ng</title>
+                            <!-- every *.exec in each module's target: jacoco.exec (unit) and jacoco-it.exec (integration) -->
+                            <dataFileIncludes>
+                                <dataFileInclude>target/*.exec</dataFileInclude>
+                            </dataFileIncludes>
+                            <formats>
+                                <format>HTML</format>
+                                <format>XML</format>
+                                <format>CSV</format>
+                            </formats>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
