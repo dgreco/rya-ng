@@ -281,6 +281,34 @@ class LoaderIT extends AccumuloITBase {
         assertTrue(getClient().tableOperations().list().stream().noneMatch(t -> t.startsWith(getTablePrefix())));
     }
 
+    @Test
+    void checkConnectsWithAPropertiesFileThatLeavesThePasswordOut() throws Exception {
+        final Properties props = new Properties();
+        props.putAll(getClientProperties());
+        props.remove("auth.token");
+        final Path file = dir.resolve("accumulo-client.properties");
+        try (java.io.OutputStream out = Files.newOutputStream(file)) {
+            props.store(out, null);
+        }
+        final Run noPassword = run(Map.of(), "check", List.of("--client-properties", file.toString()));
+        assertEquals(2, noPassword.code(), noPassword.all());
+        assertTrue(noPassword.err().contains("RYA_ACCUMULO_PASSWORD"), noPassword.err());
+
+        final Map<String, String> env = Map.of("RYA_ACCUMULO_PASSWORD", getPassword());
+        final Run before = run(env, "check", List.of("--client-properties", file.toString(), "--table-prefix", getTablePrefix()));
+        assertEquals(0, before.code(), before.all());
+        assertTrue(before.out().contains("Connected to instance " + getInstanceName()), before.out());
+        assertTrue(before.out().contains("Tablet servers: 1"), before.out());
+        assertTrue(before.out().contains("May create tables: yes"), before.out());
+        assertTrue(before.out().contains("Store " + getTablePrefix() + ": not found"), before.out());
+
+        final List<String> args = new ArrayList<>(dataset("--splits", "0"));
+        args.addAll(List.of("--client-properties", file.toString()));
+        assertEquals(0, run(env, "prepare", args).code());
+        final Run after = run(env, "check", List.of("--client-properties", file.toString(), "--table-prefix", getTablePrefix()));
+        assertTrue(after.out().contains("Store " + getTablePrefix() + ": tables [" + getTablePrefix() + "spo"), after.out());
+    }
+
     // ---- checks ----
 
     /** spo holds exactly the generated statements and the reference data; eval holds exactly their summed counters. */

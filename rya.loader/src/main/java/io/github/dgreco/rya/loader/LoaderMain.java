@@ -16,14 +16,18 @@
 package io.github.dgreco.rya.loader;
 
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.accumulo.core.client.AccumuloClient;
+import org.apache.accumulo.core.security.SystemPermission;
 
-/** The loader's command line: {@code prepare}, {@code load}, {@code dry-run}, {@code verify}, {@code drop}. */
+/** The loader's command line: {@code prepare}, {@code load}, {@code dry-run}, {@code verify}, {@code drop}, {@code check}. */
 public final class LoaderMain {
     /** Every table suffix a store uses (see TablePrefixLayoutStrategy). */
     static final List<String> SUFFIXES = List.of("spo", "po", "osp", "ns", "eval", "graphs", "text", "geo");
@@ -79,6 +83,10 @@ public final class LoaderMain {
                         drop(client, o, out);
                         yield 0;
                     }
+                    case CHECK -> {
+                        check(client, o, out);
+                        yield 0;
+                    }
                     default -> 2;
                 };
             }
@@ -114,6 +122,27 @@ public final class LoaderMain {
             } catch (final IllegalStateException e) {
                 // Already shutting down.
             }
+        }
+    }
+
+    /** What the loader will connect to and may do there. */
+    private static void check(final AccumuloClient client, final LoaderOptions o, final PrintStream out) throws Exception {
+        final String user = client.whoami();
+        final Properties props = client.properties();
+        out.println("Connected to instance " + props.getProperty("instance.name") + " (ZooKeepers "
+                + props.getProperty("instance.zookeepers") + ") as " + user + ".");
+        out.println("Tablet servers: " + client.instanceOperations().getTabletServers().size());
+        final List<String> auths = new ArrayList<>();
+        for (final byte[] a : client.securityOperations().getUserAuthorizations(user).getAuthorizations()) {
+            auths.add(new String(a, StandardCharsets.UTF_8));
+        }
+        out.println("Authorizations of " + user + ": " + (auths.isEmpty() ? "none (unlabeled data only)" : String.join(",", auths)));
+        out.println("May create tables: " + (client.securityOperations().hasSystemPermission(user,
+                SystemPermission.CREATE_TABLE) ? "yes" : "no (prepare needs it)"));
+        if (o.tablePrefix() != null) {
+            final List<String> present = SUFFIXES.stream().map(s -> o.tablePrefix() + s)
+                    .filter(t -> client.tableOperations().exists(t)).toList();
+            out.println("Store " + o.tablePrefix() + ": " + (present.isEmpty() ? "not found" : "tables " + present));
         }
     }
 

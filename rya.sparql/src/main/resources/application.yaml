@@ -22,12 +22,14 @@ server:
 
 rya:
   accumulo:
-    # Path to an accumulo-client.properties file; if set, the four settings below are ignored.
+    # Path to an accumulo-client.properties file (rya.loader/configure.sh writes one). If set, the
+    # settings below are ignored, except the password when the file has no auth.token.
     client-properties:
     instance: accumulo
     zookeepers: localhost:2181
     user: root
-    password: secret
+    # No default: pass it in the environment (RYA_ACCUMULO_PASSWORD), not on the command line.
+    password:
   table-prefix: rya_
   inference: false
   # How often the ontology is reloaded for inference.

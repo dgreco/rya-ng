@@ -23,6 +23,7 @@ import java.nio.file.Path;
 
 import org.apache.accumulo.core.client.Accumulo;
 import org.apache.accumulo.core.client.AccumuloClient;
+import io.github.dgreco.rya.accumulo.AccumuloClients;
 import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
 import io.github.dgreco.rya.rdftriplestore.RyaAccumuloSailFactory;
@@ -42,7 +43,8 @@ public class RyaStoreConfiguration {
             throw new IllegalStateException("Set rya.accumulo.client-properties, or rya.accumulo.instance/zookeepers/user/password");
         }
         if (StringUtils.hasText(acc.clientProperties())) {
-            return Accumulo.newClient().from(Path.of(acc.clientProperties())).build();
+            // The file may leave the password out; rya.accumulo.password (RYA_ACCUMULO_PASSWORD) fills it in.
+            return AccumuloClients.fromFile(Path.of(acc.clientProperties()), acc.password());
         }
         return Accumulo.newClient()
                 .to(required(acc.instance(), "rya.accumulo.instance"), required(acc.zookeepers(), "rya.accumulo.zookeepers"))

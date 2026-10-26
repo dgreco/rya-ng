@@ -111,6 +111,12 @@ class LoaderOptionsTest {
     }
 
     @Test
+    void checkNeedsNoStore() {
+        assertEquals(LoaderOptions.Command.CHECK, parse("check").command);
+        assertEquals("t_", parse("check", "--table-prefix", "t_").tablePrefix());
+    }
+
+    @Test
     void dropNeedsTheExactPrefix() {
         assertThrows(IllegalArgumentException.class, () -> parse("drop", "--table-prefix", "t_"));
         assertThrows(IllegalArgumentException.class, () -> parse("drop", "--table-prefix", "t_", "--confirm", "t"));

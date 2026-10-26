@@ -36,7 +36,7 @@ import io.github.dgreco.rya.loader.gen.GenConfig;
 public final class LoaderOptions {
 
     public enum Command {
-        PREPARE("prepare"), LOAD("load"), DRY_RUN("dry-run"), VERIFY("verify"), DROP("drop");
+        PREPARE("prepare"), LOAD("load"), DRY_RUN("dry-run"), VERIFY("verify"), DROP("drop"), CHECK("check");
 
         private final String word;
 
@@ -54,7 +54,7 @@ public final class LoaderOptions {
                     return c;
                 }
             }
-            throw new IllegalArgumentException("unknown command '" + word + "' (prepare, load, dry-run, verify, drop)");
+            throw new IllegalArgumentException("unknown command '" + word + "' (prepare, load, dry-run, verify, drop, check)");
         }
     }
 
@@ -134,7 +134,7 @@ public final class LoaderOptions {
     }
 
     private void validate() {
-        if (command != Command.DRY_RUN && tablePrefix() == null) {
+        if (command != Command.DRY_RUN && command != Command.CHECK && tablePrefix() == null) {
             throw new IllegalArgumentException("--table-prefix is required (there is no default, so nothing lands in a "
                     + "store by accident)");
         }
@@ -509,9 +509,13 @@ public final class LoaderOptions {
                   load      write the dataset (or this process's part of it); resumable with --resume
                   verify    regenerate a sample of entities and compare them with the store
                   drop      delete every table of the prefix (needs --confirm <prefix>)
+                  check     connect and report the instance, the tablet servers and the user's rights
+                            (with --table-prefix, also whether that store exists)
 
-                Connection: --client-properties FILE, or --zookeepers, --instance, --user plus the password in the
-                  RYA_ACCUMULO_PASSWORD environment variable (also RYA_ACCUMULO_ZOOKEEPERS/_INSTANCE/_USER).
+                Connection: --client-properties FILE (rya.loader/configure.sh writes one), or --zookeepers,
+                  --instance, --user plus the password in the RYA_ACCUMULO_PASSWORD environment variable (also
+                  RYA_ACCUMULO_ZOOKEEPERS/_INSTANCE/_USER/_CLIENT_PROPERTIES). A properties file without auth.token
+                  takes the password from RYA_ACCUMULO_PASSWORD.
 
                 Dataset (repeat on every command; prepare prints the exact arguments):
                   --table-prefix P          required; tables P<spo|po|osp|ns|eval|graphs|text|geo>

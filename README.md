@@ -104,7 +104,7 @@ java -jar rya.sparql/target/rya.sparql-1.0.0-SNAPSHOT.jar \
   --rya.accumulo.instance=accumulo --rya.accumulo.zookeepers=zk1:2181 --rya.accumulo.user=rya
 ```
 
-Instead of the connection arguments, `--rya.accumulo.client-properties` can point at an `accumulo-client.properties` file. Settings can also come from environment variables, for example `RYA_ACCUMULO_ZOOKEEPERS`. Defaults are in `rya.sparql/src/main/resources/application.yaml`.
+Instead of the connection arguments, `--rya.accumulo.client-properties` can point at an `accumulo-client.properties` file, such as the one `rya.loader/configure.sh` writes. If the file has no password, it comes from `RYA_ACCUMULO_PASSWORD`. Settings can also come from environment variables, for example `RYA_ACCUMULO_ZOOKEEPERS`. Defaults are in `rya.sparql/src/main/resources/application.yaml`.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -254,17 +254,23 @@ Without an index, these filters still work: they check every candidate, so they 
 Each entity depends only on the seed and its number, so any process can generate any part of the dataset, and writing a part again produces the same keys.
 
 ```bash
-R=rya.loader/run.sh    # builds the jar on first use; --build rebuilds it
+rya.loader/configure.sh   # once: asks for the connection, writes ~/.rya-ng/accumulo-client.properties
+R=rya.loader/run.sh       # builds the jar on first use; --build rebuilds it
+C="--client-properties $HOME/.rya-ng/accumulo-client.properties"
 
+$R check $C                                                # connection, tablet servers, the user's rights
 $R dry-run --triples 1B --text-index --geo-index           # no cluster: speed, bytes per triple, network ceiling
-$R prepare --table-prefix big_ --triples 1B --text-index --geo-index
-$R load    <the dataset options prepare printed> --threads 8
-$R load    <same options> --resume                          # after Ctrl-C or a failure
-$R verify  <same options> --sample 1000
-$R drop    --table-prefix big_ --confirm big_
+$R prepare $C --table-prefix big_ --triples 1B --text-index --geo-index
+$R load    $C <the dataset options prepare printed> --threads 8
+$R load    $C <same options> --resume                       # after Ctrl-C or a failure
+$R verify  $C <same options> --sample 1000
+$R drop    $C --table-prefix big_ --confirm big_
 ```
 
-- **Connection:** pass `--client-properties FILE`, or set `RYA_ACCUMULO_ZOOKEEPERS`, `RYA_ACCUMULO_INSTANCE`, `RYA_ACCUMULO_USER` and `RYA_ACCUMULO_PASSWORD`. `--zookeepers`, `--instance` and `--user` also work, but the password is only read from the environment.
+- **Connection:** `rya.loader/configure.sh` writes an `accumulo-client.properties` file, readable only by you, and can test it right away.
+  - The password can be stored in the file, or left out and read from `RYA_ACCUMULO_PASSWORD` when the loader starts.
+  - `--output FILE` writes elsewhere, and `--defaults` takes the `RYA_ACCUMULO_*` variables without asking.
+  - Without a file, set `RYA_ACCUMULO_ZOOKEEPERS`, `RYA_ACCUMULO_INSTANCE`, `RYA_ACCUMULO_USER` and `RYA_ACCUMULO_PASSWORD`. `--zookeepers`, `--instance` and `--user` also work, but the password is never accepted as an argument.
 - **`prepare` first, once per dataset:**
   - creates the tables with the indexes ready and splits each table into 4 tablets per tablet server, at split points sampled from the data;
   - writes the ontology, 200 countries and a description of the dataset;

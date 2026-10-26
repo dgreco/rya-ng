@@ -225,7 +225,7 @@ connection_default=1
 [ -z "${RYA_ACCUMULO_CLIENT_PROPERTIES:-}" ] || connection_default=2
 choose connection "How does the endpoint connect to Accumulo?" "$connection_default" \
   "ZooKeeper servers, instance name and user" \
-  "An accumulo-client.properties file (it holds the credentials too)"
+  "An accumulo-client.properties file (written by rya.loader/configure.sh)"
 
 zk="" instance="" user="" client_properties="" password_mode=0 password_file=""
 if [ "$connection" = 1 ]; then
@@ -253,7 +253,7 @@ if [ "$connection" = 1 ]; then
     fi
   fi
 else
-  ask client_properties "accumulo-client.properties file" "${RYA_ACCUMULO_CLIENT_PROPERTIES:-$HOME/accumulo-client.properties}" not_empty
+  ask client_properties "accumulo-client.properties file (rya.loader/configure.sh writes one)" "${RYA_ACCUMULO_CLIENT_PROPERTIES:-$HOME/.rya-ng/accumulo-client.properties}" not_empty
   [ -r "$client_properties" ] || note "Note: $client_properties is not readable yet."
 fi
 

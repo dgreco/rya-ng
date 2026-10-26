@@ -22,6 +22,8 @@ import org.apache.accumulo.core.client.AccumuloClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.github.dgreco.rya.accumulo.AccumuloClients;
+
 /** Connects to Accumulo from the options; the password only ever comes from the environment. */
 public final class ClientFactory {
     private static final Logger log = LoggerFactory.getLogger(ClientFactory.class);
@@ -31,7 +33,7 @@ public final class ClientFactory {
 
     public static AccumuloClient create(final LoaderOptions o) {
         if (o.clientProperties() != null) {
-            return Accumulo.newClient().from(o.clientProperties()).build();
+            return AccumuloClients.fromFile(o.clientProperties(), o.password());
         }
         if (o.zookeepers() == null || o.instance() == null) {
             throw new IllegalArgumentException("give --client-properties, or --zookeepers and --instance "
