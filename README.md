@@ -1,0 +1,147 @@
+<!-- Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.  See the License for the
+specific language governing permissions and limitations
+under the License. -->
+
+# rya-ng
+
+rya-ng is an RDF triple store on [Apache Accumulo](https://accumulo.apache.org/). It has two parts:
+- an [RDF4J](https://rdf4j.org/) Sail you can embed;
+- a standalone [SPARQL 1.1 Protocol](https://www.w3.org/TR/sparql11-protocol/) endpoint for queries and updates.
+
+It supports:
+- named graphs;
+- Accumulo cell-level visibility labels and scan authorizations;
+- optional query-time OWL/RDFS inference;
+- join ordering driven by statistics that are kept up to date on every write;
+- batched join lookups: the matches for many left-hand rows are fetched in one Accumulo batch scan.
+
+rya-ng is derived from [Apache Rya](https://github.com/apache/rya). It keeps Rya's storage model and query-time inference, rebuilt for Accumulo 2.1, RDF4J 6 and Java 25, with everything else removed. It is an independent project, not part of the Apache Software Foundation. See `NOTICE`.
+
+## Requirements
+
+- **Java 25.** RDF4J 6 requires it.
+- **Maven 3.9 or newer.**
+- **Accumulo 2.1.x** to run against. Tests and the dev server start their own in-process MiniAccumuloCluster.
+
+## Build and test
+
+```bash
+mvn clean verify                 # build, unit tests (*Test) and MiniAccumuloCluster tests (*IT)
+mvn clean install -DskipTests    # build only
+mvn test                         # unit tests only (fast, no Accumulo)
+
+# one test class: install the modules once, then run a single module
+mvn install -DskipTests
+mvn -pl rya.api test -Dtest=TypeEncodingDelimiterTest
+mvn -pl rya.accumulo verify -Dit.test=AccumuloRyaDAOIT -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false
+```
+
+The endpoint is packaged as `rya.sparql/target/rya.sparql-<version>.jar`.
+
+## Modules
+
+| Module | Purpose |
+|---|---|
+| `rya.api` | Storage-independent model (`RyaStatement`, `RyaIRI`, `RyaType`), DAO interfaces, and row and value encoding |
+| `rya.accumulo` | `AccumuloRyaDAO`: stores each statement in the SPO, PO and OSP tables, and maintains statistics and the named-graph list |
+| `rya.sail` | RDF4J Sail (`RdfCloudTripleStore`), query planning, inference, and `RyaAccumuloSailFactory` |
+| `rya.sparql` | Spring Boot SPARQL endpoint |
+| `rya.test.accumulo` | Test-only harness: one shared MiniAccumuloCluster per JVM |
+
+## Running the SPARQL endpoint
+
+```bash
+java -jar rya.sparql/target/rya.sparql-1.0.0-SNAPSHOT.jar \
+  --rya.accumulo.instance=accumulo --rya.accumulo.zookeepers=zk1:2181 \
+  --rya.accumulo.user=rya --rya.accumulo.password=secret
+```
+
+Instead of those four flags, you can point `--rya.accumulo.client-properties` at an `accumulo-client.properties` file. Every setting can also come from the environment, for example `RYA_ACCUMULO_ZOOKEEPERS`. Defaults are in `rya.sparql/src/main/resources/application.yaml`.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `rya.table-prefix` | `rya_` | Prefix of the Rya tables, which are created if missing |
+| `rya.inference` | `false` | Query-time OWL/RDFS inference |
+| `rya.inference-refresh` | `5m` | How often the ontology is reloaded. Ontology changes take effect after the next reload. |
+| `rya.stats` | `true` | Keep cardinality statistics on write and use them for join ordering |
+| `rya.join-batch-size` | `1000` | Left-hand join rows whose lookups are fetched together in one batch scan; `1` turns batching off |
+| `rya.sparql.authorizations` | `[]` | The most a request may read with. The Accumulo user must hold all of them. |
+| `rya.sparql.default-visibility` | `""` | Visibility label written on inserted statements |
+| `rya.sparql.allow-request-visibility` | `false` | Let an update set its own label with `visibility=` |
+| `rya.sparql.query-timeout` | `120s` | Maximum query or update time |
+
+To try the endpoint without an Accumulo cluster:
+
+```bash
+mvn -pl rya.sparql -am install -DskipTests
+mvn -pl rya.sparql spring-boot:test-run -Dspring-boot.run.main-class=io.github.dgreco.rya.sparql.DevServer
+```
+
+### Using it
+
+The endpoint is `/sparql` and follows the SPARQL 1.1 Protocol.
+
+```bash
+# update
+curl -X POST http://localhost:8080/sparql -H 'Content-Type: application/sparql-update' \
+  --data 'INSERT DATA { GRAPH <urn:g> { <urn:alice> <urn:knows> <urn:bob> } }'
+
+# query (JSON results)
+curl http://localhost:8080/sparql -H 'Accept: application/sparql-results+json' \
+  --data-urlencode 'query=SELECT * WHERE { GRAPH ?g { ?s ?p ?o } }'
+```
+
+Supported forms:
+- **Queries:** `GET ?query=`, `POST` with a form field `query=`, or `POST` with an `application/sparql-query` body.
+- **Updates:** `POST` with a form field `update=`, or `POST` with an `application/sparql-update` body.
+- **Dataset parameters:** `default-graph-uri`, `named-graph-uri`, `using-graph-uri` and `using-named-graph-uri`.
+
+Result formats are chosen from `Accept`:
+- **SELECT:** SPARQL JSON (default), SPARQL XML, CSV, TSV.
+- **ASK:** JSON (default), XML.
+- **CONSTRUCT/DESCRIBE:** Turtle (default), N-Triples, N-Quads, JSON-LD, RDF/XML, TriG.
+
+An unsupported `Accept` gets `406`. A malformed query or update gets `400`.
+
+Rya extensions:
+- `auths=A,B` narrows the read authorizations for one request; asking for more than is configured gets `403`.
+- `visibility=A&B` labels the statements an update inserts, if `allow-request-visibility` is on.
+
+The endpoint has no HTTP authentication. Run it behind a proxy that authenticates users, or add Spring Security.
+
+## Embedding the Sail
+
+```java
+try (AccumuloClient client = Accumulo.newClient().from("accumulo-client.properties").build()) {
+    AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+    conf.setTablePrefix("rya_");
+    conf.setInfer(true);                       // optional
+    SailRepository repo = RyaAccumuloSailFactory.createRepository(client, conf);
+    repo.init();
+    try (RepositoryConnection conn = repo.getConnection()) {
+        conn.prepareUpdate("INSERT DATA { <urn:a> <urn:p> <urn:b> }").execute();
+    }
+    repo.shutDown();
+}
+```
+
+## Notes
+
+- Writes are not transactional. Each update is applied immediately, and rollback does not undo it.
+- `xsd:dateTime` values are stored as UTC milliseconds, so the original time-zone offset is not kept.
+- Literals containing the control characters U+0000 or U+0001 are rejected, because those bytes separate the parts of a row key.
+- `size()` and the list of named graphs scan the data. They cost time in proportion to the store or graph size.
+- Statistics are approximate, since re-inserting an existing statement counts it twice. They only affect join order.

@@ -1,0 +1,187 @@
+package io.github.dgreco.rya.rdftriplestore.inference;
+
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ * 
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import java.util.HashSet;
+import java.util.Set;
+import java.util.UUID;
+
+import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
+import io.github.dgreco.rya.api.utils.NullableStatementImpl;
+import io.github.dgreco.rya.rdftriplestore.utils.FixedStatementPattern;
+import io.github.dgreco.rya.rdftriplestore.utils.TransitivePropertySP;
+import org.eclipse.rdf4j.model.IRI;
+import org.eclipse.rdf4j.model.Resource;
+import org.eclipse.rdf4j.model.Value;
+import org.eclipse.rdf4j.model.vocabulary.OWL;
+import org.eclipse.rdf4j.model.vocabulary.RDF;
+import org.eclipse.rdf4j.model.vocabulary.RDFS;
+import org.eclipse.rdf4j.model.vocabulary.SESAME;
+import org.eclipse.rdf4j.query.algebra.StatementPattern;
+import org.eclipse.rdf4j.query.algebra.Var;
+
+/**
+ * All predicates are changed
+ * Class SubPropertyOfVisitor
+ * Date: Mar 29, 2011
+ * Time: 11:28:34 AM
+ */
+public class SameAsVisitor extends AbstractInferVisitor {
+
+    public SameAsVisitor(RdfCloudTripleStoreConfiguration conf, InferenceEngine inferenceEngine) {
+        super(conf, inferenceEngine);
+        include = conf.isInferSameAs();
+    }
+    
+    public void meet(StatementPattern sp) throws Exception {
+        if (!include) {
+            return;
+        }
+        if (sp instanceof FixedStatementPattern || sp instanceof TransitivePropertySP || sp instanceof DoNotExpandSP) {
+            return;   //already inferred somewhere else
+        }
+        final Var predVar = sp.getPredicateVar();
+        //do not know when things are null
+        if (predVar == null) {
+            return;
+        }
+        meetSP(sp);
+    }
+
+    @Override
+    protected void meetSP(StatementPattern node) throws Exception {
+        StatementPattern sp = node.clone();
+        final Var predVar = sp.getPredicateVar();
+
+        boolean shouldExpand = true;
+        if (predVar.hasValue()){
+            IRI pred = (IRI) predVar.getValue();
+            String predNamespace = pred.getNamespace();
+            shouldExpand = !pred.equals(OWL.SAMEAS) && 
+            !RDF.NAMESPACE.equals(predNamespace) &&
+            !SESAME.NAMESPACE.equals(predNamespace) &&
+            !RDFS.NAMESPACE.equals(predNamespace);
+        }
+
+        final Var objVar = sp.getObjectVar();
+        final Var subjVar = sp.getSubjectVar();
+        final Var cntxtVar = sp.getContextVar();
+        if (shouldExpand
+                && !EXPANDED.equals(cntxtVar) && !(objVar == null) && !(subjVar == null)){
+            if (objVar.getValue() == null) {
+            	Value subjVarValue = subjVar.getValue();
+            	if (subjVarValue instanceof Resource){
+            		Set<Resource> uris = inferenceEngine.findSameAs((Resource)subjVar.getValue(), getVarValue(cntxtVar));
+            		if (uris.size() > 1){
+            			InferJoin join = getReplaceJoin(uris, true, subjVar, objVar, predVar, cntxtVar);
+            			node.replaceWith(join);  
+            		}
+            	}
+            }
+            else if (subjVar.getValue() == null) {
+            	Value objVarValue = objVar.getValue();
+            	if (objVarValue instanceof Resource){
+            		Set<Resource> uris = inferenceEngine.findSameAs((Resource)objVar.getValue(), getVarValue(cntxtVar));
+                	if (uris.size() > 1){
+                        InferJoin join = getReplaceJoin(uris, false, subjVar, objVar, predVar, cntxtVar);
+                        node.replaceWith(join);  
+                	}
+            	}  	
+            }
+            else {
+            	// both subj and pred are set and should be expanded
+            	Set<Resource> subjURIs = new HashSet<Resource>();
+            	Set<Resource> objURIs = new HashSet<Resource>();
+            	// TODO I don't like these checks -- is there a better way to do this?
+            	Value objVarValue = objVar.getValue();
+           	    if (objVarValue instanceof Resource){
+           	    	objURIs = inferenceEngine.findSameAs((Resource)objVar.getValue(), getVarValue(cntxtVar));
+            	}
+            	Value subjVarValue = subjVar.getValue();
+            	if (subjVarValue instanceof Resource){
+            		subjURIs = inferenceEngine.findSameAs((Resource)subjVar.getValue(), getVarValue(cntxtVar));
+            	}
+            	InferJoin finalJoin = null;
+            	// expand subj first
+            	if (subjURIs.size() > 1){
+            		finalJoin = getReplaceJoin(subjURIs, true, subjVar, objVar, predVar, cntxtVar);
+            	}
+            	// now expand the obj
+            	if (objURIs.size() > 1){
+            		// if we already expanded the subj
+            		if (finalJoin != null){
+            			// we know what this is since we created it
+            			DoNotExpandSP origStatement = (DoNotExpandSP) finalJoin.getRightArg();
+            	        String s = UUID.randomUUID().toString();
+            	        Var dummyVar = new Var(s);
+            			StatementPattern origDummyStatement = new DoNotExpandSP(c(origStatement.getSubjectVar()), c(origStatement.getPredicateVar()), c(dummyVar), c(cntxtVar));
+            	        FixedStatementPattern fsp = new FixedStatementPattern(c(dummyVar), new Var("c-" + s, OWL.SAMEAS), c(objVar), c(cntxtVar));
+            	        for (Resource sameAs : objURIs){
+            	    		NullableStatementImpl newStatement = new NullableStatementImpl(sameAs, OWL.SAMEAS,
+                                    objVar.getValue(), getVarValue(cntxtVar));
+            	            fsp.statements.add(newStatement);        		
+            	    	}
+            	        InferJoin interimJoin = new InferJoin(fsp, origDummyStatement);
+            	        finalJoin = new InferJoin(finalJoin.getLeftArg(), interimJoin);
+            		}
+            		else {
+            			finalJoin = getReplaceJoin(objURIs, false, subjVar, objVar, predVar, cntxtVar);
+            		}
+            		
+            	}
+            	if (finalJoin != null){
+            	    node.replaceWith(finalJoin);
+            	}
+            }
+        }
+    }
+    
+    private InferJoin getReplaceJoin(Set<Resource> uris, boolean subSubj, Var subjVar, Var objVar, Var predVar, Var cntxtVar){
+        String s = UUID.randomUUID().toString();
+        Var dummyVar = new Var(s);
+        StatementPattern origStatement;
+        Var subVar;
+        if (subSubj){
+        	subVar = subjVar;
+        	origStatement = new DoNotExpandSP(c(dummyVar), c(predVar), c(objVar), c(cntxtVar));
+        }
+        else {
+        	subVar = objVar;
+        	origStatement = new DoNotExpandSP(c(subjVar), c(predVar), c(dummyVar), c(cntxtVar));
+       }
+        FixedStatementPattern fsp = new FixedStatementPattern(c(dummyVar), new Var("c-" + s, OWL.SAMEAS), c(subVar), c(cntxtVar));
+        for (Resource sameAs : uris){
+    		NullableStatementImpl newStatement = new NullableStatementImpl(sameAs, OWL.SAMEAS,
+                    subVar.getValue(), getVarValue(cntxtVar));
+            fsp.statements.add(newStatement);        		
+    	}
+        InferJoin join = new InferJoin(fsp, origStatement);
+        join.getProperties().put(InferConstants.INFERRED, InferConstants.TRUE);
+       return join;
+    }
+    
+    protected Resource getVarValue(Var var) {
+        if (var == null)
+            return null;
+        else
+            return (Resource)var.getValue();
+    }
+
+}

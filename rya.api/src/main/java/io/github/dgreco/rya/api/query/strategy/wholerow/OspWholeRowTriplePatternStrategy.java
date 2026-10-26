@@ -1,0 +1,113 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package io.github.dgreco.rya.api.query.strategy.wholerow;
+
+import static io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.DELIM_BYTES;
+import static io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.LAST_BYTES;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+
+import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
+import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
+import io.github.dgreco.rya.api.RdfCloudTripleStoreUtils;
+import io.github.dgreco.rya.api.domain.RyaRange;
+import io.github.dgreco.rya.api.domain.RyaType;
+import io.github.dgreco.rya.api.domain.RyaIRI;
+import io.github.dgreco.rya.api.query.strategy.AbstractTriplePatternStrategy;
+import io.github.dgreco.rya.api.query.strategy.ByteRange;
+import io.github.dgreco.rya.api.resolver.RyaContext;
+import io.github.dgreco.rya.api.resolver.RyaTypeResolverException;
+
+import com.google.common.primitives.Bytes;
+
+/**
+ * Date: 7/14/12
+ * Time: 7:35 AM
+ */
+public class OspWholeRowTriplePatternStrategy extends AbstractTriplePatternStrategy {
+
+    @Override
+    public TABLE_LAYOUT getLayout() {
+        return TABLE_LAYOUT.OSP;
+    }
+
+    @Override
+    public Map.Entry<TABLE_LAYOUT,
+            ByteRange> defineRange(final RyaIRI subject, final RyaIRI predicate, final RyaType object,
+                                   final RyaIRI context, final RdfCloudTripleStoreConfiguration conf) throws IOException {
+        try {
+            //os(ng)
+            //o_r(s)(ng)
+            //o(ng)
+            //r(o)
+            if (!handles(subject, predicate, object, context)) {
+                return null;
+            }
+
+            final RyaContext ryaContext = RyaContext.getInstance();
+
+            final TABLE_LAYOUT table_layout = TABLE_LAYOUT.OSP;
+            byte[] start, stop;
+            if (subject != null) {
+                if (subject instanceof RyaRange) {
+                    //o_r(s)
+                    RyaRange ru = (RyaRange) subject;
+                    ru = ryaContext.transformRange(ru);
+                    final byte[] subjStartBytes = ru.getStart().getData().getBytes(StandardCharsets.UTF_8);
+                    final byte[] subjEndBytes = ru.getStop().getData().getBytes(StandardCharsets.UTF_8);
+                    final byte[] objBytes = ryaContext.serializeType(object)[0];
+                    start = Bytes.concat(objBytes, DELIM_BYTES, subjStartBytes);
+                    stop = Bytes.concat(objBytes, DELIM_BYTES, subjEndBytes, DELIM_BYTES, LAST_BYTES);
+                } else {
+                    //os
+                    final byte[] objBytes = ryaContext.serializeType(object)[0];
+                    start = Bytes.concat(objBytes, DELIM_BYTES, subject.getData().getBytes(StandardCharsets.UTF_8), DELIM_BYTES);
+                    stop = Bytes.concat(start, LAST_BYTES);
+                }
+            } else {
+                if (object instanceof RyaRange) {
+                    //r(o)
+                    RyaRange rv = (RyaRange) object;
+                    rv = ryaContext.transformRange(rv);
+                    start = ryaContext.serializeType(rv.getStart())[0];
+                    stop = Bytes.concat(ryaContext.serializeType(rv.getStop())[0], DELIM_BYTES, LAST_BYTES);
+                } else {
+                    //o
+                    start = Bytes.concat(ryaContext.serializeType(object)[0], DELIM_BYTES);
+                    stop = Bytes.concat(start, LAST_BYTES);
+                }
+            }
+            return new RdfCloudTripleStoreUtils.CustomEntry<TABLE_LAYOUT,
+                    ByteRange>(table_layout, new ByteRange(start, stop));
+        } catch (final RyaTypeResolverException e) {
+            throw new IOException(e);
+        }
+    }
+
+    @Override
+    public boolean handles(final RyaIRI subject, final RyaIRI predicate, final RyaType object, final RyaIRI context) {
+        //os(ng)
+        //o_r(s)(ng)
+        //o(ng)
+        //r(o)
+        return object != null && (!(object instanceof RyaRange) || predicate == null && subject == null);
+    }
+}

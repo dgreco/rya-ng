@@ -1,0 +1,12 @@
+rya-ng
+Copyright 2026 David Greco
+
+rya-ng is a modified version of Apache Rya (https://github.com/apache/rya),
+reworked for Accumulo 2.1, RDF4J 6 and Java 25. It is not an Apache
+Software Foundation project. Apache Rya carries the following notice:
+
+Apache Rya
+Copyright 2015-2020 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
