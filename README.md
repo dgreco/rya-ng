@@ -65,13 +65,36 @@ The endpoint is packaged as `rya.sparql/target/rya.sparql-<version>.jar`.
 
 ## Running the SPARQL endpoint
 
+Build the endpoint, let the wizard write a launch script, then start it:
+
 ```bash
-java -jar rya.sparql/target/rya.sparql-1.0.0-SNAPSHOT.jar \
-  --rya.accumulo.instance=accumulo --rya.accumulo.zookeepers=zk1:2181 \
-  --rya.accumulo.user=rya --rya.accumulo.password=secret
+mvn -pl rya.sparql -am package -DskipTests   # rya.sparql/target/rya.sparql-<version>.jar
+rya.sparql/configure.sh                        # asks for the settings, writes ./rya-sparql.sh
+./rya-sparql.sh                                # asks for the Accumulo password, then starts
 ```
 
-Instead of those four flags, you can point `--rya.accumulo.client-properties` at an `accumulo-client.properties` file. Every setting can also come from the environment, for example `RYA_ACCUMULO_ZOOKEEPERS`. Defaults are in `rya.sparql/src/main/resources/application.yaml`.
+**What the wizard asks for:**
+- **Java and the jar:** the paths, and the heap size.
+- **Connection:** either the ZooKeeper servers, instance name and user, or an `accumulo-client.properties` file.
+- **Password source:** where the launch script gets the password when it starts: the terminal, the `RYA_ACCUMULO_PASSWORD` variable, or a file only you can read. The password is never stored in the script.
+- **Store:** table prefix, text and geo indexes, inference and statistics.
+- **Security:** the visibility labels requests may read, and the label written on inserted data.
+- **Server:** port, listen address and query timeout.
+
+**Options and overrides:**
+- `--output FILE` writes the script elsewhere.
+- `--defaults` accepts every default without asking.
+- Arguments given to the launch script are passed to the endpoint, for example `./rya-sparql.sh --server.port=9090`.
+
+Without the wizard, pass the settings as arguments. Pass the password in the environment, not as an argument: other users can see arguments with `ps`.
+
+```bash
+read -rs -p 'Accumulo password: ' RYA_ACCUMULO_PASSWORD; export RYA_ACCUMULO_PASSWORD
+java -jar rya.sparql/target/rya.sparql-1.0.0-SNAPSHOT.jar \
+  --rya.accumulo.instance=accumulo --rya.accumulo.zookeepers=zk1:2181 --rya.accumulo.user=rya
+```
+
+Instead of the connection arguments, `--rya.accumulo.client-properties` can point at an `accumulo-client.properties` file. Settings can also come from environment variables, for example `RYA_ACCUMULO_ZOOKEEPERS`. Defaults are in `rya.sparql/src/main/resources/application.yaml`.
 
 | Setting | Default | Meaning |
 |---|---|---|

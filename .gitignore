@@ -66,5 +66,6 @@ delme*
 ## Claude Code local notes
 CLAUDE.local.md
 
-# rya-ng: loader progress files
+# rya-ng: loader progress files and launch scripts written by rya.sparql/configure.sh
 rya-loader-*.progress
+rya-sparql.sh

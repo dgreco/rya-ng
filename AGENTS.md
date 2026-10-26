@@ -98,6 +98,10 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
   - Third-party files go to `static/vendor` at build time. The `maven-antrun-plugin` execution in `rya.sparql/pom.xml` downloads pinned npm tarballs into `~/.m2/repository/.cache/rya-ng-ui` and checks their SHA-512.
   - To upgrade one, change its `*.version` and `*.sha512` properties (the hex of npm's `integrity`), and regenerate `static/vendor/THIRD-PARTY-NOTICES.txt`.
   - `SparqlUiIT` checks that every asset is served. JavaScript isn't tested in the build; check UI changes in a browser.
+- **Launch wizard:** `configure.sh` (bash 3.2, so macOS's stock bash works) writes a launch script.
+  - Settings go in as `--rya.*` arguments. Spring's environment-variable form of a dashed name drops the dash (`RYA_ACCUMULO_CLIENTPROPERTIES`), so arguments are less error-prone.
+  - Only the password travels in the environment (`RYA_ACCUMULO_PASSWORD`). It is read when the script starts and never written.
+  - To test it, pipe answers in (one per line) or use `--defaults`, then run `bash -n` on the output.
 - `DevServer`, under test sources, runs the endpoint on a throwaway MAC (`mvn -pl rya.sparql spring-boot:test-run -Dspring-boot.run.main-class=io.github.dgreco.rya.sparql.DevServer`).
 
 ## Gotchas
