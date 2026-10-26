@@ -15,8 +15,9 @@
 # limitations under the License.
 """Markdown summary of a CI run: test counts per module and the JaCoCo coverage per module.
 
-Prints the summary on stdout (CI appends it to $GITHUB_STEP_SUMMARY) and, with --badge, writes
-a shields.io endpoint file for the coverage badge. Standard library only.
+Prints the summary on stdout (CI appends it to $GITHUB_STEP_SUMMARY). With --badge and
+--tests-badge, also writes shields.io endpoint files for the coverage and tests badges, which CI
+publishes on GitHub Pages next to the report. Standard library only.
 """
 
 import argparse
@@ -72,21 +73,29 @@ def fmt(value):
 def badge_color(value):
     if value is None:
         return "lightgrey"
-    for limit, color in ((90, "brightgreen"), (80, "green"), (70, "yellowgreen"), (60, "yellow"), (50, "orange")):
+    for limit, color in ((75, "brightgreen"), (60, "green"), (50, "yellowgreen"), (40, "yellow"), (30, "orange")):
         if value >= limit:
             return color
     return "red"
+
+
+def write_badge(path, label, message, color):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"schemaVersion": 1, "label": label, "message": message, "color": color}, f)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=".", help="the Maven project root")
     parser.add_argument("--jacoco-csv", help="the aggregated JaCoCo CSV report")
-    parser.add_argument("--badge", help="write a shields.io endpoint JSON file here")
+    parser.add_argument("--badge", help="write the coverage badge (shields.io endpoint JSON) here")
+    parser.add_argument("--tests-badge", help="write the tests badge (shields.io endpoint JSON) here")
     args = parser.parse_args()
 
     out = []
     tests = test_counts(args.root)
+    test_total = failed_total = 0
     if tests:
         out += ["## Tests", "", "| Module | Unit | Integration | Failed | Skipped | Time |", "|---|---:|---:|---:|---:|---:|"]
         grand = [0, 0, 0, 0, 0.0]
@@ -101,6 +110,7 @@ def main():
                 grand[i] += v
         out.append(f"| **Total** | **{grand[0]}** | **{grand[1]}** | **{grand[2]}** | **{grand[3]}** | **{grand[4] / 60:.1f} min** |")
         out.append("")
+        test_total, failed_total = grand[0] + grand[1], grand[2]
 
     total_line = None
     if args.jacoco_csv and os.path.exists(args.jacoco_csv):
@@ -124,9 +134,12 @@ def main():
     print("\n".join(out))
 
     if args.badge and total_line is not None:
-        os.makedirs(os.path.dirname(os.path.abspath(args.badge)), exist_ok=True)
-        with open(args.badge, "w", encoding="utf-8") as f:
-            json.dump({"schemaVersion": 1, "label": "coverage", "message": fmt(total_line), "color": badge_color(total_line)}, f)
+        write_badge(args.badge, "coverage", fmt(total_line), badge_color(total_line))
+    if args.tests_badge and test_total:
+        if failed_total:
+            write_badge(args.tests_badge, "tests", f"{test_total}, {failed_total} failed", "red")
+        else:
+            write_badge(args.tests_badge, "tests", str(test_total), "brightgreen")
     return 0
 
 

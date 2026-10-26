@@ -1,6 +1,6 @@
 # Build, unit tests, MiniAccumulo integration tests and coverage on every push and pull request.
 # Pushes to main also publish the coverage report to GitHub Pages:
-#   https://dgreco.github.io/rya-ng/coverage/   (badge data: https://dgreco.github.io/rya-ng/badge.json)
+#   https://dgreco.github.io/rya-ng/coverage/   (badge data: /badge.json for coverage, /tests.json for tests)
 name: CI
 
 on:
@@ -46,7 +46,7 @@ jobs:
 
       - name: Summarize tests and coverage
         if: ${{ !cancelled() }}
-        run: python3 .github/scripts/ci_summary.py --jacoco-csv "$REPORT/jacoco.csv" --badge site/badge.json >> "$GITHUB_STEP_SUMMARY"
+        run: python3 .github/scripts/ci_summary.py --jacoco-csv "$REPORT/jacoco.csv" --badge site/badge.json --tests-badge site/tests.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test reports
         if: ${{ failure() }}

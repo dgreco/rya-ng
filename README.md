@@ -17,8 +17,11 @@ under the License. -->
 
 # rya-ng
 
-[![CI](https://github.com/dgreco/rya-ng/actions/workflows/ci.yml/badge.svg)](https://github.com/dgreco/rya-ng/actions/workflows/ci.yml)
-[![Coverage](https://img.shields.io/endpoint?url=https://dgreco.github.io/rya-ng/badge.json)](https://dgreco.github.io/rya-ng/coverage/)
+[![CI](https://github.com/dgreco/rya-ng/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dgreco/rya-ng/actions/workflows/ci.yml)
+[![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fdgreco.github.io%2Frya-ng%2Fbadge.json)](https://dgreco.github.io/rya-ng/coverage/)
+[![tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fdgreco.github.io%2Frya-ng%2Ftests.json)](#build-and-test)
+[![license](https://img.shields.io/github/license/dgreco/rya-ng?color=blue)](LICENSE)
+[![Java](https://img.shields.io/badge/Java-25%2B-orange)](#requirements)
 
 rya-ng is an RDF triple store on [Apache Accumulo](https://accumulo.apache.org/). It has two parts:
 - an [RDF4J](https://rdf4j.org/) Sail you can embed;
@@ -58,7 +61,7 @@ mvn clean verify -Pcoverage
 
 GitHub Actions (`.github/workflows/ci.yml`) runs `mvn clean verify -Pcoverage` on every push and pull request:
 - Each run's summary lists the tests and the coverage per module, and the HTML coverage report is attached to the run.
-- For pushes to `main`, the report is published at <https://dgreco.github.io/rya-ng/coverage/>, and the badge above shows its line coverage.
+- For pushes to `main`, the report is published at <https://dgreco.github.io/rya-ng/coverage/>. The coverage and tests badges above show its line coverage and test count.
 
 The endpoint is packaged as `rya.sparql/target/rya.sparql-<version>.jar`.
 
