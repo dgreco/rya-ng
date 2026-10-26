@@ -36,6 +36,11 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param stats whether writes keep cardinality statistics and queries use them for join ordering.
  * @param joinBatchSize how many left-hand rows of a join are looked up together in one batch
  *        scan; 1 turns batching off.
+ * @param textIndex whether to keep the full-text index that speeds up {@code text:matches}.
+ * @param textIndexPredicates the predicates whose text literals are indexed; empty for all.
+ * @param geoIndex whether to keep the geospatial index that speeds up GeoSPARQL filters.
+ * @param rebuildIndexes whether to build, at startup, indexes that don't cover the stored
+ *        statements yet (turned on over existing data, or redefined).
  * @param sparql endpoint behavior.
  */
 @ConfigurationProperties("rya")
@@ -46,6 +51,10 @@ public record RyaProperties(
         @DefaultValue("5m") Duration inferenceRefresh,
         @DefaultValue("true") boolean stats,
         @DefaultValue("1000") int joinBatchSize,
+        @DefaultValue("false") boolean textIndex,
+        @DefaultValue List<String> textIndexPredicates,
+        @DefaultValue("false") boolean geoIndex,
+        @DefaultValue("false") boolean rebuildIndexes,
         @DefaultValue Sparql sparql) {
 
     /**

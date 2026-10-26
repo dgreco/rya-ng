@@ -69,6 +69,16 @@ public class TablePrefixLayoutStrategy implements TableLayoutStrategy{
         return tablePrefix + RdfCloudTripleStoreConstants.TBL_GRAPHS_SUFFIX;
     }
 
+    @Override
+    public String getText() {
+        return tablePrefix + RdfCloudTripleStoreConstants.TBL_TEXT_SUFFIX;
+    }
+
+    @Override
+    public String getGeo() {
+        return tablePrefix + RdfCloudTripleStoreConstants.TBL_GEO_SUFFIX;
+    }
+
     public String getTablePrefix() {
         return tablePrefix;
     }

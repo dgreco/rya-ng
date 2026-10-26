@@ -35,5 +35,9 @@ public interface TableLayoutStrategy {
     public String getNs();
     public String getEval();
     public String getGraphs();
+    /** The full-text index table. */
+    public String getText();
+    /** The geospatial index table. */
+    public String getGeo();
     
 }

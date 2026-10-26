@@ -35,6 +35,15 @@ rya:
   stats: true
   # Left-hand join rows looked up together in one batch scan; 1 turns batching off.
   join-batch-size: 1000
+  # Full-text index behind text:matches (string and language-tagged literals).
+  text-index: false
+  # Predicates whose literals are text-indexed. Empty: all of them.
+  text-index-predicates: []
+  # Geospatial index behind GeoSPARQL filters on geo:wktLiteral values.
+  geo-index: false
+  # At startup, build indexes that don't cover the stored statements yet (turned on over
+  # existing data, or redefined). Needs an Accumulo user holding every visibility label.
+  rebuild-indexes: false
   sparql:
     # Most a request may read with (the Accumulo user must hold these). Empty: unlabeled data only.
     authorizations: []

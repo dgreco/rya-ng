@@ -58,6 +58,10 @@ public class RyaStoreConfiguration {
         conf.setUseStats(props.stats());
         conf.setMaintainStats(props.stats());
         conf.setJoinBatchSize(props.joinBatchSize());
+        conf.setTextIndex(props.textIndex());
+        conf.setTextIndexPredicates(props.textIndexPredicates());
+        conf.setGeoIndex(props.geoIndex());
+        conf.setRebuildIndexes(props.rebuildIndexes());
         conf.setAuths(props.sparql().authorizations().toArray(new String[0]));
         if (StringUtils.hasText(props.sparql().defaultVisibility())) {
             conf.setCv(props.sparql().defaultVisibility());

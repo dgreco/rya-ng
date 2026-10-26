@@ -31,6 +31,7 @@ import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import io.github.dgreco.rya.api.persist.RdfEvalStatsDAO;
 import io.github.dgreco.rya.api.persist.RdfEvalStatsDAO.CARDINALITY_OF;
 import io.github.dgreco.rya.rdftriplestore.inference.DoNotExpandSP;
+import io.github.dgreco.rya.rdftriplestore.evaluation.index.IndexedStatementPattern;
 import io.github.dgreco.rya.rdftriplestore.utils.FixedStatementPattern;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Resource;
@@ -107,6 +108,11 @@ public class RdfCloudTripleStoreEvaluationStatistics<C extends RdfCloudTripleSto
 
         @Override
         protected double getCardinality(final StatementPattern sp) {
+            final double plain = plainCardinality(sp);
+            return sp instanceof IndexedStatementPattern ? Math.max(1, plain * IndexedStatementPattern.SELECTIVITY) : plain;
+        }
+
+        private double plainCardinality(final StatementPattern sp) {
             final Var subjectVar = sp.getSubjectVar();
             final Resource subj = (Resource) getConstantValue(subjectVar);
             final Var predicateVar = sp.getPredicateVar();

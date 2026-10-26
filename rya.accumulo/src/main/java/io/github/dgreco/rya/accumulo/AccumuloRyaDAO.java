@@ -60,6 +60,8 @@ import org.apache.accumulo.core.iterators.IteratorUtil.IteratorScope;
 import org.apache.accumulo.core.security.Authorizations;
 import org.apache.accumulo.core.security.ColumnVisibility;
 import org.apache.hadoop.io.Text;
+import io.github.dgreco.rya.accumulo.index.IndexCatalog;
+import io.github.dgreco.rya.accumulo.index.IndexManager;
 import io.github.dgreco.rya.accumulo.query.AccumuloRyaQueryEngine;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants;
@@ -86,7 +88,9 @@ import org.slf4j.LoggerFactory;
  *       statement pattern is a range scan on one of them;</li>
  *   <li>{@code ns}: namespace prefixes, plus the storage version;</li>
  *   <li>{@code eval}: cardinality counters used for join ordering (see {@link EvalStatsMutations});</li>
- *   <li>{@code graphs}: one marker per named graph that has received statements.</li>
+ *   <li>{@code graphs}: one marker per named graph that has received statements;</li>
+ *   <li>{@code text}, {@code geo}: the full-text and geospatial indexes, when enabled
+ *       (see {@link IndexManager}).</li>
  * </ul>
  *
  * <p>The DAO does not own the {@link AccumuloClient}: whoever supplied it closes it.
@@ -115,6 +119,7 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
     private RyaTableMutationsFactory mutationsFactory;
     private TableLayoutStrategy tables;
     private AccumuloRyaQueryEngine queryEngine;
+    private IndexManager indexes;
 
     public AccumuloRyaDAO() {
     }
@@ -149,7 +154,7 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
             maintainStats = conf.isMaintainStats();
 
             final TableOperations ops = client.tableOperations();
-            AccumuloRdfUtils.createTableIfNotExist(ops, tables.getSpo());
+            final boolean storeCreated = AccumuloRdfUtils.createTableIfNotExist(ops, tables.getSpo());
             AccumuloRdfUtils.createTableIfNotExist(ops, tables.getPo());
             AccumuloRdfUtils.createTableIfNotExist(ops, tables.getOsp());
             AccumuloRdfUtils.createTableIfNotExist(ops, tables.getNs());
@@ -167,6 +172,7 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
 
             queryEngine = new AccumuloRyaQueryEngine(client, conf);
             writeVersionIfMissing();
+            indexes = new IndexManager(client, conf, mtbw, bwNs, storeCreated);
             isInitialized.set(true);
         } catch (final Exception e) {
             throw new RyaDAOException(e);
@@ -226,6 +232,7 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
                 if (maintainStats) {
                     bwEval.addMutations(EvalStatsMutations.counters(stmt, true));
                 }
+                indexes.add(stmt);
             }
             if (flushEachUpdate) {
                 mtbw.flush();
@@ -279,6 +286,7 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
                 if (maintainStats) {
                     bwEval.addMutations(EvalStatsMutations.counters(match, false));
                 }
+                indexes.delete(match);
             }
         } catch (final RyaDAOException e) {
             throw e;
@@ -299,7 +307,10 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
         try {
             mtbw.flush();
             final boolean all = graphs == null || graphs.length == 0;
-            for (final String table : new String[] { tables.getSpo(), tables.getPo(), tables.getOsp() }) {
+            // Index entries use the graph as column family too, so the same deletes clear them.
+            final List<String> statementTables = new ArrayList<>(List.of(tables.getSpo(), tables.getPo(), tables.getOsp()));
+            statementTables.addAll(indexes.activeTables());
+            for (final String table : statementTables) {
                 try (BatchDeleter deleter = client.createBatchDeleter(table, auths, NUM_THREADS, batchWriterConfig)) {
                     deleter.setRanges(Collections.singleton(new Range()));
                     if (!all) {
@@ -480,6 +491,7 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
             }
             if (isInitialized.get()) {
                 writeVersionIfMissing();
+                indexes.rewriteRecords();
             }
         } catch (final Exception e) {
             throw new RyaDAOException(e);
@@ -533,10 +545,26 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
         destroy();
     }
 
-    /** @return the names of every table this DAO uses. */
+    /** @return the names of every table this DAO uses (index tables included, enabled or not). */
     public List<String> getTables() {
         return List.of(tables.getSpo(), tables.getPo(), tables.getOsp(), tables.getNs(), tables.getEval(),
-                tables.getGraphs());
+                tables.getGraphs(), tables.getText(), tables.getGeo());
+    }
+
+    /** The secondary indexes, for queries. */
+    public IndexCatalog getIndexCatalog() {
+        final IndexManager current = indexes;
+        return current == null ? IndexCatalog.NONE : current;
+    }
+
+    /** Rebuilds every enabled index from the statement tables. */
+    public synchronized void rebuildIndexes() {
+        try {
+            flush();
+            indexes.rebuildAll();
+        } catch (final Exception e) {
+            throw new RyaDAOException(e);
+        }
     }
 
     public AccumuloClient getClient() {

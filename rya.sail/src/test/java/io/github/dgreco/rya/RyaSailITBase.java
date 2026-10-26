@@ -19,7 +19,13 @@ package io.github.dgreco.rya;
  * under the License.
  */
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.AfterEach;
+
 import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.accumulo.index.IndexType;
+import io.github.dgreco.rya.accumulo.index.IndexVerifier;
 import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
 import io.github.dgreco.rya.rdftriplestore.inference.InferenceEngine;
@@ -32,9 +38,10 @@ import io.github.dgreco.rya.test.accumulo.AccumuloITBase;
 public abstract class RyaSailITBase extends AccumuloITBase {
 
     /**
-     * @return a configuration that points at this test's tables. Set the system property
-     *         {@code rya.test.joinBatchSize} (e.g. {@code -Drya.test.joinBatchSize=2}) to run every
-     *         test with a different join batch size.
+     * @return a configuration that points at this test's tables. System properties change every
+     *         test that uses it: {@code -Drya.test.joinBatchSize=2} sets the join batch size, and
+     *         {@code -Drya.test.indexes=true} turns on the text and geo indexes (each test then
+     *         checks that the indexes match the stored statements).
      */
     protected AccumuloRdfConfiguration newConf() {
         final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
@@ -43,7 +50,26 @@ public abstract class RyaSailITBase extends AccumuloITBase {
         if (batchSize != null && !batchSize.isBlank()) {
             conf.setJoinBatchSize(Integer.parseInt(batchSize.trim()));
         }
+        if (Boolean.getBoolean("rya.test.indexes")) {
+            conf.setTextIndex(true);
+            conf.setGeoIndex(true);
+        }
         return conf;
+    }
+
+    /** Every index table of the test must hold exactly the entries its statements call for. */
+    @AfterEach
+    public void verifyIndexes() throws Exception {
+        final AccumuloRdfConfiguration conf = newConf();
+        if (!getClient().tableOperations().exists(conf.getTableLayoutStrategy().getSpo())) {
+            return;
+        }
+        for (final IndexType type : IndexType.values()) {
+            if (getClient().tableOperations().exists(type.table(conf.getTableLayoutStrategy()))) {
+                final IndexVerifier.Report report = IndexVerifier.verify(getClient(), conf, type);
+                assertTrue(report.isClean(), type + " index out of step: " + report);
+            }
+        }
     }
 
     /** @return an initialized DAO on this test's tables. */

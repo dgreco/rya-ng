@@ -62,6 +62,10 @@ public class RdfCloudTripleStoreConstants {
     public static final String TBL_NS_SUFFIX = "ns";
     /** Table listing the named graphs that have (or had) statements. */
     public static final String TBL_GRAPHS_SUFFIX = "graphs";
+    /** Full-text index (only when the text index is enabled). */
+    public static final String TBL_TEXT_SUFFIX = "text";
+    /** Geospatial index (only when the geo index is enabled). */
+    public static final String TBL_GEO_SUFFIX = "geo";
 
 
     public static final String INFO_NAMESPACE = "namespace";

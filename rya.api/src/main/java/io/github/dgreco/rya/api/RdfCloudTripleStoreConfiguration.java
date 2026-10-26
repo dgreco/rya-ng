@@ -18,6 +18,11 @@
  */
 package io.github.dgreco.rya.api;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+
 import org.apache.hadoop.conf.Configuration;
 import io.github.dgreco.rya.api.layout.TableLayoutStrategy;
 import io.github.dgreco.rya.api.layout.TablePrefixLayoutStrategy;
@@ -46,6 +51,16 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
     public static final String CONF_JOIN_BATCH_SIZE = "query.join.batchsize";
     /** Most statements one join batch may prefetch; beyond it the batch falls back to per-row lookups. */
     public static final String CONF_JOIN_PREFETCH_LIMIT = "query.join.prefetchlimit";
+    /** Maintain the full-text index (table {@code <prefix>text}). */
+    public static final String CONF_INDEX_TEXT = "index.text";
+    /** Predicates whose text literals are indexed; empty means every text literal. */
+    public static final String CONF_INDEX_TEXT_PREDICATES = "index.text.predicates";
+    /** Maintain the geospatial index (table {@code <prefix>geo}). */
+    public static final String CONF_INDEX_GEO = "index.geo";
+    /** Rebuild indexes that are not ready (enabled on existing data, or redefined) when the store starts. */
+    public static final String CONF_INDEX_REBUILD = "index.rebuild";
+    /** Let queries use the secondary indexes (they are still maintained when this is false). */
+    public static final String CONF_USE_INDEX = "query.useindex";
     public static final String CONF_OFFSET = "query.offset";
     public static final String CONF_LIMIT = "query.limit";
     public static final String CONF_QUERYPLAN_FLAG = "query.printqueryplan";
@@ -178,6 +193,54 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
     public void setUseStats(final Boolean val) {
         Preconditions.checkNotNull(val);
         setBoolean(CONF_USE_STATS, val);
+    }
+
+    public boolean isTextIndex() {
+        return getBoolean(CONF_INDEX_TEXT, false);
+    }
+
+    public void setTextIndex(final boolean enabled) {
+        setBoolean(CONF_INDEX_TEXT, enabled);
+    }
+
+    /** The predicate IRIs whose text literals are indexed; empty means all of them. */
+    public List<String> getTextIndexPredicates() {
+        final List<String> predicates = new ArrayList<>();
+        for (final String p : getTrimmedStrings(CONF_INDEX_TEXT_PREDICATES)) {
+            if (!p.isEmpty()) {
+                predicates.add(p);
+            }
+        }
+        return Collections.unmodifiableList(predicates);
+    }
+
+    public void setTextIndexPredicates(final Collection<String> predicates) {
+        Preconditions.checkNotNull(predicates);
+        setStrings(CONF_INDEX_TEXT_PREDICATES, predicates.toArray(new String[0]));
+    }
+
+    public boolean isGeoIndex() {
+        return getBoolean(CONF_INDEX_GEO, false);
+    }
+
+    public void setGeoIndex(final boolean enabled) {
+        setBoolean(CONF_INDEX_GEO, enabled);
+    }
+
+    public boolean isRebuildIndexes() {
+        return getBoolean(CONF_INDEX_REBUILD, false);
+    }
+
+    public void setRebuildIndexes(final boolean rebuild) {
+        setBoolean(CONF_INDEX_REBUILD, rebuild);
+    }
+
+    public boolean isUseIndex() {
+        return getBoolean(CONF_USE_INDEX, true);
+    }
+
+    public void setUseIndex(final boolean use) {
+        setBoolean(CONF_USE_INDEX, use);
     }
 
     public Boolean isPrefixRowsWithHash() {

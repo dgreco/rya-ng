@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.Set;
 
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStoreConnection.StoreTripleSource;
+import io.github.dgreco.rya.rdftriplestore.evaluation.index.IndexTripleSource;
+import io.github.dgreco.rya.rdftriplestore.evaluation.index.IndexedStatementPattern;
 import io.github.dgreco.rya.rdftriplestore.inference.InferenceEngine;
 import io.github.dgreco.rya.rdftriplestore.inference.InferenceEngineException;
 import io.github.dgreco.rya.rdftriplestore.utils.FixedStatementPattern;
@@ -50,6 +52,7 @@ import org.eclipse.rdf4j.query.algebra.evaluation.TripleSource;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.DefaultEvaluationStrategy;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.EvaluationStatistics;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.QueryEvaluationContext;
+import org.eclipse.rdf4j.query.algebra.evaluation.impl.evaluationsteps.StatementPatternQueryEvaluationStep;
 
 /**
  * RDF4J's stock evaluation, plus the two statement-pattern kinds produced by Rya's inference
@@ -59,6 +62,7 @@ import org.eclipse.rdf4j.query.algebra.evaluation.impl.QueryEvaluationContext;
  *   <li>{@link TransitivePropertySP}: matches the transitive closure of a property, computed by
  *       the {@link InferenceEngine}. If neither end is bound it falls back to a plain lookup.</li>
  * </ul>
+ * and {@link IndexedStatementPattern}s, whose matches come from a secondary index.
  */
 public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
     private final InferenceEngine inferenceEngine;
@@ -112,12 +116,25 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
                 || sp instanceof FixedStatementPattern || sp instanceof TransitivePropertySP) {
             return null;
         }
+        // An indexed pattern is a plain store lookup only once its subject or object is bound.
+        if (sp instanceof IndexedStatementPattern
+                && !(boundByLeft(node, sp.getSubjectVar()) || boundByLeft(node, sp.getObjectVar()))) {
+            return null;
+        }
         return sp;
+    }
+
+    private static boolean boundByLeft(final Join node, final Var var) {
+        return var != null && !var.hasValue() && node.getLeftArg().getAssuredBindingNames().contains(var.getName());
     }
 
     @Override
     protected QueryEvaluationStep prepare(final StatementPattern node, final QueryEvaluationContext context)
             throws QueryEvaluationException {
+        if (node instanceof IndexedStatementPattern indexed && IndexTripleSource.supports(tripleSource)) {
+            return new StatementPatternQueryEvaluationStep(node, context,
+                    new IndexTripleSource((StoreTripleSource<?>) tripleSource, indexed.getIndexQuery()));
+        }
         if (node instanceof FixedStatementPattern) {
             final FixedStatementPattern fixed = (FixedStatementPattern) node;
             return bindings -> join(fixed, fixed.statements, bindings);

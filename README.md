@@ -26,7 +26,8 @@ It supports:
 - Accumulo cell-level visibility labels and scan authorizations;
 - optional query-time OWL/RDFS inference;
 - join ordering driven by statistics that are kept up to date on every write;
-- batched join lookups: the matches for many left-hand rows are fetched in one Accumulo batch scan.
+- batched join lookups: the matches for many left-hand rows are fetched in one Accumulo batch scan;
+- full-text search and GeoSPARQL filters, sped up by optional text and geo indexes that honour visibility labels.
 
 rya-ng is derived from [Apache Rya](https://github.com/apache/rya). It keeps Rya's storage model and query-time inference, rebuilt for Accumulo 2.1, RDF4J 6 and Java 25, with everything else removed. It is an independent project, not part of the Apache Software Foundation. See `NOTICE`.
 
@@ -78,6 +79,10 @@ Instead of those four flags, you can point `--rya.accumulo.client-properties` at
 | `rya.inference-refresh` | `5m` | How often the ontology is reloaded. Ontology changes take effect after the next reload. |
 | `rya.stats` | `true` | Keep cardinality statistics on write and use them for join ordering |
 | `rya.join-batch-size` | `1000` | Left-hand join rows whose lookups are fetched together in one batch scan; `1` turns batching off |
+| `rya.text-index` | `false` | Keep the full-text index (see [Search](#search)) |
+| `rya.text-index-predicates` | `[]` | Predicates whose literals are text-indexed; empty means all |
+| `rya.geo-index` | `false` | Keep the geospatial index |
+| `rya.rebuild-indexes` | `false` | At startup, build indexes that don't cover the stored data yet |
 | `rya.sparql.authorizations` | `[]` | The most a request may read with. The Accumulo user must hold all of them. |
 | `rya.sparql.default-visibility` | `""` | Visibility label written on inserted statements |
 | `rya.sparql.allow-request-visibility` | `false` | Let an update set its own label with `visibility=` |
@@ -122,6 +127,69 @@ Rya extensions:
 
 The endpoint has no HTTP authentication. Run it behind a proxy that authenticates users, or add Spring Security.
 
+## Search
+
+### Text
+
+`text:matches(?literal, "query")` is true when a string literal (`xsd:string` or language-tagged) satisfies a text query:
+
+```sparql
+PREFIX text: <urn:rya-ng:text#>
+SELECT ?doc ?label WHERE {
+  ?doc rdfs:label ?label .
+  FILTER(text:matches(?label, "alice AND (bob OR caro*) AND NOT \"old draft\""))
+}
+```
+
+- **Operators:** `AND` (or just a space), `OR`, `NOT`, parentheses, `"exact phrases"` and `prefix*`. They are recognised only in upper case, so `cats and dogs` searches for three words.
+- **Matching:** case and accents are ignored, so `café` matches `Cafe`.
+- **Words:** a word is a run of letters and digits, so `e-mail` is the phrase "e mail". Each Chinese or Japanese ideograph or hiragana character is a word of its own.
+- **Not supported:** stemming, stop words and ranking. `running` doesn't match `run`.
+- **Errors:** a malformed query gets a `400`.
+
+### Geo
+
+The GeoSPARQL functions (`geof:sfWithin`, `geof:distance`, `geof:relate`, the `eh*` and `rcc8*` relations, …) work on `geo:wktLiteral` values:
+
+```sparql
+PREFIX geo:  <http://www.opengis.net/ont/geosparql#>
+PREFIX geof: <http://www.opengis.net/def/function/geosparql/>
+PREFIX uom:  <http://www.opengis.net/def/uom/OGC/1.0/>
+SELECT ?place WHERE {
+  ?place geo:hasGeometry ?g . ?g geo:asWKT ?wkt .
+  FILTER(geof:distance(?wkt, "POINT(12.49 41.89)"^^geo:wktLiteral, uom:metre) < 5000)
+}
+```
+
+- Coordinates are longitude/latitude (CRS84).
+- GML and WKT with a CRS prefix are not supported.
+- WKT that doesn't parse is stored but never matches.
+
+### The indexes
+
+Without an index, these filters still work: they check every candidate, so they are slow on large data.
+
+`rya.text-index` and `rya.geo-index` add an index table each (`<prefix>text`, `<prefix>geo`).
+
+**What the index can speed up:**
+- **Text:** queries with at least one word that every match must contain. `NOT x`, or prefixes under 3 characters, fall back to scanning.
+- **Geo:** relations that imply intersection (`sfWithin`, `sfIntersects`, `sfContains`, `sfOverlaps`, `sfTouches`, `sfCrosses`, `sfEquals` and their `eh*`/`rcc8*` equivalents, or `geof:relate` with such a pattern). Also `geof:distance(?g, point, unit) < d` (or `<=`, or reversed).
+
+**How results stay correct:**
+- The index only narrows the candidates down.
+- Every hit is read back from the statement tables with the reader's authorizations, and the filter always makes the exact check.
+- So results are exactly the same as without the index, and nothing under a label the reader lacks is returned.
+
+**When the index is not used:**
+- The query sets Rya's `query.limit` option. SPARQL `LIMIT` is fine.
+- An embedded query sets the binding `query.useindex` to `false`.
+- The plan starts elsewhere and looks up each subject directly. That lookup is cheaper anyway.
+
+**Lifecycle:**
+- **Turning an index on for a store that already has data:** queries don't use the index until it is built. Build it by starting once with `rya.rebuild-indexes=true`. The build runs during startup and reads every statement, so the Accumulo user must hold every visibility label in the store.
+- **Turning an index off:** delete its table, or the store refuses to start. An index that stopped receiving writes would silently miss data.
+- **Changing the indexed predicates:** this also needs a rebuild.
+
 ## Embedding the Sail
 
 ```java
@@ -129,6 +197,8 @@ try (AccumuloClient client = Accumulo.newClient().from("accumulo-client.properti
     AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
     conf.setTablePrefix("rya_");
     conf.setInfer(true);                       // optional
+    conf.setTextIndex(true);                   // optional: text:matches index
+    conf.setGeoIndex(true);                    // optional: GeoSPARQL index
     SailRepository repo = RyaAccumuloSailFactory.createRepository(client, conf);
     repo.init();
     try (RepositoryConnection conn = repo.getConnection()) {

@@ -32,6 +32,8 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
 
+import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.accumulo.index.IndexCatalog;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
@@ -237,8 +239,9 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 ? new RdfCloudTripleStoreEvaluationStatistics<>(queryConf, rdfEvalStatsDAO)
                 : new RyaDefaultStatistics();
         final RyaEvaluationStrategy strategy = new RyaEvaluationStrategy(tripleSource, dataset, inferenceEngine, statistics);
+        final IndexCatalog indexes = ryaDAO instanceof AccumuloRyaDAO accumulo ? accumulo.getIndexCatalog() : IndexCatalog.NONE;
         strategy.setOptimizerPipeline(new RyaQueryOptimizerPipeline(strategy, tripleSource, statistics,
-                new InferenceOptimizer(queryConf, inferenceEngine)));
+                new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf));
         try {
             final TupleExpr optimized = strategy.optimize(tupleExpr, statistics, bindings);
             if (queryConf.isDisplayQueryPlan()) {
@@ -283,6 +286,10 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
         final Binding useStats = bindings.getBinding(RdfCloudTripleStoreConfiguration.CONF_USE_STATS);
         if (useStats != null) {
             queryConf.setUseStats(Boolean.parseBoolean(useStats.getValue().stringValue()));
+        }
+        final Binding useIndex = bindings.getBinding(RdfCloudTripleStoreConfiguration.CONF_USE_INDEX);
+        if (useIndex != null) {
+            queryConf.setUseIndex(Boolean.parseBoolean(useIndex.getValue().stringValue()));
         }
         return queryConf;
     }

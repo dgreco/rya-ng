@@ -34,6 +34,8 @@ import org.apache.accumulo.core.client.IteratorSetting;
 import org.apache.accumulo.core.client.Scanner;
 import org.apache.accumulo.core.client.TableNotFoundException;
 import org.apache.accumulo.core.iterators.FirstEntryInRowIterator;
+import io.github.dgreco.rya.accumulo.index.IndexType;
+import io.github.dgreco.rya.accumulo.index.IndexVerifier;
 import io.github.dgreco.rya.accumulo.query.AccumuloRyaQueryEngine;
 import io.github.dgreco.rya.test.accumulo.AccumuloITBase;
 import io.github.dgreco.rya.api.domain.RyaStatement;
@@ -68,6 +70,11 @@ public class AccumuloRyaDAOIT extends AccumuloITBase {
         grantAuthorizations("vis1", "vis2", "A", "B", "C");
         conf = new AccumuloRdfConfiguration();
         conf.setTablePrefix(getTablePrefix());
+        // -Drya.test.indexes=true runs every test with the text and geo indexes maintained.
+        if (Boolean.getBoolean("rya.test.indexes")) {
+            conf.setTextIndex(true);
+            conf.setGeoIndex(true);
+        }
         dao = new AccumuloRyaDAO(getClient(), conf);
         dao.init();
     }
@@ -75,6 +82,14 @@ public class AccumuloRyaDAOIT extends AccumuloITBase {
     @AfterEach
     public void tearDown() throws Exception {
         dao.destroy();
+        if (conf.isTextIndex() && getClient().tableOperations().exists(conf.getTableLayoutStrategy().getSpo())) {
+            for (final IndexType type : IndexType.values()) {
+                if (getClient().tableOperations().exists(type.table(conf.getTableLayoutStrategy()))) {
+                    final IndexVerifier.Report report = IndexVerifier.verify(getClient(), conf, type);
+                    assertTrue(report.isClean(), type + " index out of step: " + report);
+                }
+            }
+        }
     }
 
     @Test

@@ -21,6 +21,12 @@ package io.github.dgreco.rya.rdftriplestore.evaluation;
 
 import java.util.List;
 
+import java.util.ArrayList;
+
+import io.github.dgreco.rya.accumulo.index.IndexCatalog;
+import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
+import io.github.dgreco.rya.rdftriplestore.evaluation.index.IndexSearchOptimizer;
+import io.github.dgreco.rya.rdftriplestore.evaluation.index.TextQueryValidator;
 import io.github.dgreco.rya.rdftriplestore.inference.InferenceOptimizer;
 import org.eclipse.rdf4j.query.algebra.evaluation.EvaluationStrategy;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryOptimizer;
@@ -43,20 +49,35 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
     private final TripleSource tripleSource;
     private final EvaluationStatistics statistics;
     private final InferenceOptimizer inference;
+    private final IndexSearchOptimizer indexSearch;
 
+    /** Without secondary indexes. */
     public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
             final EvaluationStatistics statistics, final InferenceOptimizer inference) {
+        this(strategy, tripleSource, statistics, inference, IndexCatalog.NONE, null);
+    }
+
+    /**
+     * @param indexes the secondary indexes queries may use
+     * @param conf the query's configuration (whether to use the indexes); ignored without indexes
+     */
+    public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
+            final EvaluationStatistics statistics, final InferenceOptimizer inference, final IndexCatalog indexes,
+            final RdfCloudTripleStoreConfiguration conf) {
         this.strategy = strategy;
         this.tripleSource = tripleSource;
         this.statistics = statistics;
         this.inference = inference;
+        this.indexSearch = indexes == IndexCatalog.NONE || conf == null ? null : new IndexSearchOptimizer(indexes, conf);
     }
 
     @Override
     public Iterable<QueryOptimizer> getOptimizers() {
-        return List.of(
+        final List<QueryOptimizer> optimizers = new ArrayList<>(List.of(
                 StandardQueryOptimizerPipeline.BINDING_ASSIGNER,
                 StandardQueryOptimizerPipeline.BINDING_SET_ASSIGNMENT_INLINER,
+                // Rejects malformed constant text queries whether or not an index will be used.
+                new TextQueryValidator(),
                 new ConstantOptimizer(strategy),
                 new RegexAsStringFunctionOptimizer(tripleSource.getValueFactory()),
                 StandardQueryOptimizerPipeline.COMPARE_OPTIMIZER,
@@ -66,12 +87,19 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
                 StandardQueryOptimizerPipeline.UNION_SCOPE_CHANGE_OPTIMIZER,
                 StandardQueryOptimizerPipeline.QUERY_MODEL_NORMALIZER,
                 StandardQueryOptimizerPipeline.PROJECTION_REMOVAL_OPTIMIZER,
-                inference,
+                inference));
+        if (indexSearch != null) {
+            // After inference, so inferred sub-properties are searched too; before join ordering,
+            // which then sees the much smaller indexed patterns.
+            optimizers.add(indexSearch);
+        }
+        optimizers.addAll(List.of(
                 new QueryJoinOptimizer(statistics, strategy.isTrackResultSize(), tripleSource),
                 StandardQueryOptimizerPipeline.ITERATIVE_EVALUATION_OPTIMIZER,
                 new FilterOptimizer(statistics, false, true),
                 StandardQueryOptimizerPipeline.FILTER_IN_VALUES_OPTIMIZER,
                 new FilterOptimizer(statistics),
-                StandardQueryOptimizerPipeline.ORDER_LIMIT_OPTIMIZER);
+                StandardQueryOptimizerPipeline.ORDER_LIMIT_OPTIMIZER));
+        return optimizers;
     }
 }

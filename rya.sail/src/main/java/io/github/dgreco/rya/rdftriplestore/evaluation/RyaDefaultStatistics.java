@@ -19,6 +19,7 @@ package io.github.dgreco.rya.rdftriplestore.evaluation;
  * under the License.
  */
 
+import io.github.dgreco.rya.rdftriplestore.evaluation.index.IndexedStatementPattern;
 import io.github.dgreco.rya.rdftriplestore.utils.FixedStatementPattern;
 import org.eclipse.rdf4j.query.algebra.StatementPattern;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.EvaluationStatistics;
@@ -37,6 +38,9 @@ public class RyaDefaultStatistics extends EvaluationStatistics {
             protected double getCardinality(final StatementPattern sp) {
                 if (sp instanceof FixedStatementPattern) {
                     return ((FixedStatementPattern) sp).statements.size();
+                }
+                if (sp instanceof IndexedStatementPattern) {
+                    return Math.max(1, super.getCardinality(sp) * IndexedStatementPattern.SELECTIVITY);
                 }
                 return super.getCardinality(sp);
             }

@@ -47,6 +47,11 @@ under the License.
             <artifactId>rdf4j-queryalgebra-evaluation</artifactId>
         </dependency>
         <dependency>
+            <!-- WKT parsing for the geo index, and the geof: GeoSPARQL filter functions. -->
+            <groupId>org.eclipse.rdf4j</groupId>
+            <artifactId>rdf4j-queryalgebra-geosparql</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.eclipse.rdf4j</groupId>
             <artifactId>rdf4j-queryparser-sparql</artifactId>
         </dependency>
