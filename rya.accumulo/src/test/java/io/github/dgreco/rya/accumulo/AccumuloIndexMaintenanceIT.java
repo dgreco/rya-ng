@@ -25,10 +25,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.accumulo.core.client.Accumulo;
+import org.apache.accumulo.core.client.AccumuloClient;
 import org.apache.accumulo.core.client.Scanner;
+import org.apache.accumulo.core.client.security.tokens.PasswordToken;
 import org.apache.accumulo.core.data.Key;
 import org.apache.accumulo.core.data.Value;
 import org.apache.accumulo.core.security.Authorizations;
+import org.apache.accumulo.core.security.TablePermission;
 import org.eclipse.rdf4j.model.vocabulary.GEO;
 import org.eclipse.rdf4j.model.vocabulary.RDF;
 import org.eclipse.rdf4j.model.vocabulary.RDFS;
@@ -245,5 +249,33 @@ class AccumuloIndexMaintenanceIT extends AccumuloITBase {
         final AccumuloRyaDAO reopened = open(conf(true, true));
         assertTrue(reopened.getIndexCatalog().isReady(IndexType.TEXT));
         assertTrue(reopened.getIndexCatalog().isReady(IndexType.GEO));
+    }
+
+    @Test
+    void aReadOnlyUserCanOpenAnIndexedStore() throws Exception {
+        open(conf(true, true)).add(sample().iterator());
+        final String user = "reader" + getTablePrefix().replace("_", "");
+        final PasswordToken password = new PasswordToken("reader-password");
+        getClient().securityOperations().createLocalUser(user, password);
+        try {
+            getClient().securityOperations().changeUserAuthorizations(user, new Authorizations("A", "B"));
+            for (final String table : getClient().tableOperations().list()) {
+                if (table.startsWith(getTablePrefix())) {
+                    getClient().securityOperations().grantTablePermission(user, table, TablePermission.READ);
+                }
+            }
+            try (AccumuloClient reader = Accumulo.newClient().from(getClientProperties()).as(user, password).build()) {
+                final AccumuloRyaDAO dao = new AccumuloRyaDAO(reader, conf(true, true));
+                dao.init();
+                try {
+                    assertTrue(dao.getIndexCatalog().isReady(IndexType.TEXT));
+                    assertTrue(dao.getIndexCatalog().isReady(IndexType.GEO));
+                } finally {
+                    dao.destroy();
+                }
+            }
+        } finally {
+            getClient().securityOperations().dropLocalUser(user);
+        }
     }
 }

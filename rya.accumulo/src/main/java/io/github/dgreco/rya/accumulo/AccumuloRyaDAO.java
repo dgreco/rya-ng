@@ -34,15 +34,19 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
 
 import org.apache.accumulo.core.client.AccumuloClient;
+import org.apache.accumulo.core.client.AccumuloException;
+import org.apache.accumulo.core.client.AccumuloSecurityException;
 import org.apache.accumulo.core.client.BatchDeleter;
 import org.apache.accumulo.core.client.BatchScanner;
 import org.apache.accumulo.core.client.BatchWriter;
@@ -100,6 +104,8 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
 
     /** Row of the ns table that holds the storage version (column family {@code version}). */
     private static final Text VERSION_ROW = new Text("rya");
+    /** Counters summed in memory before they are written by one {@link #add(Iterator)} call. */
+    private static final int MAX_PENDING_COUNTERS = 50_000;
 
     private final AtomicBoolean isInitialized = new AtomicBoolean();
     private AccumuloClient client;
@@ -175,12 +181,32 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
             indexes = new IndexManager(client, conf, mtbw, bwNs, storeCreated);
             isInitialized.set(true);
         } catch (final Exception e) {
-            throw new RyaDAOException(e);
+            if (mtbw != null) {
+                // destroy() skips a DAO that never finished init, so close the writers here.
+                try {
+                    mtbw.close();
+                } catch (final Exception closing) {
+                    e.addSuppressed(closing);
+                }
+                mtbw = null;
+            }
+            throw e instanceof RyaDAOException r ? r : new RyaDAOException(e);
         }
     }
 
     private static void ensureStatsCombiner(final TableOperations ops, final String table) throws Exception {
-        if (!ops.listIterators(table).containsKey(EvalStatsMutations.COMBINER_NAME)) {
+        final Map<String, EnumSet<IteratorScope>> iterators;
+        try {
+            iterators = ops.listIterators(table);
+        } catch (final AccumuloException | AccumuloSecurityException e) {
+            if (!permissionDenied(e)) {
+                throw e;
+            }
+            // Reading table settings needs ALTER_TABLE; the user who created the table attached the combiner.
+            logger.debug("No permission to list the iterators of {}; assuming the stats combiner is attached", table);
+            return;
+        }
+        if (!iterators.containsKey(EvalStatsMutations.COMBINER_NAME)) {
             try {
                 ops.attachIterator(table, EvalStatsMutations.combinerSetting(), EnumSet.allOf(IteratorScope.class));
             } catch (final IllegalArgumentException e) {
@@ -188,6 +214,15 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
                 logger.debug("Stats combiner already attached to {}", table);
             }
         }
+    }
+
+    private static boolean permissionDenied(final Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof AccumuloSecurityException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void writeVersionIfMissing() throws Exception {
@@ -216,8 +251,16 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
         add(Collections.singletonList(statement).iterator());
     }
 
+    /**
+     * Adds statements. Within one call the statistics counters are summed in memory and written
+     * as one cell per counter, and each graph marker is written once, so passing many statements
+     * per call is much cheaper than one call per statement.
+     */
     @Override
     public synchronized void add(final Iterator<RyaStatement> statements) {
+        final EvalStatsMutations.CounterBatch counts = maintainStats ? new EvalStatsMutations.CounterBatch() : null;
+        final Set<GraphMarkerKey> markers = new HashSet<>();
+        Exception failure = null;
         try {
             while (statements.hasNext()) {
                 final RyaStatement stmt = statements.next();
@@ -225,20 +268,49 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
                 bwSpo.addMutations(rows.get(TABLE_LAYOUT.SPO));
                 bwPo.addMutations(rows.get(TABLE_LAYOUT.PO));
                 bwOsp.addMutations(rows.get(TABLE_LAYOUT.OSP));
-                final Mutation marker = EvalStatsMutations.graphMarker(stmt);
-                if (marker != null) {
-                    bwGraphs.addMutation(marker);
+                if (stmt.getContext() != null && markers.add(GraphMarkerKey.of(stmt))) {
+                    bwGraphs.addMutation(EvalStatsMutations.graphMarker(stmt));
                 }
-                if (maintainStats) {
-                    bwEval.addMutations(EvalStatsMutations.counters(stmt, true));
+                if (counts != null) {
+                    counts.add(stmt, 1);
+                    if (counts.size() >= MAX_PENDING_COUNTERS) {
+                        bwEval.addMutations(counts.drain());
+                    }
                 }
                 indexes.add(stmt);
             }
-            if (flushEachUpdate) {
-                mtbw.flush();
-            }
         } catch (final Exception e) {
-            throw new RyaDAOException(e);
+            failure = e;
+        }
+        // Count what was handed to the writers, even if a later statement failed.
+        if (counts != null && counts.size() > 0) {
+            try {
+                bwEval.addMutations(counts.drain());
+            } catch (final Exception e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure == null && flushEachUpdate) {
+            try {
+                mtbw.flush();
+            } catch (final Exception e) {
+                failure = e;
+            }
+        }
+        if (failure != null) {
+            throw failure instanceof RyaDAOException r ? r : new RyaDAOException(failure);
+        }
+    }
+
+    /** A graph marker cell: written once per call for each graph and visibility. */
+    private record GraphMarkerKey(String graph, String visibility) {
+        static GraphMarkerKey of(final RyaStatement stmt) {
+            final byte[] cv = stmt.getColumnVisibility();
+            return new GraphMarkerKey(stmt.getContext().getData(), cv == null ? "" : new String(cv, StandardCharsets.UTF_8));
         }
     }
 

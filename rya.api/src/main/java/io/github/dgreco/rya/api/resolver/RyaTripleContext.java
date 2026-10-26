@@ -71,7 +71,8 @@ public class RyaTripleContext {
         public static final RyaTripleContext HASHED_INSTANCE = new RyaTripleContext(true);
     }
 
-    public synchronized static RyaTripleContext getInstance(final RdfCloudTripleStoreConfiguration conf) {
+    /** Thread-safe through the holder class; no lock needed. */
+    public static RyaTripleContext getInstance(final RdfCloudTripleStoreConfiguration conf) {
     	if (conf.isPrefixRowsWithHash()){
     		return RyaTripleContextHolder.HASHED_INSTANCE;
     	}

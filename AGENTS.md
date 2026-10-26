@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-rya-ng is an RDF triple store on Accumulo. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with five modules, groupId `io.github.dgreco.rya`, version `1.0.0-SNAPSHOT`, Java packages under `io.github.dgreco.rya`.
+rya-ng is an RDF triple store on Accumulo. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with six modules, groupId `io.github.dgreco.rya`, version `1.0.0-SNAPSHOT`, Java packages under `io.github.dgreco.rya`.
 
 | Component | Version | Notes |
 |---|---|---|
@@ -41,7 +41,7 @@ mvn -pl rya.sail verify -Dit.test=InferenceIT -Dtest=none -Dsurefire.failIfNoSpe
 
 ## Architecture
 
-Data flows `rya.api` → `rya.accumulo` → `rya.sail` → `rya.sparql`.
+Data flows `rya.api` → `rya.accumulo` → `rya.sail` → `rya.sparql`. `rya.loader` writes through `rya.accumulo` only.
 
 ### Storage (`rya.accumulo`)
 
@@ -49,10 +49,21 @@ Data flows `rya.api` → `rya.accumulo` → `rya.sail` → `rya.sparql`.
 - `<prefix>spo`, `<prefix>po`, `<prefix>osp`: every statement, once per table, so any triple pattern becomes a range scan on one table (`TABLE_LAYOUT`, `TriplePatternStrategy`). The named graph is the column family, the visibility label is the cell visibility.
 - `<prefix>eval`: +1/−1 cardinality counters per subject, predicate, object and pair, summed server side by Accumulo's built-in `SummingCombiner` (`EvalStatsMutations`). `AccumuloRdfEvalStatsDAO` reads them, and they feed RDF4J's join optimizer through `RdfCloudTripleStoreEvaluationStatistics`.
 - `<prefix>graphs`: named-graph markers, used by `getContextIDs()`.
+- **Batched adds:** `add(Iterator)` sums the counters of the whole call in a `CounterBatch` (one cell per counter key, drained every 50k keys) and writes each graph marker once per call. The sail adds one statement per call, so this only matters for bulk callers such as the loader. Markers are not cached across calls: `getContextIDs()` deletes markers whose graph has no visible data.
+- `add` is `synchronized`: one DAO serves one writer thread at a time. `setFlush(false)` and `setBatchWriterConfig(...)` (before `init()`) make it a bulk writer.
 - `<prefix>ns`: namespaces, plus the storage version (row `rya`, cf `version`). There is no version triple in SPO.
 - `<prefix>text`, `<prefix>geo`: optional secondary indexes (`index.text`, `index.geo`), maintained by `IndexManager` in the same writes as spo. Their state (READY/BUILDING plus definition) is in the ns table (row `rya`, cf `index`).
   - Key layout (`IndexKeys`): row = `term-or-cell 0x00 predicate 0x00 subject 0x00 hex(objectHash)`, cf = graph, cq = spo qualifier, and the statement's own visibility and timestamp.
   - Text terms come from `TextAnalyzer` (JDK only). Geo cells are geohash covers from `GeoCells`, with WKT parsed by RDF4J's `SpatialSupport`.
+
+### Loader (`rya.loader`)
+
+A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verify`, `drop`), packaged as a Boot executable jar and run with `rya.loader/run.sh`.
+- **Generator** (`gen/`): `EntityGenerator.generate(i)` returns entity `i`'s statements from the seed and `i` alone (`SplitMix64` streams), so any process can produce any range, and a rerun writes identical keys (one fixed timestamp per dataset). `ClassLayout` interleaves the classes over 1000 slots. Literals use the exact lexical form the resolvers read back. `GenConfig.fingerprint()` identifies a dataset.
+- **`prepare`** runs once, from one process: one DAO init creates the tables with READY indexes (concurrent inits would race), `SplitPlanner` adds split points at quantiles of the rows a sample would write (same serializers as the DAO), and `ReferenceData` writes the ontology plus the dataset description holding the fingerprint.
+- **`load`:** `StoreCheck.forLoad` refuses a store that wasn't prepared for the same dataset and index settings. Each worker thread has its own DAO, claims blocks of entities from a shared cursor, and writes each block with one `add`. A block is recorded in the `Progress` file only after a later flush; `--resume` skips recorded blocks.
+- **`verify`** regenerates a sample of entities and compares them with spo and the subject counters, under the reader's labels.
+- `LoaderIT` checks spo and eval cell by cell against the regenerated data, after parallel parts, a stop and resume, and a write failure followed by a resume.
 
 ### Row encoding (`rya.api` `resolver`)
 
@@ -108,6 +119,8 @@ Data flows `rya.api` → `rya.accumulo` → `rya.sail` → `rya.sparql`.
   - Don't add a `wktLiteral` type resolver: it would change the stored object encoding.
   - The index tables follow `dropGraph`'s auth-scoped deletes, because cf = graph.
   - RDF4J's LuceneSail is not usable here: it needs a NotifyingSail and ignores visibility labels.
+- **DAO init and permissions:** `init()` must not write when the store is already set up (an unchanged index state is not rewritten), and it skips the stats-combiner check when the user may not read table settings (that needs ALTER_TABLE). Read-only users, such as an endpoint account, must be able to open a store.
+- **Loader:** run `prepare` before any `load`, with the same dataset and index options (`prepare` prints them). The endpoint must use the same table prefix and index settings. Counters can drift only for blocks in flight when a load fails, since a resume writes them again.
 - **License headers.**
   - Files that came from Apache Rya keep their ASF header unchanged, including heavily rewritten ones. The Apache License requires it.
   - New files get the standard Apache 2.0 header from the appendix of `LICENSE` (`Copyright 2026 David Greco`), not the ASF one.

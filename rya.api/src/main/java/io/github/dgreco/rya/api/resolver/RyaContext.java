@@ -84,7 +84,8 @@ public class RyaContext {
         public static final RyaContext INSTANCE = new RyaContext();
      }
 
-    public synchronized static RyaContext getInstance() {
+    /** Lazy and thread-safe through the holder class; no lock, since it is called for every value written. */
+    public static RyaContext getInstance() {
         return RyaContextHolder.INSTANCE;
     }
 

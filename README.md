@@ -60,6 +60,7 @@ The endpoint is packaged as `rya.sparql/target/rya.sparql-<version>.jar`.
 | `rya.accumulo` | `AccumuloRyaDAO`: stores each statement in the SPO, PO and OSP tables, and maintains statistics and the named-graph list |
 | `rya.sail` | RDF4J Sail (`RdfCloudTripleStore`), query planning, inference, and `RyaAccumuloSailFactory` |
 | `rya.sparql` | Spring Boot SPARQL endpoint |
+| `rya.loader` | Synthetic data generator and parallel loader, for stress tests |
 | `rya.test.accumulo` | Test-only harness: one shared MiniAccumuloCluster per JVM |
 
 ## Running the SPARQL endpoint
@@ -207,6 +208,41 @@ Without an index, these filters still work: they check every candidate, so they 
 - **Turning an index on for a store that already has data:** queries don't use the index until it is built. Build it by starting once with `rya.rebuild-indexes=true`. The build runs during startup and reads every statement, so the Accumulo user must hold every visibility label in the store.
 - **Turning an index off:** delete its table, or the store refuses to start. An index that stopped receiving writes would silently miss data.
 - **Changing the indexed predicates:** this also needs a rebuild.
+
+## Loading synthetic data
+
+`rya.loader` generates a synthetic dataset and writes it into a store in parallel, through the normal write path, for stress tests up to billions of triples.
+
+**The data:**
+- about 7.5 triples per entity, over 11 classes: people, organizations, companies, cities, landmarks, events, products, reviews, articles, sensors and observations;
+- labels and descriptions in 11 languages, numbers, dates, and power-law links between entities;
+- points and polygons, named graphs, and optional visibility labels.
+
+Each entity depends only on the seed and its number, so any process can generate any part of the dataset, and writing a part again produces the same keys.
+
+```bash
+R=rya.loader/run.sh    # builds the jar on first use; --build rebuilds it
+
+$R dry-run --triples 1B --text-index --geo-index           # no cluster: speed, bytes per triple, network ceiling
+$R prepare --table-prefix big_ --triples 1B --text-index --geo-index
+$R load    <the dataset options prepare printed> --threads 8
+$R load    <same options> --resume                          # after Ctrl-C or a failure
+$R verify  <same options> --sample 1000
+$R drop    --table-prefix big_ --confirm big_
+```
+
+- **Connection:** pass `--client-properties FILE`, or set `RYA_ACCUMULO_ZOOKEEPERS`, `RYA_ACCUMULO_INSTANCE`, `RYA_ACCUMULO_USER` and `RYA_ACCUMULO_PASSWORD`. `--zookeepers`, `--instance` and `--user` also work, but the password is only read from the environment.
+- **`prepare` first, once per dataset:**
+  - creates the tables with the indexes ready and splits each table into 4 tablets per tablet server, at split points sampled from the data;
+  - writes the ontology, 200 countries and a description of the dataset;
+  - prints the `load` commands and the endpoint flags that match.
+  `load` refuses a store prepared for another dataset or with other index settings.
+- **Parallelism:** `--threads` writers per process. `--part K --parts N` divides the entities between processes, on one or more machines.
+- **Resuming:** progress is saved after each flush (every `--commit-interval`), and `--resume` continues from there. After a crash with `--durability` below `sync`, run `verify`.
+- **Throughput:** with statistics and both indexes on, each triple sends about 1 KB to the tablet servers (`dry-run` shows the breakdown per table), so a 1 Gbit/s link carries about 120k triples/s. `--stats off` or fewer indexes send less. `--durability flush` trades crash safety for speed, and `--max-rate` caps a process.
+- **Too many writers:** more writers than the cluster can absorb can starve ZooKeeper, and a tablet server that loses its ZooKeeper lock exits. Raise `--threads` gradually and watch the cluster.
+- **Disk:** after compaction, a test load took about 160 bytes per triple with statistics and both indexes: about 50 for statistics, 42 for text, 21 for each of spo, po and osp, and 1 for geo. Multiply by the replication factor of the storage.
+- **Exit codes:** 0 done, 1 failed or interrupted (resume it), 2 bad arguments or a store that doesn't match.
 
 ## Embedding the Sail
 

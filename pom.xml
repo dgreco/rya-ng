@@ -44,6 +44,7 @@ under the License.
         <module>rya.test.accumulo</module>
         <module>rya.accumulo</module>
         <module>rya.sail</module>
+        <module>rya.loader</module>
         <module>rya.sparql</module>
     </modules>
 

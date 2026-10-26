@@ -22,9 +22,19 @@ package io.github.dgreco.rya.accumulo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+
+import org.apache.accumulo.core.client.BatchWriter;
+import org.apache.accumulo.core.client.Scanner;
+import org.apache.accumulo.core.data.ColumnUpdate;
+import org.apache.accumulo.core.data.Key;
+import org.apache.accumulo.core.data.Mutation;
+import org.apache.accumulo.core.security.Authorizations;
 
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
@@ -70,6 +80,89 @@ public class AccumuloStatsAndGraphsIT extends AccumuloITBase {
     @AfterEach
     public void tearDown() {
         dao.destroy();
+    }
+
+    /** One add() of many statements leaves exactly the counters of adding them one by one. */
+    @Test
+    public void batchAddCountsLikeSingleAdds() throws Exception {
+        grantAuthorizations("A", "B");
+        final List<RyaStatement> batch = new ArrayList<>();
+        final Map<String, Long> expected = new TreeMap<>();
+        for (int i = 0; i < 500; i++) {
+            final RyaIRI s = new RyaIRI(NS + "s" + (i % 37));
+            final RyaIRI p = new RyaIRI(NS + "p" + (i % 5));
+            final RyaType o = i % 3 == 0 ? new RyaIRI(NS + "s" + (i % 11)) : new RyaType("v" + (i % 23) + "-" + i);
+            final RyaIRI g = i % 4 == 0 ? null : (i % 2 == 0 ? G1 : G2);
+            final String label = i % 5 == 0 ? "A" : i % 7 == 0 ? "B" : null;
+            final RyaStatement st = new RyaStatement(s, p, o, g, null,
+                    label == null ? null : label.getBytes(StandardCharsets.UTF_8), null, 1000L + i);
+            batch.add(st);
+            for (final Mutation m : EvalStatsMutations.counters(st, true)) {
+                for (final ColumnUpdate u : m.getUpdates()) {
+                    expected.merge(cell(m.getRow(), u.getColumnFamily(), u.getColumnQualifier(), u.getColumnVisibility()),
+                            1L, Long::sum);
+                }
+            }
+        }
+        dao.add(batch.iterator());
+        dao.flush();
+        final Map<String, Long> actual = new TreeMap<>();
+        try (Scanner scanner = getClient().createScanner(conf.getTableLayoutStrategy().getEval(), new Authorizations("A", "B"))) {
+            for (final Map.Entry<Key, org.apache.accumulo.core.data.Value> e : scanner) {
+                final Key k = e.getKey();
+                actual.put(cell(k.getRowData().toArray(), k.getColumnFamilyData().toArray(),
+                        k.getColumnQualifierData().toArray(), k.getColumnVisibilityData().toArray()),
+                        Long.parseLong(e.getValue().toString()));
+            }
+        }
+        assertEquals(expected, actual);
+        assertEquals(Set.of(G1, G2), contexts(new Authorizations("A", "B")));
+    }
+
+    /** A graph dropped and then written again is listed again, even when writes are batched. */
+    @Test
+    public void markerRewrittenAfterDropGraph() {
+        dao.add(new RyaStatement(ALICE, KNOWS, BOB, G1));
+        dao.dropGraph(conf, G1);
+        assertEquals(Set.of(), contexts());
+
+        final AccumuloRdfConfiguration batched = new AccumuloRdfConfiguration(conf);
+        batched.setFlush(false);
+        final AccumuloRyaDAO writer = new AccumuloRyaDAO(getClient(), batched);
+        writer.init();
+        try {
+            writer.add(List.of(new RyaStatement(ALICE, KNOWS, BOB, G1), new RyaStatement(BOB, KNOWS, ALICE, G1)).iterator());
+            writer.flush();
+            assertEquals(Set.of(G1), contexts());
+        } finally {
+            writer.destroy();
+        }
+    }
+
+    /** A marker removed as stale (its graph looked empty) is written again by the next add. */
+    @Test
+    public void markerRestoredAfterBeingRemovedAsStale() throws Exception {
+        try (BatchWriter markers = getClient().createBatchWriter(conf.getTableLayoutStrategy().getGraphs())) {
+            markers.addMutation(EvalStatsMutations.graphMarker(new RyaStatement(ALICE, KNOWS, BOB, G2)));
+        }
+        assertEquals(Set.of(), contexts(), "a marker without data is dropped");
+        dao.add(List.of(new RyaStatement(ALICE, KNOWS, BOB, G2)).iterator());
+        assertEquals(Set.of(G2), contexts());
+    }
+
+    private static String cell(final byte[] row, final byte[] cf, final byte[] cq, final byte[] cv) {
+        return new String(row, StandardCharsets.UTF_8) + "|" + new String(cf, StandardCharsets.UTF_8) + "|"
+                + new String(cq, StandardCharsets.UTF_8) + "|" + new String(cv, StandardCharsets.UTF_8);
+    }
+
+    private Set<RyaIRI> contexts(final Authorizations auths) {
+        final AccumuloRdfConfiguration withAuths = new AccumuloRdfConfiguration(conf);
+        withAuths.setAuths(auths.toString().split(","));
+        final Set<RyaIRI> graphs = new HashSet<>();
+        try (CloseableIteration<RyaIRI> it = dao.getContextIDs(withAuths)) {
+            it.forEachRemaining(graphs::add);
+        }
+        return graphs;
     }
 
     @Test

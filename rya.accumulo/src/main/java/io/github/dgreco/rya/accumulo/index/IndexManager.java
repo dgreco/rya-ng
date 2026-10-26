@@ -126,7 +126,11 @@ public final class IndexManager implements IndexCatalog {
             }
             active.put(type, index);
             writers.put(type, mtbw.getBatchWriter(table));
-            setState(type, state);
+            if (state.equals(stored)) {
+                states.put(type, state); // unchanged: no write, so a read-only user can open the store
+            } else {
+                setState(type, state);
+            }
         }
         mtbw.flush();
         for (final SecondaryIndex index : toClear) {

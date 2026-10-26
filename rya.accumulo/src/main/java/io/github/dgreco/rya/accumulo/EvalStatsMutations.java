@@ -30,7 +30,10 @@ import static io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.SUBJECT_CF_T
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.accumulo.core.client.IteratorSetting;
 import org.apache.accumulo.core.data.Mutation;
@@ -52,6 +55,9 @@ import io.github.dgreco.rya.api.domain.RyaStatement;
  * The cell carries the statement's visibility, so a reader only counts what it may see.
  * Accumulo's {@link SummingCombiner} adds the cells up server side.
  *
+ * <p>A {@link CounterBatch} sums the counters of many statements first and writes one cell per
+ * counter with the total, which the combiner adds up exactly like the individual +1 cells.
+ *
  * <p>The counts drive join ordering only, so they may drift (re-inserting an existing
  * statement counts it twice; dropping a graph does not adjust the all-graphs counters).
  */
@@ -64,10 +70,80 @@ public final class EvalStatsMutations {
     /** Column family of the named-graph marker rows. */
     public static final Text GRAPH_CF_TXT = new Text("g");
 
-    private static final Value PLUS_ONE = new Value("1".getBytes(StandardCharsets.UTF_8));
-    private static final Value MINUS_ONE = new Value("-1".getBytes(StandardCharsets.UTF_8));
-
     private EvalStatsMutations() {
+    }
+
+    /**
+     * One counter cell.
+     *
+     * @param row the counted values joined with {@code DELIM}
+     * @param family which combination is counted (subject, predicate, ...)
+     * @param graph the graph IRI, or empty for the all-graphs counter
+     * @param visibility the counted statement's visibility
+     */
+    public record CounterKey(String row, Text family, String graph, ColumnVisibility visibility) {
+    }
+
+    /** The counters a statement adds to: six, plus six more for a named-graph statement. */
+    public static List<CounterKey> counterKeys(final RyaStatement stmt) {
+        final String s = stmt.getSubject().getData();
+        final String p = stmt.getPredicate().getData();
+        final String o = stmt.getObject().getData();
+        final String graph = stmt.getContext() == null ? null : stmt.getContext().getData();
+        final ColumnVisibility cv = visibility(stmt);
+        final List<CounterKey> keys = new ArrayList<>(graph == null ? 6 : 12);
+        addKeys(keys, s, SUBJECT_CF_TXT, graph, cv);
+        addKeys(keys, p, PRED_CF_TXT, graph, cv);
+        addKeys(keys, o, OBJ_CF_TXT, graph, cv);
+        addKeys(keys, s + DELIM + p, SUBJECTPRED_CF_TXT, graph, cv);
+        addKeys(keys, p + DELIM + o, PREDOBJECT_CF_TXT, graph, cv);
+        addKeys(keys, s + DELIM + o, SUBJECTOBJECT_CF_TXT, graph, cv);
+        return keys;
+    }
+
+    private static void addKeys(final List<CounterKey> keys, final String row, final Text family, final String graph,
+            final ColumnVisibility cv) {
+        keys.add(new CounterKey(row, family, "", cv));
+        if (graph != null) {
+            keys.add(new CounterKey(row, family, graph, cv));
+        }
+    }
+
+    /**
+     * Sums counter deltas in memory and writes one cell per counter. Not thread-safe: use one
+     * per writer.
+     */
+    public static final class CounterBatch {
+        private final Map<CounterKey, long[]> sums = new HashMap<>();
+
+        public void add(final RyaStatement stmt, final long delta) {
+            for (final CounterKey key : counterKeys(stmt)) {
+                sums.computeIfAbsent(key, k -> new long[1])[0] += delta;
+            }
+        }
+
+        /** The number of distinct counters pending. */
+        public int size() {
+            return sums.size();
+        }
+
+        /** The pending sums as mutations (one per row; zero sums are dropped), and clears them. */
+        public List<Mutation> drain() {
+            final Map<String, Mutation> byRow = new LinkedHashMap<>();
+            for (final Map.Entry<CounterKey, long[]> e : sums.entrySet()) {
+                final long sum = e.getValue()[0];
+                if (sum == 0) {
+                    continue;
+                }
+                final CounterKey key = e.getKey();
+                final Mutation m = byRow.computeIfAbsent(key.row(),
+                        row -> new Mutation(new Text(row.getBytes(StandardCharsets.UTF_8))));
+                m.put(key.family(), key.graph().isEmpty() ? EMPTY_TEXT : new Text(key.graph()), key.visibility(),
+                        new Value(Long.toString(sum).getBytes(StandardCharsets.UTF_8)));
+            }
+            sums.clear();
+            return new ArrayList<>(byRow.values());
+        }
     }
 
     /** @return the combiner setting that sums the string-encoded counters. */
@@ -83,21 +159,9 @@ public final class EvalStatsMutations {
      * @param add true for an insert (+1), false for a delete (-1).
      */
     public static List<Mutation> counters(final RyaStatement stmt, final boolean add) {
-        final String s = stmt.getSubject().getData();
-        final String p = stmt.getPredicate().getData();
-        final String o = stmt.getObject().getData();
-        final Text context = stmt.getContext() == null ? null : new Text(stmt.getContext().getData());
-        final ColumnVisibility cv = visibility(stmt);
-        final Value delta = add ? PLUS_ONE : MINUS_ONE;
-
-        final List<Mutation> mutations = new ArrayList<>(6);
-        mutations.add(counter(s, SUBJECT_CF_TXT, context, cv, delta));
-        mutations.add(counter(p, PRED_CF_TXT, context, cv, delta));
-        mutations.add(counter(o, OBJ_CF_TXT, context, cv, delta));
-        mutations.add(counter(s + DELIM + p, SUBJECTPRED_CF_TXT, context, cv, delta));
-        mutations.add(counter(p + DELIM + o, PREDOBJECT_CF_TXT, context, cv, delta));
-        mutations.add(counter(s + DELIM + o, SUBJECTOBJECT_CF_TXT, context, cv, delta));
-        return mutations;
+        final CounterBatch batch = new CounterBatch();
+        batch.add(stmt, add ? 1 : -1);
+        return batch.drain();
     }
 
     /**
@@ -110,16 +174,6 @@ public final class EvalStatsMutations {
         }
         final Mutation m = new Mutation(new Text(stmt.getContext().getData()));
         m.put(GRAPH_CF_TXT, EMPTY_TEXT, visibility(stmt), new Value(new byte[0]));
-        return m;
-    }
-
-    private static Mutation counter(final String row, final Text cf, final Text context, final ColumnVisibility cv,
-            final Value delta) {
-        final Mutation m = new Mutation(new Text(row.getBytes(StandardCharsets.UTF_8)));
-        m.put(cf, EMPTY_TEXT, cv, delta);
-        if (context != null) {
-            m.put(cf, context, cv, delta);
-        }
         return m;
     }
 
