@@ -1,0 +1,169 @@
+/*
+ * Copyright 2026 David Greco
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+:root {
+    --rya-bar: #0f172a;
+    --rya-bar-text: #e2e8f0;
+    --rya-muted: #94a3b8;
+    --rya-accent: #22d3ee;
+    --rya-accent-strong: #0e7490;
+    --rya-page: #f8fafc;
+    --rya-field: #1e293b;
+    --rya-field-border: #334155;
+}
+
+html, body {
+    margin: 0;
+    background: var(--rya-page);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.rya-bar {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 20px;
+    background: var(--rya-bar);
+    color: var(--rya-bar-text);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.4);
+}
+
+.rya-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.rya-name {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.rya-tag {
+    padding: 2px 8px;
+    border: 1px solid var(--rya-accent);
+    border-radius: 999px;
+    color: var(--rya-accent);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+}
+
+.rya-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px;
+}
+
+.rya-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--rya-muted);
+    font-size: 13px;
+}
+
+.rya-field select,
+.rya-field input {
+    min-width: 200px;
+    padding: 6px 10px;
+    border: 1px solid var(--rya-field-border);
+    border-radius: 6px;
+    background: var(--rya-field);
+    color: var(--rya-bar-text);
+    font: inherit;
+    font-size: 13px;
+}
+
+.rya-field select:focus,
+.rya-field input:focus {
+    outline: 2px solid var(--rya-accent);
+    outline-offset: 1px;
+}
+
+.rya-link {
+    color: var(--rya-accent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    text-decoration: none;
+}
+
+.rya-link:hover {
+    text-decoration: underline;
+}
+
+#yasgui {
+    padding: 12px 20px 40px;
+}
+
+/* Map tab */
+
+.rya-map {
+    height: 560px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+}
+
+.rya-map-note {
+    padding: 6px 2px;
+    color: #475569;
+    font-size: 13px;
+}
+
+.rya-map-icon {
+    display: inline-flex;
+    align-items: center;
+}
+
+.rya-map-popup {
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.rya-map-popup td {
+    padding: 2px 6px;
+    vertical-align: top;
+    word-break: break-word;
+}
+
+.rya-map-popup td:first-child {
+    color: var(--rya-accent-strong);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+    .rya-bar {
+        padding: 10px 16px;
+    }
+
+    .rya-field select,
+    .rya-field input {
+        min-width: 0;
+        width: 100%;
+    }
+
+    #yasgui {
+        padding: 8px 16px 32px;
+    }
+}

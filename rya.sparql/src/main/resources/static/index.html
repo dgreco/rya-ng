@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<!--
+  Copyright 2026 David Greco
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>rya-ng SPARQL</title>
+    <link rel="icon" href="ui/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="vendor/yasgui/yasgui.min.css">
+    <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+    <link rel="stylesheet" href="vendor/yasgui-chart-plugin/yasgui-chart-plugin.min.css">
+    <link rel="stylesheet" href="ui/rya-ui.css">
+</head>
+<body>
+<header class="rya-bar">
+    <div class="rya-brand">
+        <img src="ui/favicon.svg" alt="" width="26" height="26">
+        <span class="rya-name">rya-ng</span>
+        <span class="rya-tag">SPARQL</span>
+    </div>
+    <div class="rya-controls">
+        <label class="rya-field">
+            <span>Examples</span>
+            <select id="rya-examples" aria-label="Open an example query in a new tab">
+                <option value="">Open an example…</option>
+            </select>
+        </label>
+        <label class="rya-field" title="Visibility labels to read with, comma-separated. Empty: everything the server allows. You can only narrow what the server allows.">
+            <span>Authorizations</span>
+            <input id="rya-auths" type="text" placeholder="all allowed" spellcheck="false" autocomplete="off">
+        </label>
+        <a class="rya-link" href="sparql?query=ASK%7B%7D" title="The SPARQL 1.1 Protocol endpoint">/sparql</a>
+    </div>
+</header>
+<main id="yasgui"></main>
+<script src="vendor/yasgui/yasgui.min.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/yasgui-chart-plugin/yasgui-chart-plugin.min.js"></script>
+<script src="ui/wkt.js"></script>
+<script src="ui/rya-map.js"></script>
+<script src="ui/rya-ui.js"></script>
+</body>
+</html>

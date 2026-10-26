@@ -29,6 +29,16 @@ under the License.
     <name>rya-ng SPARQL Endpoint</name>
     <description>SPARQL 1.1 Protocol endpoint (query and update) over a Rya store on Accumulo.</description>
 
+    <properties>
+        <!-- Web UI packages from npm, with the hex SHA-512 of each tarball (see the antrun execution). -->
+        <yasgui.version>4.6.2</yasgui.version>
+        <yasgui.sha512>670e3929d3e8004d4a45a028c481dd42a789c6f6951b5a10767b70d21cb492d5f7e59bbc65c72e38bad708bc11f8653ed313332f0f0c8f0e81912655daf52e43</yasgui.sha512>
+        <leaflet.version>1.9.4</leaflet.version>
+        <leaflet.sha512>9f14b5ca7cc93a63a51e9fa22f71725aa2bcf46b4d2fc53caef94c3ac41d4d3b2cc59c025e1f0dd8d07718340e2fe611dd79d6c99031c108b15116fe140ef83c</leaflet.sha512>
+        <chart-plugin.version>1.2.0</chart-plugin.version>
+        <chart-plugin.sha512>0168ac9dc424ac975302f14616b8ec17f57a7b9b74d0ad9edc576f69ef3cd77cd5288a6206249025cc586f2cb01b44dd4f2a36cdd8550041d6c981c641fb3ba4</chart-plugin.sha512>
+    </properties>
+
     <dependencyManagement>
         <dependencies>
             <dependency>
@@ -109,6 +119,89 @@ under the License.
                         <goals>
                             <goal>repackage</goal>
                         </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <!--
+                  The web UI's third-party files (static/vendor): pinned npm packages, downloaded once
+                  into a cache under the local Maven repository, checked against their SHA-512 on every
+                  build, and unpacked into the jar. To upgrade one, change its version and its hash (the
+                  hex form of the "integrity" field npm publishes for that version).
+                -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>web-ui-vendor</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <property name="ui.cache" value="${settings.localRepository}/.cache/rya-ng-ui"/>
+                                <property name="ui.vendor" value="${project.build.outputDirectory}/static/vendor"/>
+                                <mkdir dir="${ui.cache}"/>
+
+                                <!-- YASGUI (Zazuko), MIT: the SPARQL editor and result views. -->
+                                <property name="yasgui.file" value="${ui.cache}/zazuko-yasgui-${yasgui.version}.tgz"/>
+                                <get src="https://registry.npmjs.org/@zazuko/yasgui/-/yasgui-${yasgui.version}.tgz"
+                                     dest="${yasgui.file}" skipexisting="true"/>
+                                <checksum file="${yasgui.file}" algorithm="SHA-512" property="${yasgui.sha512}"
+                                          verifyproperty="yasgui.ok"/>
+                                <fail message="SHA-512 mismatch for ${yasgui.file}">
+                                    <condition><isfalse value="${yasgui.ok}"/></condition>
+                                </fail>
+                                <untar src="${yasgui.file}" dest="${ui.vendor}/yasgui" compression="gzip">
+                                    <patternset>
+                                        <include name="package/build/yasgui.min.js"/>
+                                        <include name="package/build/yasgui.min.css"/>
+                                    </patternset>
+                                    <flattenmapper/>
+                                </untar>
+
+                                <!-- Leaflet, BSD-2-Clause: the map of the Map tab. -->
+                                <property name="leaflet.file" value="${ui.cache}/leaflet-${leaflet.version}.tgz"/>
+                                <get src="https://registry.npmjs.org/leaflet/-/leaflet-${leaflet.version}.tgz"
+                                     dest="${leaflet.file}" skipexisting="true"/>
+                                <checksum file="${leaflet.file}" algorithm="SHA-512" property="${leaflet.sha512}"
+                                          verifyproperty="leaflet.ok"/>
+                                <fail message="SHA-512 mismatch for ${leaflet.file}">
+                                    <condition><isfalse value="${leaflet.ok}"/></condition>
+                                </fail>
+                                <untar src="${leaflet.file}" dest="${ui.vendor}/leaflet" compression="gzip">
+                                    <patternset>
+                                        <include name="package/dist/leaflet.js"/>
+                                        <include name="package/dist/leaflet.css"/>
+                                        <include name="package/dist/images/*.png"/>
+                                    </patternset>
+                                    <cutdirsmapper dirs="2"/>
+                                </untar>
+                                <untar src="${leaflet.file}" dest="${ui.vendor}/leaflet" compression="gzip">
+                                    <patternset><include name="package/LICENSE"/></patternset>
+                                    <flattenmapper/>
+                                </untar>
+
+                                <!-- YASGUI chart plugin (Matdata), Apache-2.0, built on Apache ECharts: the Chart tab. -->
+                                <property name="chart.file" value="${ui.cache}/matdata-yasgui-chart-plugin-${chart-plugin.version}.tgz"/>
+                                <get src="https://registry.npmjs.org/@matdata/yasgui-chart-plugin/-/yasgui-chart-plugin-${chart-plugin.version}.tgz"
+                                     dest="${chart.file}" skipexisting="true"/>
+                                <checksum file="${chart.file}" algorithm="SHA-512" property="${chart-plugin.sha512}"
+                                          verifyproperty="chart.ok"/>
+                                <fail message="SHA-512 mismatch for ${chart.file}">
+                                    <condition><isfalse value="${chart.ok}"/></condition>
+                                </fail>
+                                <untar src="${chart.file}" dest="${ui.vendor}/yasgui-chart-plugin" compression="gzip">
+                                    <patternset>
+                                        <include name="package/dist/yasgui-chart-plugin.min.js"/>
+                                        <include name="package/dist/yasgui-chart-plugin.min.css"/>
+                                        <include name="package/LICENSE"/>
+                                    </patternset>
+                                    <flattenmapper/>
+                                </untar>
+                            </target>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

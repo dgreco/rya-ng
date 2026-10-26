@@ -65,6 +65,7 @@ under the License.
         <version.maven-deploy-plugin>3.2.0</version.maven-deploy-plugin>
         <version.maven-site-plugin>3.22.0</version.maven-site-plugin>
         <version.maven-enforcer-plugin>3.6.3</version.maven-enforcer-plugin>
+        <version.maven-antrun-plugin>3.2.0</version.maven-antrun-plugin>
 
         <accumulo.version>2.1.6</accumulo.version>
         <!-- Accumulo 2.1.6 ships Hadoop 3.3.x, which fails on JDK 23+ ("getSubject is not supported").
@@ -289,6 +290,11 @@ under the License.
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-enforcer-plugin</artifactId>
                     <version>${version.maven-enforcer-plugin}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-antrun-plugin</artifactId>
+                    <version>${version.maven-antrun-plugin}</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>

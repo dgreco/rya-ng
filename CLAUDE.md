@@ -83,6 +83,10 @@ Data flows `rya.api` → `rya.accumulo` → `rya.sail` → `rya.sparql`.
 
 - `SparqlController` implements the SPARQL 1.1 Protocol at `/sparql`, with content negotiation in `ContentNegotiation` and errors mapped in `SparqlExceptionHandler`.
 - Settings are `RyaProperties` (`rya.*` in `application.yaml`).
+- **Query page** (`src/main/resources/static`): `index.html` plus `ui/` (our code: `rya-ui.js` sets up YASGUI on `sparql`, `rya-map.js` is the Map result tab, `wkt.js` turns WKT into GeoJSON).
+  - Third-party files go to `static/vendor` at build time. The `maven-antrun-plugin` execution in `rya.sparql/pom.xml` downloads pinned npm tarballs into `~/.m2/repository/.cache/rya-ng-ui` and checks their SHA-512.
+  - To upgrade one, change its `*.version` and `*.sha512` properties (the hex of npm's `integrity`), and regenerate `static/vendor/THIRD-PARTY-NOTICES.txt`.
+  - `SparqlUiIT` checks that every asset is served. JavaScript isn't tested in the build; check UI changes in a browser.
 - `DevServer`, under test sources, runs the endpoint on a throwaway MAC (`mvn -pl rya.sparql spring-boot:test-run -Dspring-boot.run.main-class=io.github.dgreco.rya.sparql.DevServer`).
 
 ## Gotchas

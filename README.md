@@ -95,6 +95,24 @@ mvn -pl rya.sparql -am install -DskipTests
 mvn -pl rya.sparql spring-boot:test-run -Dspring-boot.run.main-class=io.github.dgreco.rya.sparql.DevServer
 ```
 
+### Query page
+
+Open the server's root URL (for example `http://localhost:8080/`) for a query page built on [YASGUI](https://github.com/zazuko/Yasgui).
+
+**Writing queries:**
+- Syntax highlighting, autocompletion and several query tabs, which the browser remembers.
+- An **Examples** menu with queries to load sample data (Rome landmarks), browse it, and run text and geo searches.
+- Every new tab starts with the `rdf:`, `rdfs:`, `xsd:`, `text:`, `geo:`, `geof:` and `uom:` prefixes.
+
+**Result tabs:**
+- **Table** and **Response**, as in YASGUI.
+- **Map** draws every `geo:wktLiteral` in the results on an OpenStreetMap background. The background tiles need internet access; the rest of the page doesn't.
+- **Chart** shows bar, line and pie charts of numeric results.
+
+**Authorizations:** the field in the header is sent as `auths=`, so a query reads with fewer labels than the server allows.
+
+The page's JavaScript and CSS are packaged into the jar at build time. Their licenses are listed at `/vendor/THIRD-PARTY-NOTICES.txt`.
+
 ### Using it
 
 The endpoint is `/sparql` and follows the SPARQL 1.1 Protocol.

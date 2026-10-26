@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- rya-ng: a small RDF graph (three linked nodes). Copyright 2026 David Greco, Apache-2.0. -->
+  <rect width="32" height="32" rx="7" fill="#0f172a"/>
+  <path d="M9 22 L16 9 L23 22 Z" fill="none" stroke="#22d3ee" stroke-width="2.2" stroke-linejoin="round"/>
+  <circle cx="16" cy="9" r="3.4" fill="#22d3ee"/>
+  <circle cx="9" cy="22" r="3.4" fill="#e2e8f0"/>
+  <circle cx="23" cy="22" r="3.4" fill="#e2e8f0"/>
+</svg>
