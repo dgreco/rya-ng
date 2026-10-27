@@ -323,14 +323,16 @@ public class AccumuloRyaDAOIT extends AccumuloITBase {
         RyaIRI loadPerc = new RyaIRI(litdupsNS + "loadPerc");
         long current = System.currentTimeMillis();
         dao.add(new RyaStatement(cpu, loadPerc, new RyaIRI(litdupsNS + "uri1"), null, null, null, null, current));
-        dao.add(new RyaStatement(cpu, loadPerc, new RyaIRI(litdupsNS + "uri2"), null, null, null, null, current - 1010l));
-        dao.add(new RyaStatement(cpu, loadPerc, new RyaIRI(litdupsNS + "uri3"), null, null, null, null, current - 2010l));
-        dao.add(new RyaStatement(cpu, loadPerc, new RyaIRI(litdupsNS + "uri4"), null, null, null, null, current - 3010l));
-        dao.add(new RyaStatement(cpu, loadPerc, new RyaIRI(litdupsNS + "uri5"), null, null, null, null, current - 4010l));
+        dao.add(new RyaStatement(cpu, loadPerc, new RyaIRI(litdupsNS + "uri2"), null, null, null, null, current - 10_100L));
+        dao.add(new RyaStatement(cpu, loadPerc, new RyaIRI(litdupsNS + "uri3"), null, null, null, null, current - 20_100L));
+        dao.add(new RyaStatement(cpu, loadPerc, new RyaIRI(litdupsNS + "uri4"), null, null, null, null, current - 30_100L));
+        dao.add(new RyaStatement(cpu, loadPerc, new RyaIRI(litdupsNS + "uri5"), null, null, null, null, current - 40_100L));
 
         AccumuloRyaQueryEngine queryEngine = dao.getQueryEngine();
         AccumuloRdfConfiguration queryConf = conf.clone();
-        queryConf.setTtl(3000l);
+        // Without a start time the window is measured from when the query runs, so the
+        // timestamps are far apart: the writes above may take seconds on a busy machine.
+        queryConf.setTtl(30_000L);
 
         CloseableIteration<RyaStatement> iter = queryEngine.query(new RyaStatement(cpu, loadPerc, null), queryConf);
         int count = 0;
@@ -341,7 +343,7 @@ public class AccumuloRyaDAOIT extends AccumuloITBase {
         iter.close();
         assertEquals(3, count);
 
-        queryConf.setStartTime(current - 3000l);
+        queryConf.setStartTime(current - 30_000L);
         iter = queryEngine.query(new RyaStatement(cpu, loadPerc, null), queryConf);
         count = 0;
         while (iter.hasNext()) {
