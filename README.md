@@ -37,6 +37,8 @@ It supports:
 
 rya-ng is derived from [Apache Rya](https://github.com/apache/rya). It keeps Rya's storage model and query-time inference, rebuilt for Accumulo 2.1, RDF4J 6 and Java 25, with everything else removed. It is an independent project, not part of the Apache Software Foundation. See `NOTICE`.
 
+[ARCH.md](ARCH.md) explains how rya-ng works inside, with diagrams: the storage layout, the write and query paths, statistics, batched joins, inference and the search indexes.
+
 ## Requirements
 
 - **Java 25.** RDF4J 6 requires it.
