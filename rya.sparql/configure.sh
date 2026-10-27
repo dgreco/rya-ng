@@ -297,6 +297,7 @@ ask server_port "HTTP port" "8080" port_number
 ask server_address "Listen address (empty: every interface; 127.0.0.1: this machine only)" "" host_address
 ask query_timeout "Maximum query or update time" "120s" duration
 ask max_query_timeout "Longest time a request may ask for with timeout= (0s: no limit)" "30m" duration
+yesno allow_trace "Let requests be traced (shows their Accumulo scans and writes)" y
 
 # ---- the launch script ----------------------------------------------------------------------------------
 
@@ -325,7 +326,7 @@ args+=("--rya.inference=$inference" "--rya.stats=$stats")
 [ -z "$auths" ] || args+=("--rya.sparql.authorizations=$auths")
 [ -z "$default_visibility" ] || args+=("--rya.sparql.default-visibility=$default_visibility")
 args+=("--rya.sparql.allow-request-visibility=$request_visibility" "--rya.sparql.query-timeout=$query_timeout")
-args+=("--rya.sparql.max-query-timeout=$max_query_timeout")
+args+=("--rya.sparql.max-query-timeout=$max_query_timeout" "--rya.sparql.allow-trace=$allow_trace")
 args+=("--server.port=$server_port")
 [ -z "$server_address" ] || args+=("--server.address=$server_address")
 

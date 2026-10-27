@@ -78,6 +78,7 @@ class SparqlUiIT {
                 Map.entry("/vendor/yasgui-chart-plugin/yasgui-chart-plugin.min.css", "text/css"),
                 Map.entry("/ui/wkt.js", "javascript"),
                 Map.entry("/ui/rya-map.js", "javascript"),
+                Map.entry("/ui/rya-trace.js", "javascript"),
                 Map.entry("/ui/rya-ui.js", "javascript"),
                 Map.entry("/ui/rya-ui.css", "text/css"),
                 Map.entry("/ui/favicon.svg", "image/svg+xml"),

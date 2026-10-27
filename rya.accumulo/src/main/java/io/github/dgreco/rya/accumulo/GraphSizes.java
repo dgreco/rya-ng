@@ -43,6 +43,7 @@ import org.apache.accumulo.core.data.Value;
 import org.apache.accumulo.core.security.Authorizations;
 import org.apache.hadoop.io.Text;
 
+import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
 import io.github.dgreco.rya.api.layout.TableLayoutStrategy;
 import io.github.dgreco.rya.api.persist.RyaDAOException;
 
@@ -98,11 +99,17 @@ public final class GraphSizes {
         final Authorizations auths = conf.getAuthorizations();
         final Map<String, Long> sizes = new TreeMap<>();
         try {
-            final Set<String> graphs = graphs(tables.getGraphs(), auths);
+            final Set<String> graphs;
+            try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "graph sizes: graphs with a marker")) {
+                graphs = graphs(tables.getGraphs(), auths);
+            }
             if (graphs.isEmpty()) {
                 return sizes;
             }
-            final List<String> preds = predicates(tables.getPo(), auths);
+            final List<String> preds;
+            try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "graph sizes: list the predicates (one seek each, unless cached)")) {
+                preds = predicates(tables.getPo(), auths);
+            }
             if (preds.isEmpty()) {
                 return sizes;
             }
@@ -110,7 +117,8 @@ public final class GraphSizes {
             for (final String p : preds) {
                 rows.add(Range.exact(new Text(p.getBytes(StandardCharsets.UTF_8))));
             }
-            try (BatchScanner scanner = client.createBatchScanner(tables.getEval(), auths, THREADS)) {
+            try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "graph sizes: predicate counters per graph");
+                    BatchScanner scanner = client.createBatchScanner(tables.getEval(), auths, THREADS)) {
                 scanner.setRanges(rows);
                 scanner.fetchColumnFamily(PRED_CF_TXT);
                 for (final Map.Entry<Key, Value> e : scanner) {

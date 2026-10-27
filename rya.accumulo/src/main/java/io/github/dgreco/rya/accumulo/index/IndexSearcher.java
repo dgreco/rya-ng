@@ -42,6 +42,7 @@ import org.apache.hadoop.io.Text;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.common.iteration.LookAheadIteration;
 
+import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
 import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
 import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
 import io.github.dgreco.rya.accumulo.index.geo.GeoRegion;
@@ -156,7 +157,10 @@ public final class IndexSearcher {
                         k -> new RyaStatement(new RyaIRI(doc.subject()), new RyaIRI(doc.predicate()), null));
             }
             final List<RyaStatement> found = new ArrayList<>();
-            try (CloseableIteration<RyaStatement> cells = dao.getQueryEngine().batchQuery(patterns.values(), conf)) {
+            final int count = wanted.size();
+            final AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "index hits: read " + count + " candidate"
+                    + (count == 1 ? "" : "s") + " from spo");
+            try (why; CloseableIteration<RyaStatement> cells = dao.getQueryEngine().batchQuery(patterns.values(), conf)) {
                 while (cells.hasNext()) {
                     final RyaStatement st = cells.next();
                     if (wanted.contains(IndexKeys.docKey(st))) {
@@ -180,7 +184,11 @@ public final class IndexSearcher {
             if (ranges.isEmpty()) {
                 return Collections.emptyIterator();
             }
-            final BatchScanner scanner = batchScanner();
+            final BatchScanner scanner;
+            try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "geo index: " + region.prefixes().size()
+                    + " cells covering the region, " + region.exactCells().size() + " coarser cells")) {
+                scanner = batchScanner();
+            }
             scanner.setRanges(Range.mergeOverlapping(ranges));
             return distinct(docKeys(scanner.iterator(), true));
         }
@@ -301,7 +309,9 @@ public final class IndexSearcher {
                 ranges.add(IndexKeys.entryRange(word, d));
             }
             final Set<DocKey> present = new HashSet<>();
-            try (BatchScanner scanner = client.createBatchScanner(table, auths, THREADS)) {
+            final AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "text index: check " + docs.size() + " candidate"
+                    + (docs.size() == 1 ? "" : "s") + " for the word '" + word + "'");
+            try (why; BatchScanner scanner = client.createBatchScanner(table, auths, THREADS)) {
                 scanner.setRanges(ranges);
                 for (final Map.Entry<Key, Value> e : scanner) {
                     present.add(IndexKeys.docKey(e.getKey()));
@@ -320,15 +330,18 @@ public final class IndexSearcher {
         private final class Leaf {
             private final Range range;
             private final boolean prefix;
+            private final String label;
             private Set<DocKey> entries;
             private boolean probed;
 
             Leaf(final TextCandidates node) {
                 if (node instanceof TextCandidates.Word w) {
                     this.range = IndexKeys.termRange(w.word(), predicate);
+                    this.label = "the word '" + w.word() + "'";
                     this.prefix = false;
                 } else {
                     this.range = IndexKeys.prefixRange(((TextCandidates.Start) node).prefix());
+                    this.label = "words starting with '" + ((TextCandidates.Start) node).prefix() + "'";
                     this.prefix = true;
                 }
             }
@@ -352,7 +365,9 @@ public final class IndexSearcher {
                 }
                 probed = true;
                 final Set<DocKey> seen = new LinkedHashSet<>();
-                try (Scanner scanner = client.createScanner(table, auths)) {
+                try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "text index: size up " + label
+                        + " (read at most " + (PROBE_LIMIT + 1) + " entries)");
+                        Scanner scanner = client.createScanner(table, auths)) {
                     scanner.setRange(range);
                     restrictGraphs(scanner);
                     final Iterator<DocKey> it = docKeys(scanner.iterator(), prefix);
@@ -368,7 +383,10 @@ public final class IndexSearcher {
             }
 
             private Iterator<DocKey> scan() {
-                final Scanner scanner = scanner();
+                final Scanner scanner;
+                try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "text index: stream " + label)) {
+                    scanner = scanner();
+                }
                 scanner.setRange(range);
                 final Iterator<DocKey> keys = docKeys(scanner.iterator(), prefix);
                 // Entries of one word that differ only in visibility are adjacent; a prefix spans words.

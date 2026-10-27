@@ -44,6 +44,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import org.apache.commons.lang3.mutable.MutableObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import io.github.dgreco.rya.api.persist.RyaDAO;
 import io.github.dgreco.rya.api.persist.RyaDAOException;
@@ -1138,7 +1139,10 @@ public class InferenceEngine {
         if (transitivePropertySet.contains(prop)) {
             final Set<Statement> sts = new HashSet<>();
             final boolean goUp = subj == null;
-            chainTransitiveProperty(subj, prop, obj, (goUp) ? (obj) : (subj), sts, goUp, contxts);
+            try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "inference: transitive closure of <" + prop + "> "
+                    + (goUp ? "up to " + obj : "from " + subj) + ", one lookup per hop")) {
+                chainTransitiveProperty(subj, prop, obj, (goUp) ? (obj) : (subj), sts, goUp, contxts);
+            }
             return sts;
         } else {
             return null;
@@ -1151,7 +1155,9 @@ public class InferenceEngine {
     public Set<Resource> findSameAs(final Resource value, final Resource... contxts) throws InferenceEngineException{
         final Set<Resource> sameAs = new HashSet<>();
         sameAs.add(value);
-        findSameAsChaining(value, sameAs, contxts);
+        try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "inference: resources owl:sameAs " + value)) {
+            findSameAsChaining(value, sameAs, contxts);
+        }
         return sameAs;
     }
 

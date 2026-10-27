@@ -78,12 +78,15 @@ public record RyaProperties(
      * @param queryTimeout maximum query or update time, unless the request sets its own with the
      *        {@code timeout} parameter.
      * @param maxQueryTimeout the longest a request may ask for with {@code timeout}; zero for no limit.
+     * @param allowTrace whether a request may be traced ({@code trace} parameter and the
+     *        {@code /sparql/trace} stream), showing the Accumulo operations it causes.
      */
     public record Sparql(
             @DefaultValue List<String> authorizations,
             @DefaultValue("") String defaultVisibility,
             @DefaultValue("false") boolean allowRequestVisibility,
             @DefaultValue("120s") Duration queryTimeout,
-            @DefaultValue("30m") Duration maxQueryTimeout) {
+            @DefaultValue("30m") Duration maxQueryTimeout,
+            @DefaultValue("true") boolean allowTrace) {
     }
 }

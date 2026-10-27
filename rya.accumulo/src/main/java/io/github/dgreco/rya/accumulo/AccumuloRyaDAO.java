@@ -31,6 +31,7 @@ import static io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.VERSION;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -43,6 +44,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 import org.apache.accumulo.core.client.AccumuloClient;
 import org.apache.accumulo.core.client.AccumuloException;
@@ -64,6 +66,8 @@ import org.apache.accumulo.core.iterators.IteratorUtil.IteratorScope;
 import org.apache.accumulo.core.security.Authorizations;
 import org.apache.accumulo.core.security.ColumnVisibility;
 import org.apache.hadoop.io.Text;
+import io.github.dgreco.rya.accumulo.trace.TraceText;
+import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
 import io.github.dgreco.rya.accumulo.index.IndexCatalog;
 import io.github.dgreco.rya.accumulo.index.IndexManager;
 import io.github.dgreco.rya.accumulo.query.AccumuloRyaQueryEngine;
@@ -342,7 +346,9 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
         try {
             // Find the exact stored cells (visibility and timestamp included) before deleting.
             final List<RyaStatement> matches = new ArrayList<>();
-            try (CloseableIteration<RyaStatement> found = queryEngine.query(pattern, aconf)) {
+            final AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "delete: find the stored matches of "
+                    + TraceText.pattern(pattern));
+            try (why; CloseableIteration<RyaStatement> found = queryEngine.query(pattern, aconf)) {
                 while (found.hasNext()) {
                     final RyaStatement st = found.next();
                     if (filter.test(st)) {
@@ -379,41 +385,46 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
         try {
             mtbw.flush();
             final boolean all = graphs == null || graphs.length == 0;
-            // Index entries use the graph as column family too, so the same deletes clear them.
-            final List<String> statementTables = new ArrayList<>(List.of(tables.getSpo(), tables.getPo(), tables.getOsp()));
-            statementTables.addAll(indexes.activeTables());
-            for (final String table : statementTables) {
-                try (BatchDeleter deleter = client.createBatchDeleter(table, auths, NUM_THREADS, batchWriterConfig)) {
-                    deleter.setRanges(Collections.singleton(new Range()));
-                    if (!all) {
-                        for (final RyaIRI graph : graphs) {
-                            deleter.fetchColumnFamily(graph == null ? EMPTY_TEXT : new Text(graph.getData()));
+            final AccumuloTrace.Reason why = AccumuloTrace.reason(() -> all ? "drop every graph" : "drop graph"
+                    + (graphs.length == 1 ? " " : "s ") + Arrays.stream(graphs)
+                            .map(g -> g == null ? "(default)" : "<" + g.getData() + ">").collect(Collectors.joining(", ")));
+            try (why) {
+                // Index entries use the graph as column family too, so the same deletes clear them.
+                final List<String> statementTables = new ArrayList<>(List.of(tables.getSpo(), tables.getPo(), tables.getOsp()));
+                statementTables.addAll(indexes.activeTables());
+                for (final String table : statementTables) {
+                    try (BatchDeleter deleter = client.createBatchDeleter(table, auths, NUM_THREADS, batchWriterConfig)) {
+                        deleter.setRanges(Collections.singleton(new Range()));
+                        if (!all) {
+                            for (final RyaIRI graph : graphs) {
+                                deleter.fetchColumnFamily(graph == null ? EMPTY_TEXT : new Text(graph.getData()));
+                            }
+                        }
+                        deleter.delete();
+                    }
+                }
+                final List<Range> markerRows = new ArrayList<>();
+                if (all) {
+                    markerRows.add(new Range());
+                } else {
+                    for (final RyaIRI graph : graphs) {
+                        if (graph != null) {
+                            markerRows.add(new Range(new Text(graph.getData())));
                         }
                     }
-                    deleter.delete();
                 }
-            }
-            final List<Range> markerRows = new ArrayList<>();
-            if (all) {
-                markerRows.add(new Range());
-            } else {
-                for (final RyaIRI graph : graphs) {
-                    if (graph != null) {
-                        markerRows.add(new Range(new Text(graph.getData())));
+                if (!markerRows.isEmpty()) {
+                    try (BatchDeleter deleter = client.createBatchDeleter(tables.getGraphs(), auths, NUM_THREADS, batchWriterConfig)) {
+                        deleter.setRanges(markerRows);
+                        deleter.delete();
                     }
                 }
-            }
-            if (!markerRows.isEmpty()) {
-                try (BatchDeleter deleter = client.createBatchDeleter(tables.getGraphs(), auths, NUM_THREADS, batchWriterConfig)) {
-                    deleter.setRanges(markerRows);
-                    deleter.delete();
-                }
-            }
-            if (all) {
-                // Everything visible is gone, so are the counters for it.
-                try (BatchDeleter deleter = client.createBatchDeleter(tables.getEval(), auths, NUM_THREADS, batchWriterConfig)) {
-                    deleter.setRanges(Collections.singleton(new Range()));
-                    deleter.delete();
+                if (all) {
+                    // Everything visible is gone, so are the counters for it.
+                    try (BatchDeleter deleter = client.createBatchDeleter(tables.getEval(), auths, NUM_THREADS, batchWriterConfig)) {
+                        deleter.setRanges(Collections.singleton(new Range()));
+                        deleter.delete();
+                    }
                 }
             }
         } catch (final Exception e) {
@@ -426,34 +437,37 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
         final Authorizations auths = (aconf != null ? aconf : conf).getAuthorizations();
         try {
             flush();
-            // Graph IRI -> marker keys seen for it (one per visibility label).
-            final Map<String, List<Key>> markers = new LinkedHashMap<>();
-            try (Scanner scanner = client.createScanner(tables.getGraphs(), auths)) {
-                scanner.fetchColumnFamily(EvalStatsMutations.GRAPH_CF_TXT);
-                for (final Map.Entry<Key, Value> e : scanner) {
-                    markers.computeIfAbsent(e.getKey().getRow().toString(), k -> new ArrayList<>()).add(e.getKey());
-                }
-            }
-            final List<RyaIRI> graphs = new ArrayList<>();
-            boolean removedStale = false;
-            for (final Map.Entry<String, List<Key>> graph : markers.entrySet()) {
-                if (graphHasData(graph.getKey(), auths)) {
-                    graphs.add(new RyaIRI(graph.getKey()));
-                } else {
-                    // Nothing visible is left in this graph: forget the markers we can see.
-                    for (final Key key : graph.getValue()) {
-                        final Mutation del = new Mutation(key.getRow());
-                        del.putDelete(key.getColumnFamily(), key.getColumnQualifier(),
-                                new ColumnVisibility(key.getColumnVisibility()), key.getTimestamp());
-                        bwGraphs.addMutation(del);
+            final AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "list the named graphs");
+            try (why) {
+                // Graph IRI -> marker keys seen for it (one per visibility label).
+                final Map<String, List<Key>> markers = new LinkedHashMap<>();
+                try (Scanner scanner = client.createScanner(tables.getGraphs(), auths)) {
+                    scanner.fetchColumnFamily(EvalStatsMutations.GRAPH_CF_TXT);
+                    for (final Map.Entry<Key, Value> e : scanner) {
+                        markers.computeIfAbsent(e.getKey().getRow().toString(), k -> new ArrayList<>()).add(e.getKey());
                     }
-                    removedStale = true;
                 }
+                final List<RyaIRI> graphs = new ArrayList<>();
+                boolean removedStale = false;
+                for (final Map.Entry<String, List<Key>> graph : markers.entrySet()) {
+                    if (graphHasData(graph.getKey(), auths)) {
+                        graphs.add(new RyaIRI(graph.getKey()));
+                    } else {
+                        // Nothing visible is left in this graph: forget the markers we can see.
+                        for (final Key key : graph.getValue()) {
+                            final Mutation del = new Mutation(key.getRow());
+                            del.putDelete(key.getColumnFamily(), key.getColumnQualifier(),
+                                    new ColumnVisibility(key.getColumnVisibility()), key.getTimestamp());
+                            bwGraphs.addMutation(del);
+                        }
+                        removedStale = true;
+                    }
+                }
+                if (removedStale) {
+                    mtbw.flush();
+                }
+                return new CloseableIteratorIteration<>(graphs.iterator());
             }
-            if (removedStale) {
-                mtbw.flush();
-            }
-            return new CloseableIteratorIteration<>(graphs.iterator());
         } catch (final Exception e) {
             throw new RyaDAOException(e);
         }
@@ -472,7 +486,8 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
         final Authorizations auths = (aconf != null ? aconf : conf).getAuthorizations();
         try {
             flush();
-            try (BatchScanner scanner = client.createBatchScanner(tables.getSpo(), auths, NUM_THREADS)) {
+            try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "count the statements (a full scan of spo)");
+                    BatchScanner scanner = client.createBatchScanner(tables.getSpo(), auths, NUM_THREADS)) {
                 scanner.setRanges(Collections.singleton(new Range()));
                 for (final RyaIRI context : contexts) {
                     scanner.fetchColumnFamily(context == null ? EMPTY_TEXT : new Text(context.getData()));
@@ -504,7 +519,8 @@ public class AccumuloRyaDAO implements RyaDAO<AccumuloRdfConfiguration>, RyaName
 
     @Override
     public String getNamespace(final String pfx) {
-        try (Scanner scanner = client.createScanner(tables.getNs(), NO_AUTHORIZATIONS)) {
+        try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "namespace of the prefix '" + pfx + "'");
+                Scanner scanner = client.createScanner(tables.getNs(), NO_AUTHORIZATIONS)) {
             scanner.fetchColumn(INFO_NAMESPACE_TXT, EMPTY_TEXT);
             scanner.setRange(new Range(new Text(pfx)));
             final Iterator<Map.Entry<Key, Value>> it = scanner.iterator();

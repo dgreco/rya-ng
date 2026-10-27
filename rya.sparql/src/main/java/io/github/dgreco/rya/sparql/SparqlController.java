@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.accumulo.core.security.ColumnVisibility;
+import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStoreConnection;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.ValueFactory;
@@ -33,6 +34,7 @@ import org.eclipse.rdf4j.query.BooleanQuery;
 import org.eclipse.rdf4j.query.GraphQuery;
 import org.eclipse.rdf4j.query.Operation;
 import org.eclipse.rdf4j.query.Query;
+import org.eclipse.rdf4j.query.QueryInterruptedException;
 import org.eclipse.rdf4j.query.QueryLanguage;
 import org.eclipse.rdf4j.query.TupleQuery;
 import org.eclipse.rdf4j.query.Update;
@@ -71,7 +73,9 @@ import jakarta.servlet.http.HttpServletResponse;
  *       {@code using-graph-uri} / {@code using-named-graph-uri} for updates.</li>
  *   <li>Rya extensions: {@code auths} (comma-separated) narrows the configured read
  *       authorizations; {@code visibility} labels inserted statements when enabled;
- *       {@code timeout} (seconds) replaces the default time limit, up to the configured maximum.</li>
+ *       {@code timeout} (seconds) replaces the default time limit, up to the configured maximum;
+ *       {@code trace} streams the request's Accumulo operations to {@code /sparql/trace/<trace>}
+ *       (see {@link TraceController}).</li>
  * </ul>
  */
 @RestController
@@ -93,10 +97,12 @@ public class SparqlController {
 
     private final SailRepository repository;
     private final RyaProperties.Sparql settings;
+    private final TraceHub traces;
 
-    public SparqlController(final SailRepository repository, final RyaProperties props) {
+    public SparqlController(final SailRepository repository, final RyaProperties props, final TraceHub traces) {
         this.repository = repository;
         this.settings = props.sparql();
+        this.traces = traces;
     }
 
     @GetMapping
@@ -135,12 +141,17 @@ public class SparqlController {
 
     @PostMapping(consumes = SPARQL_UPDATE)
     public ResponseEntity<Void> postUpdate(@RequestBody final String update,
-            @RequestParam final MultiValueMap<String, String> params) {
+            @RequestParam final MultiValueMap<String, String> params) throws IOException {
         update(update, params);
         return ResponseEntity.noContent().build();
     }
 
     private void query(final String queryString, final MultiValueMap<String, String> params, final String accept,
+            final HttpServletResponse response) throws IOException {
+        traced(params, "query", queryString, () -> runQuery(queryString, params, accept, response));
+    }
+
+    private void runQuery(final String queryString, final MultiValueMap<String, String> params, final String accept,
             final HttpServletResponse response) throws IOException {
         try (SailRepositoryConnection conn = repository.getConnection()) {
             applySecurity(conn, params, false);
@@ -175,7 +186,11 @@ public class SparqlController {
         }
     }
 
-    private void update(final String updateString, final MultiValueMap<String, String> params) {
+    private void update(final String updateString, final MultiValueMap<String, String> params) throws IOException {
+        traced(params, "update", updateString, () -> runUpdate(updateString, params));
+    }
+
+    private void runUpdate(final String updateString, final MultiValueMap<String, String> params) {
         try (SailRepositoryConnection conn = repository.getConnection()) {
             applySecurity(conn, params, true);
             final Update update = conn.prepareUpdate(QueryLanguage.SPARQL, updateString);
@@ -185,6 +200,45 @@ public class SparqlController {
                 update.setDataset(dataset);
             }
             update.execute();
+        }
+    }
+
+    private interface Work {
+        void run() throws IOException;
+    }
+
+    /**
+     * Runs the work, traced into the request's {@code trace} channel when it names one. The trace
+     * always ends, with status ok, error or timeout, and never outlives the request's thread.
+     */
+    private void traced(final MultiValueMap<String, String> params, final String kind, final String text, final Work work)
+            throws IOException {
+        final String id = params.getFirst("trace");
+        if (id == null) {
+            work.run();
+            return;
+        }
+        if (!settings.allowTrace()) {
+            throw new SparqlRequestException(HttpStatus.FORBIDDEN, "Tracing is turned off (rya.sparql.allow-trace)");
+        }
+        final TraceChannel channel = traces.forRequest(id);
+        String status = "error";
+        try {
+            try (AccumuloTrace.Scope scope = AccumuloTrace.start(event -> channel.publish(event.type(), event))) {
+                AccumuloTrace.note(kind, () -> text);
+                work.run();
+                status = "ok";
+            }
+        } catch (final RuntimeException | IOException e) {
+            for (Throwable t = e; t != null; t = t.getCause()) {
+                if (t instanceof QueryInterruptedException) {
+                    status = "timeout";
+                    break;
+                }
+            }
+            throw e;
+        } finally {
+            channel.finish(status);
         }
     }
 
@@ -223,6 +277,11 @@ public class SparqlController {
             }
             rya.getConf().setCv(visibility);
         }
+        AccumuloTrace.note("settings", () -> {
+            final String[] readWith = rya.getConf().getAuths();
+            return "authorizations " + (readWith == null || readWith.length == 0 ? "none" : String.join(",", readWith))
+                    + (write && rya.getConf().getCv() != null ? ", writes labelled " + rya.getConf().getCv() : "");
+        });
     }
 
     /**

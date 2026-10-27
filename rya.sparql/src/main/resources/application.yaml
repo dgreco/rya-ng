@@ -56,3 +56,5 @@ rya:
     query-timeout: 120s
     # Longest limit a request may ask for with timeout= (which it gives in seconds). 0: no limit.
     max-query-timeout: 30m
+    # Let requests be traced (trace= and the /sparql/trace stream): their plan and every Accumulo scan and write.
+    allow-trace: true

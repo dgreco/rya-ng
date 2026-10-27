@@ -1355,6 +1355,7 @@ flowchart TD
     dsu --> exec["execute, then 204 No Content"]
 ```
 
+- **Tracing:** `trace=<id>` streams the request's Accumulo operations to `/sparql/trace/<id>` ([section 17.5](#175-tracing-a-query)).
 - **Formats:** `ContentNegotiation` picks the format from `Accept`, by quality and then by the client's order. The first format of each list is the default. If nothing supported is acceptable, the answer is `406`.
 - **Time limit:** every query and update gets RDF4J's maximum execution time:
   - by default `rya.sparql.query-timeout` (120 s);
@@ -1372,7 +1373,8 @@ flowchart TD
 ### 17.3 The query page
 
 `src/main/resources/static/index.html` and `ui/` hold the browser page:
-- **`rya-ui.js`** sets up YASGUI on `/sparql`, with the Examples menu and two header fields the browser remembers: **Authorizations** (sent as `auths=`) and **Timeout** (sent as `timeout=`).
+- **`rya-ui.js`** sets up YASGUI on `/sparql`, with the Examples menu and header fields the browser remembers: **Authorizations** (sent as `auths=`), **Timeout** (sent as `timeout=`) and the **Trace** switch.
+- **`rya-trace.js`** is the trace panel under the results ([section 17.5](#175-tracing-a-query)).
 - **`rya-map.js`** draws `geo:wktLiteral` results on a map.
 - **`wkt.js`** turns WKT into GeoJSON.
 
@@ -1382,6 +1384,48 @@ The third-party files (YASGUI, the map library, …) are not in the repository. 
 
 - **`rya.sparql/configure.sh`** (bash 3.2 compatible) asks for the settings and writes a launch script that passes them as `--rya.*` arguments. Only the password travels in the environment (`RYA_ACCUMULO_PASSWORD`), and the script never stores it.
 - **`DevServer`** (test sources) runs the endpoint on a throwaway MiniAccumuloCluster.
+
+### 17.5 Tracing a query
+
+A trace answers *what does this query do in Accumulo?* while it runs. It covers the plan RDF4J builds, every scan with its ranges, columns, iterators, entries and time, every flush of writes, and the reason rya-ng had for each.
+
+**Recording (`rya.accumulo`, package `trace`).**
+- **One wrapper sees everything.** `AccumuloTrace.wrap(client)` returns a dynamic proxy of the `AccumuloClient`; `RyaAccumuloSailFactory` wraps the client it is given.
+  - While a trace runs on the current thread, the scanners, batch scanners and batch deleters it creates are proxies too. They record `setRange(s)`, `fetchColumn…` and `addScanIterator`, then count the entries and the time spent inside `hasNext()` and `next()`.
+  - Writers are always wrapped, because the DAO creates them once at startup. They count each mutation for the trace of the thread that adds it, and report a `flush` event when the writes are sent.
+  - Without a trace, everything is passed straight through.
+- **Reasons come from the call sites.** Code that is about to scan opens `AccumuloTrace.reason(() -> "…")` around creating the scanner. Reasons nest, so a scan can read `batched join: 5 right-hand lookups fetched together › batched lookup of 5 patterns on SPO`. Reasons are recorded by: the query engine (lookups, batched lookups), the statistics reader, graph sizes, the index searcher, the DAO (deletes, graph drops, graph list, size, namespaces), the batched join, inference (transitive closures, `owl:sameAs`), and query planning.
+- **Plans.** `RdfCloudTripleStoreConnection.evaluateInternal` reports the tree as parsed and as optimized. When traced, it prepares the optimized tree exactly as `evaluate` would and then reports it, so the plan shows which joins became `RyaBatchedJoin`. Tracing doesn't turn on RDF4J's own result-size or time tracking, which would turn batched joins off.
+- **One trace per thread.** A trace lives in a `ThreadLocal` from `AccumuloTrace.start(listener)` until its `Scope` is closed, which reports the `summary`. Scans capture their trace when they are created, so closing one from another thread still reports to the right trace.
+- **Caps.** Up to 1,000 scans and flushes are reported one by one, with at most 10 ranges each. Past that, only the totals grow, and the summary says how many were left out.
+
+**Streaming (`rya.sparql`).**
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (Trace on)
+    participant T as TraceController
+    participant H as TraceHub / TraceChannel
+    participant S as SparqlController
+    participant R as Sail and DAO (wrapped client)
+    B->>T: GET /sparql/trace/ID (EventSource)
+    T->>H: subscribe(ID, SseEmitter)
+    B->>S: query or update with trace=ID
+    S->>H: forRequest(ID): 409 if already used
+    S->>R: AccumuloTrace.start(channel) and run the request
+    R-->>H: note, plan, scan, scan-end, flush events
+    H-->>B: the same events, as Server-Sent Events
+    S->>H: summary, then end (ok, error or timeout)
+    H-->>B: end, then the stream closes
+```
+
+- **Pairing:** the page chooses a random id and opens the stream before sending the request. `TraceHub` pairs the two, whichever arrives first. Events that arrive before the stream connects are kept (up to 5,000).
+- **Expiry:** a channel whose other half never shows up is dropped after 2 minutes.
+- **The reader never slows the query:** a failed or slow send only stops the stream, never the query.
+- **Clean-up:** the request always closes the trace in a `finally`, so a pooled server thread is never left traced. Otherwise it could report another user's next request.
+- **Turning it off:** `rya.sparql.allow-trace=false` refuses both sides with `403`.
+
+**The panel (`ui/rya-trace.js`)** lists the notes (the query and its authorizations), the two plans, one row per scan or flush, and a per-table summary. It writes everything as text, and shows the separator bytes as small badges. It keeps one stream at a time: starting a query, or receiving `end`, closes the previous one.
 
 ---
 
@@ -1521,6 +1565,7 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 | **Scanner** | Accumulo reader for one range, with results in sorted order. |
 | **Statement pattern** | A triple with variables. A leaf of the query tree. |
 | **Tablet / tablet server** | A row range of a table, and the server that holds it. |
+| **Trace** | A record of what one request does in Accumulo: its plan, scans and writes, each with a reason ([section 17.5](#175-tracing-a-query)). |
 | **TripleSource** | The RDF4J interface the evaluation reads statements through: `getStatements(s, p, o, contexts)`. |
 | **TupleExpr** | A node of RDF4J's query algebra tree. |
 | **Visibility** | A label expression on an Accumulo cell, such as `A&(B\|C)`. rya-ng gives every cell of a statement the statement's label. |

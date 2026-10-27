@@ -22,6 +22,7 @@ package io.github.dgreco.rya.rdftriplestore;
 import static java.util.Objects.requireNonNull;
 
 import org.apache.accumulo.core.client.AccumuloClient;
+import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
 import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
 import io.github.dgreco.rya.accumulo.AccumuloRdfEvalStatsDAO;
 import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
@@ -49,10 +50,12 @@ public final class RyaAccumuloSailFactory {
     private RyaAccumuloSailFactory() {
     }
 
-    public static RdfCloudTripleStore<AccumuloRdfConfiguration> createSail(final AccumuloClient client,
+    public static RdfCloudTripleStore<AccumuloRdfConfiguration> createSail(final AccumuloClient accumuloClient,
             final AccumuloRdfConfiguration conf) {
-        requireNonNull(client, "client");
+        requireNonNull(accumuloClient, "client");
         requireNonNull(conf, "conf");
+        // Reports scans and writes to the trace of the thread using them, if any (AccumuloTrace).
+        final AccumuloClient client = AccumuloTrace.wrap(accumuloClient);
 
         final RdfCloudTripleStore<AccumuloRdfConfiguration> store = new RdfCloudTripleStore<>();
         store.setConf(conf);

@@ -40,6 +40,7 @@ import org.apache.accumulo.core.client.Scanner;
 import org.apache.accumulo.core.data.Key;
 import org.apache.accumulo.core.data.Range;
 import org.apache.hadoop.io.Text;
+import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
 import io.github.dgreco.rya.api.persist.RdfDAOException;
 import io.github.dgreco.rya.api.persist.RdfEvalStatsDAO;
 import org.eclipse.rdf4j.model.Resource;
@@ -148,7 +149,9 @@ public class AccumuloRdfEvalStatsDAO implements RdfEvalStatsDAO<AccumuloRdfConfi
             row.add(v.stringValue());
         }
 
-        try (Scanner scanner = client.createScanner(evalTable, conf.getAuthorizations())) {
+        final AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "statistics: " + card + " count of " + row.toString().replace(DELIM, " · ")
+                + (context == null ? "" : " in <" + context.stringValue() + ">"));
+        try (why; Scanner scanner = client.createScanner(evalTable, conf.getAuthorizations())) {
             scanner.setRange(new Range(new Text(row.toString().getBytes(StandardCharsets.UTF_8))));
             scanner.fetchColumn(cf, cq);
             // One cell per visibility label; add up the ones this reader can see.

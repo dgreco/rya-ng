@@ -32,6 +32,8 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
 
+import org.eclipse.rdf4j.query.algebra.evaluation.QueryEvaluationStep;
+import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
 import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
 import io.github.dgreco.rya.accumulo.AccumuloRdfEvalStatsDAO;
 import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
@@ -251,9 +253,22 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
         strategy.setOptimizerPipeline(new RyaQueryOptimizerPipeline(strategy, tripleSource, statistics,
                 new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf, graphSizes));
         try {
-            final TupleExpr optimized = strategy.optimize(tupleExpr, statistics, bindings);
+            final TupleExpr parsed = tupleExpr;
+            AccumuloTrace.plan("parsed", parsed::toString);
+            final TupleExpr optimized;
+            try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "query planning")) {
+                optimized = strategy.optimize(tupleExpr, statistics, bindings);
+            }
             if (queryConf.isDisplayQueryPlan()) {
                 log.info("Rya query plan:\n{}", optimized);
+            }
+            if (AccumuloTrace.isActive()) {
+                // Prepare exactly what evaluate() would, then report the plan with the join
+                // algorithms preparing chose (RyaBatchedJoin or RDF4J's own).
+                final TupleExpr root = optimized instanceof QueryRoot q ? q.getArg() : optimized;
+                final QueryEvaluationStep step = strategy.precompile(root);
+                AccumuloTrace.plan("optimized", optimized::toString);
+                return step.evaluate(bindings);
             }
             return strategy.evaluate(optimized, bindings);
         } catch (final QueryEvaluationException e) {
@@ -442,8 +457,11 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
          *         cached and lookups go to the store).
          */
         public AutoCloseable prefetch(final Collection<LookupKey> keys) {
-            final Map<LookupKey, List<Statement>> fetched =
-                    BatchLookup.fetch(ryaDAO, conf, keys, conf.getJoinPrefetchLimit());
+            final Map<LookupKey, List<Statement>> fetched;
+            try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "batched join: " + keys.size()
+                    + " right-hand lookup" + (keys.size() == 1 ? "" : "s") + " fetched together")) {
+                fetched = BatchLookup.fetch(ryaDAO, conf, keys, conf.getJoinPrefetchLimit());
+            }
             if (fetched == null || fetched.isEmpty()) {
                 return null;
             }

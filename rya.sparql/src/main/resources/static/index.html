@@ -47,15 +47,21 @@
             <span>Timeout (s)</span>
             <input id="rya-timeout" class="rya-number" type="number" min="1" step="1" inputmode="numeric" placeholder="default" autocomplete="off">
         </label>
+        <label class="rya-field rya-check" title="Show what each query does in Accumulo, live: its plan, every scan and every write.">
+            <input id="rya-trace-on" type="checkbox">
+            <span>Trace</span>
+        </label>
         <a class="rya-link" href="sparql?query=ASK%7B%7D" title="The SPARQL 1.1 Protocol endpoint">/sparql</a>
     </div>
 </header>
 <main id="yasgui"></main>
+<section id="rya-trace" class="rya-trace" aria-label="Accumulo trace" hidden></section>
 <script src="vendor/yasgui/yasgui.min.js"></script>
 <script src="vendor/leaflet/leaflet.js"></script>
 <script src="vendor/yasgui-chart-plugin/yasgui-chart-plugin.min.js"></script>
 <script src="ui/wkt.js"></script>
 <script src="ui/rya-map.js"></script>
+<script src="ui/rya-trace.js"></script>
 <script src="ui/rya-ui.js"></script>
 </body>
 </html>

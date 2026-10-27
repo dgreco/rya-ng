@@ -105,6 +105,11 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
 - `SparqlController` implements the SPARQL 1.1 Protocol at `/sparql`, with content negotiation in `ContentNegotiation` and errors mapped in `SparqlExceptionHandler`.
 - Settings are `RyaProperties` (`rya.*` in `application.yaml`).
 - A request's `timeout=` (seconds) replaces `rya.sparql.query-timeout`, up to `rya.sparql.max-query-timeout`; the query page sends it from its Timeout field.
+- **Tracing:** `trace=<id>` streams the request's Accumulo operations as Server-Sent Events on `/sparql/trace/<id>` (`TraceController`, `TraceHub`), shown by `ui/rya-trace.js`.
+  - Recording lives in `rya.accumulo`'s `trace` package: `AccumuloTrace.wrap` proxies the client (`RyaAccumuloSailFactory` does it), and a `ThreadLocal` scope collects the events.
+  - New code that creates scanners should open `AccumuloTrace.reason(() -> "…")` around the creation, so traces say why it scans.
+  - A traced query must run exactly like an untraced one: never turn on RDF4J's result-size or time tracking for it (that disables batched joins). `QueryTraceIT` checks this.
+  - Always close the scope in a `finally`: server threads are pooled.
 - **Query page** (`src/main/resources/static`): `index.html` plus `ui/` (our code: `rya-ui.js` sets up YASGUI on `sparql`, `rya-map.js` is the Map result tab, `wkt.js` turns WKT into GeoJSON).
   - Third-party files go to `static/vendor` at build time. The `maven-antrun-plugin` execution in `rya.sparql/pom.xml` downloads pinned npm tarballs into `~/.m2/repository/.cache/rya-ng-ui` and checks their SHA-512.
   - To upgrade one, change its `*.version` and `*.sha512` properties (the hex of npm's `integrity`), and regenerate `static/vendor/THIRD-PARTY-NOTICES.txt`.

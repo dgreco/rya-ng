@@ -119,6 +119,24 @@
     const authsInput = rememberedInput("rya-auths", "rya-ng.auths");
     const timeoutInput = rememberedInput("rya-timeout", "rya-ng.timeout");
 
+    // The Trace switch: when on, each query streams its Accumulo operations to the trace panel.
+    const traceInput = document.getElementById("rya-trace-on");
+    try {
+        traceInput.checked = window.localStorage.getItem("rya-ng.trace") === "on";
+    } catch (e) {
+        // Starts off.
+    }
+    traceInput.addEventListener("change", () => {
+        try {
+            window.localStorage.setItem("rya-ng.trace", traceInput.checked ? "on" : "off");
+        } catch (e) {
+            // Not remembered.
+        }
+        if (!traceInput.checked) {
+            window.RyaTrace.stop();
+        }
+    });
+
     function requestArgs() {
         const args = [];
         const labels = authsInput.value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -151,13 +169,17 @@
     });
     window.ryaYasgui = yasgui;
 
-    // Fired synchronously before the request is built: put the current authorizations and
-    // timeout on the tab, keeping any other request arguments set in the tab's settings.
+    // Fired synchronously before the request is built: put the current authorizations, timeout
+    // and trace id on the tab, keeping any other request arguments set in the tab's settings.
     yasgui.on("queryBefore", (instance, tab) => {
         const current = tab.getRequestConfig().args;
         const others = (Array.isArray(current) ? current : [])
-            .filter((a) => a.name !== "auths" && a.name !== "timeout");
-        tab.setRequestConfig({ args: others.concat(requestArgs()) });
+            .filter((a) => a.name !== "auths" && a.name !== "timeout" && a.name !== "trace");
+        const args = others.concat(requestArgs());
+        if (traceInput.checked) {
+            args.push({ name: "trace", value: window.RyaTrace.begin() });
+        }
+        tab.setRequestConfig({ args: args });
     });
 
     // ---- examples ----

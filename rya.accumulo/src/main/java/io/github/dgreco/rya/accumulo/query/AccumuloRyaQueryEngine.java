@@ -41,6 +41,8 @@ import org.apache.accumulo.core.iterators.user.RegExFilter;
 import org.apache.accumulo.core.iterators.user.TimestampFilter;
 import org.apache.accumulo.core.security.Authorizations;
 import org.apache.hadoop.io.Text;
+import io.github.dgreco.rya.accumulo.trace.TraceText;
+import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
 import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreUtils;
@@ -102,7 +104,10 @@ public class AccumuloRyaQueryEngine implements RyaQueryEngine<AccumuloRdfConfigu
             final TripleRowRegex regex = strategy.buildRegex(conf.getRegexSubject(), conf.getRegexPredicate(),
                     conf.getRegexObject(), null, objectTypeInfo(stmt.getObject()));
 
-            final Scanner scanner = client.createScanner(table(layout, conf), conf.getAuthorizations());
+            final Scanner scanner;
+            try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "lookup " + TraceText.pattern(stmt) + " on " + layout)) {
+                scanner = client.createScanner(table(layout, conf), conf.getAuthorizations());
+            }
             scanner.setRange(range);
             final Integer batchSize = conf.getBatchSize();
             if (batchSize != null) {
@@ -151,25 +156,32 @@ public class AccumuloRyaQueryEngine implements RyaQueryEngine<AccumuloRdfConfigu
                     conf.getRegexObject(), null, null);
             final String table = table(layout, conf);
             final Authorizations auths = conf.getAuthorizations();
+            final TABLE_LAYOUT batchLayout = layout;
+            final int patterns = stmts.size();
+            final AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "batched lookup of " + patterns + " pattern"
+                    + (patterns == 1 ? "" : "s") + " on " + batchLayout);
+            try {
+                if (ranges.size() > conf.getMaxRangesForScanner()) {
+                    final BatchScanner scanner = client.createBatchScanner(table, auths, numThreads(conf));
+                    scanner.setRanges(ranges);
+                    fillScanner(scanner, context, null, regex, conf);
+                    return limit(new RyaStatementKeyValueIterator(layout, ryaContext, scanner.iterator(),
+                            Collections.singletonList(scanner)), conf);
+                }
 
-            if (ranges.size() > conf.getMaxRangesForScanner()) {
-                final BatchScanner scanner = client.createBatchScanner(table, auths, numThreads(conf));
-                scanner.setRanges(ranges);
-                fillScanner(scanner, context, null, regex, conf);
-                return limit(new RyaStatementKeyValueIterator(layout, ryaContext, scanner.iterator(),
-                        Collections.singletonList(scanner)), conf);
+                final List<Scanner> scanners = new ArrayList<>(ranges.size());
+                final List<Iterator<Map.Entry<Key, Value>>> iters = new ArrayList<>(ranges.size());
+                for (final Range range : ranges) {
+                    final Scanner scanner = client.createScanner(table, auths);
+                    scanner.setRange(range);
+                    fillScanner(scanner, context, null, regex, conf);
+                    scanners.add(scanner);
+                    iters.add(scanner.iterator());
+                }
+                return limit(new RyaStatementKeyValueIterator(layout, ryaContext, Iterators.concat(iters.iterator()), scanners), conf);
+            } finally {
+                why.close();
             }
-
-            final List<Scanner> scanners = new ArrayList<>(ranges.size());
-            final List<Iterator<Map.Entry<Key, Value>>> iters = new ArrayList<>(ranges.size());
-            for (final Range range : ranges) {
-                final Scanner scanner = client.createScanner(table, auths);
-                scanner.setRange(range);
-                fillScanner(scanner, context, null, regex, conf);
-                scanners.add(scanner);
-                iters.add(scanner.iterator());
-            }
-            return limit(new RyaStatementKeyValueIterator(layout, ryaContext, Iterators.concat(iters.iterator()), scanners), conf);
         } catch (final Exception e) {
             throw new RyaDAOException(e);
         }

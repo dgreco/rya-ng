@@ -94,7 +94,7 @@ rya.sparql/configure.sh                        # asks for the settings, writes .
 - **Password source:** where the launch script gets the password when it starts: the terminal, the `RYA_ACCUMULO_PASSWORD` variable, or a file only you can read. The password is never stored in the script.
 - **Store:** table prefix, text and geo indexes, inference and statistics.
 - **Security:** the visibility labels requests may read, and the label written on inserted data.
-- **Server:** port, listen address, query timeout, and the longest timeout a request may ask for.
+- **Server:** port, listen address, query timeout, the longest timeout a request may ask for, and whether requests may be traced.
 
 **Options and overrides:**
 - `--output FILE` writes the script elsewhere.
@@ -127,6 +127,7 @@ Instead of the connection arguments, `--rya.accumulo.client-properties` can poin
 | `rya.sparql.allow-request-visibility` | `false` | Let an update set its own label with `visibility=` |
 | `rya.sparql.query-timeout` | `120s` | Maximum query or update time, unless the request sets `timeout=` |
 | `rya.sparql.max-query-timeout` | `30m` | Longest time a request may ask for with `timeout=`; `0s` means no limit |
+| `rya.sparql.allow-trace` | `true` | Let requests be traced (`trace=` and `/sparql/trace`, see [Tracing a query](#tracing-a-query)) |
 
 To try the endpoint without an Accumulo cluster:
 
@@ -152,6 +153,7 @@ Open the server's root URL (for example `http://localhost:8080/`) for a query pa
 **Header fields,** remembered by the browser:
 - **Authorizations** is sent as `auths=`, so a query reads with fewer labels than the server allows.
 - **Timeout (s)** is sent as `timeout=`, so a long query can run for longer than the server's default, up to `rya.sparql.max-query-timeout`. Empty uses the default.
+- **Trace** shows, under the results, what each query does in Accumulo while it runs (see [Tracing a query](#tracing-a-query)).
 
 The page's JavaScript and CSS are packaged into the jar at build time. Their licenses are listed at `/vendor/THIRD-PARTY-NOTICES.txt`.
 
@@ -185,8 +187,44 @@ Rya extensions:
 - `auths=A,B` narrows the read authorizations for one request; asking for more than is configured gets `403`.
 - `visibility=A&B` labels the statements an update inserts, if `allow-request-visibility` is on.
 - `timeout=600` sets this request's time limit, in seconds. More than `rya.sparql.max-query-timeout` gets `403`; anything but a positive whole number gets `400`.
+- `trace=<id>` streams what the request does in Accumulo to `/sparql/trace/<id>` (see [Tracing a query](#tracing-a-query)).
 
 The endpoint has no HTTP authentication. Run it behind a proxy that authenticates users, or add Spring Security.
+
+## Tracing a query
+
+A trace shows how a query or an update maps onto Accumulo, live:
+- **the plan:** RDF4J's query tree as parsed, then after Rya's rewrites, with the join order, the cardinality estimates and which joins are batched (`RyaBatchedJoin`);
+- **every scan:** the table, `Scanner` or `BatchScanner`, the ranges (with the separator bytes shown as `⟨00⟩`, `⟨01⟩`, `⟨ff⟩`), the column families and server-side iterators, the authorizations, how many entries came back and the time spent in Accumulo;
+- **why each scan happened:** for example `query planning › statistics: PREDICATE count of …`, `lookup <urn:alice> <urn:knows> ? on SPO`, or `batched join: 5 right-hand lookups fetched together`;
+- **every flush of writes:** the mutations, cells, deletes and bytes sent to each table;
+- **a summary** per table.
+
+**On the query page:** tick **Trace** in the header. A panel under the results fills in while each query runs.
+
+**Over HTTP:** pick a random id of 16 to 64 letters, digits, `-` or `_`. Read the stream, and send the request with the same id:
+
+```bash
+ID=$(uuidgen)
+curl -N http://localhost:8080/sparql/trace/$ID &        # Server-Sent Events: note, plan, scan, scan-end, flush, summary, end
+curl http://localhost:8080/sparql --data-urlencode 'query=SELECT * WHERE { ?s ?p ?o } LIMIT 5' --data-urlencode "trace=$ID"
+```
+
+- **Order:** either side may come first; events wait (up to 2 minutes) for the stream.
+- **One use per id:** each id serves one request; reusing it gets `409`.
+- **Closing:** the stream always ends with an `end` event whose status is `ok`, `error` or `timeout`.
+- **Size:** a trace reports up to 1,000 scans and flushes one by one; the summary counts them all.
+
+**Without the endpoint:** the same trace is available from Java. `RyaAccumuloSailFactory` wraps the Accumulo client it is given, so tracing the thread that runs a query is enough:
+
+```java
+try (AccumuloTrace.Scope scope = AccumuloTrace.start(event -> System.out.println(event));
+        TupleQueryResult result = conn.prepareTupleQuery(query).evaluate()) {
+    result.forEach(row -> { });
+}
+```
+
+Tracing costs nothing for requests that don't ask for it. `rya.sparql.allow-trace=false` turns it off on the endpoint.
 
 ## Graph sizes
 
