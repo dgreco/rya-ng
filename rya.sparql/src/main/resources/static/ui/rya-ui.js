@@ -57,7 +57,7 @@
                 + "  FILTER(geof:distance(?wkt, \"POINT(12.4924 41.8902)\"^^geo:wktLiteral, uom:metre) < 2000)\n}\n",
         },
         {
-            name: "Geometries inside a region",
+            name: "Geometries that touch a region",
             query: "SELECT ?place ?wkt WHERE {\n  ?place geo:hasGeometry ?g .\n  ?g geo:asWKT ?wkt .\n"
                 + "  FILTER(geof:sfIntersects(?wkt, \"POLYGON((12.45 41.87, 12.52 41.87, 12.52 41.91, 12.45 41.91, 12.45 41.87))\"^^geo:wktLiteral))\n}\n",
         },
