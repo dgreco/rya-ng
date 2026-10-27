@@ -26,6 +26,7 @@
         "PREFIX geo: <http://www.opengis.net/ont/geosparql#>",
         "PREFIX geof: <http://www.opengis.net/def/function/geosparql/>",
         "PREFIX uom: <http://www.opengis.net/def/uom/OGC/1.0/>",
+        "PREFIX stats: <urn:rya-ng:stats#>",
     ].join("\n") + "\n\n";
 
     const SAMPLE_GRAPH = "urn:rya-ng:sample";
@@ -36,8 +37,15 @@
             query: "SELECT * WHERE {\n  ?s ?p ?o\n}\nLIMIT 100\n",
         },
         {
-            name: "Named graphs and their size",
-            query: "SELECT ?graph (COUNT(*) AS ?statements) WHERE {\n  GRAPH ?graph { ?s ?p ?o }\n}\n"
+            name: "Named graphs and their approximate size",
+            query: "# Read from the statistics counters: fast on any store, but approximate.\n"
+                + "SELECT ?graph ?statements WHERE {\n  ?graph stats:approxSize ?statements\n}\n"
+                + "ORDER BY DESC(?statements)\n",
+        },
+        {
+            name: "Named graphs and their exact size (reads every statement)",
+            query: "# Counts every statement, so on a large store it needs a long Timeout.\n"
+                + "SELECT ?graph (COUNT(*) AS ?statements) WHERE {\n  GRAPH ?graph { ?s ?p ?o }\n}\n"
                 + "GROUP BY ?graph\nORDER BY DESC(?statements)\n",
         },
         {
@@ -87,26 +95,41 @@
         },
     ];
 
-    // ---- authorizations: sent as auths=, which can only narrow what the server allows ----
+    // ---- request settings, remembered by the browser ----
+    // Authorizations are sent as auths=, which can only narrow what the server allows.
+    // The timeout is sent as timeout= (seconds), which the server caps.
 
-    const AUTHS_KEY = "rya-ng.auths";
-    const authsInput = document.getElementById("rya-auths");
-    try {
-        authsInput.value = window.localStorage.getItem(AUTHS_KEY) || "";
-    } catch (e) {
-        // Storage can be unavailable (private windows); the field simply starts empty.
-    }
-    authsInput.addEventListener("change", () => {
+    function rememberedInput(id, key) {
+        const input = document.getElementById(id);
         try {
-            window.localStorage.setItem(AUTHS_KEY, authsInput.value.trim());
+            input.value = window.localStorage.getItem(key) || "";
         } catch (e) {
-            // Not remembered, but still used for this page.
+            // Storage can be unavailable (private windows); the field simply starts empty.
         }
-    });
+        input.addEventListener("change", () => {
+            try {
+                window.localStorage.setItem(key, input.value.trim());
+            } catch (e) {
+                // Not remembered, but still used for this page.
+            }
+        });
+        return input;
+    }
 
-    function authsArgs() {
+    const authsInput = rememberedInput("rya-auths", "rya-ng.auths");
+    const timeoutInput = rememberedInput("rya-timeout", "rya-ng.timeout");
+
+    function requestArgs() {
+        const args = [];
         const labels = authsInput.value.split(",").map((s) => s.trim()).filter(Boolean);
-        return labels.length ? [{ name: "auths", value: labels.join(",") }] : [];
+        if (labels.length) {
+            args.push({ name: "auths", value: labels.join(",") });
+        }
+        const timeout = timeoutInput.value.trim();
+        if (/^[1-9][0-9]*$/.test(timeout)) {
+            args.push({ name: "timeout", value: timeout });
+        }
+        return args;
     }
 
     // ---- YASGUI ----
@@ -128,12 +151,13 @@
     });
     window.ryaYasgui = yasgui;
 
-    // Fired synchronously before the request is built: put the current authorizations on the
-    // tab, keeping any other request arguments set in the tab's settings.
+    // Fired synchronously before the request is built: put the current authorizations and
+    // timeout on the tab, keeping any other request arguments set in the tab's settings.
     yasgui.on("queryBefore", (instance, tab) => {
         const current = tab.getRequestConfig().args;
-        const others = (Array.isArray(current) ? current : []).filter((a) => a.name !== "auths");
-        tab.setRequestConfig({ args: others.concat(authsArgs()) });
+        const others = (Array.isArray(current) ? current : [])
+            .filter((a) => a.name !== "auths" && a.name !== "timeout");
+        tab.setRequestConfig({ args: others.concat(requestArgs()) });
     });
 
     // ---- examples ----

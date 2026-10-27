@@ -94,7 +94,7 @@ rya.sparql/configure.sh                        # asks for the settings, writes .
 - **Password source:** where the launch script gets the password when it starts: the terminal, the `RYA_ACCUMULO_PASSWORD` variable, or a file only you can read. The password is never stored in the script.
 - **Store:** table prefix, text and geo indexes, inference and statistics.
 - **Security:** the visibility labels requests may read, and the label written on inserted data.
-- **Server:** port, listen address and query timeout.
+- **Server:** port, listen address, query timeout, and the longest timeout a request may ask for.
 
 **Options and overrides:**
 - `--output FILE` writes the script elsewhere.
@@ -125,7 +125,8 @@ Instead of the connection arguments, `--rya.accumulo.client-properties` can poin
 | `rya.sparql.authorizations` | `[]` | The most a request may read with. The Accumulo user must hold all of them. |
 | `rya.sparql.default-visibility` | `""` | Visibility label written on inserted statements |
 | `rya.sparql.allow-request-visibility` | `false` | Let an update set its own label with `visibility=` |
-| `rya.sparql.query-timeout` | `120s` | Maximum query or update time |
+| `rya.sparql.query-timeout` | `120s` | Maximum query or update time, unless the request sets `timeout=` |
+| `rya.sparql.max-query-timeout` | `30m` | Longest time a request may ask for with `timeout=`; `0s` means no limit |
 
 To try the endpoint without an Accumulo cluster:
 
@@ -140,15 +141,17 @@ Open the server's root URL (for example `http://localhost:8080/`) for a query pa
 
 **Writing queries:**
 - Syntax highlighting, autocompletion and several query tabs, which the browser remembers.
-- An **Examples** menu with queries to load sample data (Rome landmarks), browse it, and run text and geo searches.
-- Every new tab starts with the `rdf:`, `rdfs:`, `xsd:`, `text:`, `geo:`, `geof:` and `uom:` prefixes.
+- An **Examples** menu with queries to load sample data (Rome landmarks), browse it, size the named graphs, and run text and geo searches.
+- Every new tab starts with the `rdf:`, `rdfs:`, `xsd:`, `text:`, `geo:`, `geof:`, `uom:` and `stats:` prefixes.
 
 **Result tabs:**
 - **Table** and **Response**, as in YASGUI.
 - **Map** draws every `geo:wktLiteral` in the results on an OpenStreetMap background. The background tiles need internet access; the rest of the page doesn't.
 - **Chart** shows bar, line and pie charts of numeric results.
 
-**Authorizations:** the field in the header is sent as `auths=`, so a query reads with fewer labels than the server allows.
+**Header fields,** remembered by the browser:
+- **Authorizations** is sent as `auths=`, so a query reads with fewer labels than the server allows.
+- **Timeout (s)** is sent as `timeout=`, so a long query can run for longer than the server's default, up to `rya.sparql.max-query-timeout`. Empty uses the default.
 
 The page's JavaScript and CSS are packaged into the jar at build time. Their licenses are listed at `/vendor/THIRD-PARTY-NOTICES.txt`.
 
@@ -181,8 +184,25 @@ An unsupported `Accept` gets `406`. A malformed query or update gets `400`.
 Rya extensions:
 - `auths=A,B` narrows the read authorizations for one request; asking for more than is configured gets `403`.
 - `visibility=A&B` labels the statements an update inserts, if `allow-request-visibility` is on.
+- `timeout=600` sets this request's time limit, in seconds. More than `rya.sparql.max-query-timeout` gets `403`; anything but a positive whole number gets `400`.
 
 The endpoint has no HTTP authentication. Run it behind a proxy that authenticates users, or add Spring Security.
+
+## Graph sizes
+
+Counting the statements of each graph with `COUNT(*)` reads every statement, which takes minutes on a large store. The statistics answer the same question approximately, with a handful of reads:
+
+```sparql
+PREFIX stats: <urn:rya-ng:stats#>
+SELECT ?graph ?statements WHERE { ?graph stats:approxSize ?statements }
+ORDER BY DESC(?statements)
+```
+
+- **What it returns:** one row per named graph with data the request may see, with its number of statements as an `xsd:long`. The default graph has no IRI, so it isn't listed. `stats:approxSize` combines with the rest of a query like any pattern.
+- **Requirements:** statistics, which are on by default (`rya.stats`).
+- **Approximate:**
+  - a statement inserted twice counts twice;
+  - a predicate used for the first time in the last 5 minutes may not be counted yet.
 
 ## Search
 

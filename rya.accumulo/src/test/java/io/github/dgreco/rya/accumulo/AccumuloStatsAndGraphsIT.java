@@ -246,6 +246,41 @@ public class AccumuloStatsAndGraphsIT extends AccumuloITBase {
         assertEquals(4, dao.size(withA));
     }
 
+    @Test
+    public void graphSizesSumThePredicateCountersOfEachGraph() {
+        assertEquals(Map.of(), stats.graphSizes(conf));
+        dao.add(new RyaStatement(ALICE, KNOWS, BOB, G1));
+        dao.add(new RyaStatement(ALICE, NAME, new RyaType("Alice"), G1));
+        dao.add(new RyaStatement(BOB, KNOWS, ALICE, G2));
+        dao.add(new RyaStatement(BOB, NAME, new RyaType("Bob"), G2, null, new StatementMetadata(), "A".getBytes(StandardCharsets.UTF_8)));
+        dao.add(new RyaStatement(ALICE, NAME, new RyaType("Alice")));
+
+        // The default graph has no IRI, so it is not listed; the labelled statement needs A.
+        assertEquals(Map.of(G1.getData(), 2L, G2.getData(), 1L), stats.graphSizes(conf));
+        final AccumuloRdfConfiguration withA = new AccumuloRdfConfiguration(conf);
+        withA.setAuth("A");
+        assertEquals(Map.of(G1.getData(), 2L, G2.getData(), 2L), stats.graphSizes(withA));
+
+        // A delete lowers the counters; a dropped graph keeps its counters but loses its marker.
+        dao.delete(new RyaStatement(ALICE, KNOWS, BOB, G1), conf);
+        dao.dropGraph(withA, G2);
+        assertEquals(Map.of(G1.getData(), 1L), stats.graphSizes(withA));
+    }
+
+    @Test
+    public void graphSizesReuseTheListOfPredicatesForAWhile() {
+        final long[] now = {1_000};
+        final GraphSizes sizes = new GraphSizes(getClient(), () -> now[0]);
+        dao.add(new RyaStatement(ALICE, KNOWS, BOB, G1));
+        assertEquals(Map.of(G1.getData(), 1L), sizes.sizes(conf));
+
+        // A predicate first written after the list was read is counted once the list is read again.
+        dao.add(new RyaStatement(ALICE, NAME, new RyaType("Alice"), G1));
+        assertEquals(Map.of(G1.getData(), 1L), sizes.sizes(conf));
+        now[0] += GraphSizes.PREDICATES_TTL_MS;
+        assertEquals(Map.of(G1.getData(), 2L), sizes.sizes(conf));
+    }
+
     private double card(final CARDINALITY_OF card, final Value... values) {
         return stats.getCardinality(conf, card, List.of(values));
     }

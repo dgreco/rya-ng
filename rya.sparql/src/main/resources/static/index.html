@@ -43,6 +43,10 @@
             <span>Authorizations</span>
             <input id="rya-auths" type="text" placeholder="all allowed" spellcheck="false" autocomplete="off">
         </label>
+        <label class="rya-field" title="Longest a query may run, in seconds. Empty: the server's default. The server sets the most you may ask for.">
+            <span>Timeout (s)</span>
+            <input id="rya-timeout" class="rya-number" type="number" min="1" step="1" inputmode="numeric" placeholder="default" autocomplete="off">
+        </label>
         <a class="rya-link" href="sparql?query=ASK%7B%7D" title="The SPARQL 1.1 Protocol endpoint">/sparql</a>
     </div>
 </header>

@@ -55,6 +55,7 @@ public class AccumuloRdfEvalStatsDAO implements RdfEvalStatsDAO<AccumuloRdfConfi
     private AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
     private AccumuloClient client;
     private String evalTable;
+    private GraphSizes graphSizes;
 
     public AccumuloRdfEvalStatsDAO() {
     }
@@ -73,6 +74,7 @@ public class AccumuloRdfEvalStatsDAO implements RdfEvalStatsDAO<AccumuloRdfConfi
         try {
             evalTable = conf.getTableLayoutStrategy().getEval();
             AccumuloRdfUtils.createTableIfNotExist(client.tableOperations(), evalTable);
+            graphSizes = new GraphSizes(client);
             isInitialized.set(true);
         } catch (final Exception e) {
             throw new RdfDAOException(e);
@@ -87,6 +89,20 @@ public class AccumuloRdfEvalStatsDAO implements RdfEvalStatsDAO<AccumuloRdfConfi
     @Override
     public boolean isInitialized() {
         return isInitialized.get();
+    }
+
+    /**
+     * Approximate number of statements in each named graph that has data the configuration's
+     * authorizations can see, from the counters; see {@link GraphSizes}.
+     *
+     * @param conf the reader's configuration, or null for this DAO's
+     * @return graph IRI to approximate number of statements, sorted by IRI
+     */
+    public Map<String, Long> graphSizes(final AccumuloRdfConfiguration conf) {
+        if (graphSizes == null) {
+            throw new IllegalStateException("The statistics DAO is not initialized");
+        }
+        return graphSizes.sizes(conf != null ? conf : this.conf);
     }
 
     public AccumuloClient getClient() {

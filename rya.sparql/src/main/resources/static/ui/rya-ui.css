@@ -95,6 +95,11 @@ html, body {
     font-size: 13px;
 }
 
+.rya-field input.rya-number {
+    min-width: 0;
+    width: 7em;
+}
+
 .rya-field select:focus,
 .rya-field input:focus {
     outline: 2px solid var(--rya-accent);

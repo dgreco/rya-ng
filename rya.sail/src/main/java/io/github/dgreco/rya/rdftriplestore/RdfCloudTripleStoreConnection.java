@@ -32,6 +32,8 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
 
+import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.accumulo.AccumuloRdfEvalStatsDAO;
 import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
 import io.github.dgreco.rya.accumulo.index.IndexCatalog;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
@@ -52,6 +54,7 @@ import io.github.dgreco.rya.rdftriplestore.evaluation.RyaQueryOptimizerPipeline;
 import io.github.dgreco.rya.rdftriplestore.inference.InferenceEngine;
 import io.github.dgreco.rya.rdftriplestore.inference.InferenceOptimizer;
 import io.github.dgreco.rya.rdftriplestore.namespace.NamespaceManager;
+import io.github.dgreco.rya.rdftriplestore.stats.GraphSizeOptimizer;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.common.iteration.CloseableIteratorIteration;
 import org.eclipse.rdf4j.common.iteration.ConvertingIteration;
@@ -240,8 +243,13 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 : new RyaDefaultStatistics();
         final RyaEvaluationStrategy strategy = new RyaEvaluationStrategy(tripleSource, dataset, inferenceEngine, statistics);
         final IndexCatalog indexes = ryaDAO instanceof AccumuloRyaDAO accumulo ? accumulo.getIndexCatalog() : IndexCatalog.NONE;
+        // Graph sizes come from the counters, read with this query's authorizations.
+        final GraphSizeOptimizer graphSizes = new GraphSizeOptimizer(
+                rdfEvalStatsDAO instanceof AccumuloRdfEvalStatsDAO stats && queryConf instanceof AccumuloRdfConfiguration accumuloConf
+                        ? () -> stats.graphSizes(accumuloConf)
+                        : null);
         strategy.setOptimizerPipeline(new RyaQueryOptimizerPipeline(strategy, tripleSource, statistics,
-                new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf));
+                new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf, graphSizes));
         try {
             final TupleExpr optimized = strategy.optimize(tupleExpr, statistics, bindings);
             if (queryConf.isDisplayQueryPlan()) {

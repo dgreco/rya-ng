@@ -28,6 +28,7 @@ import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import io.github.dgreco.rya.rdftriplestore.evaluation.index.IndexSearchOptimizer;
 import io.github.dgreco.rya.rdftriplestore.evaluation.index.TextQueryValidator;
 import io.github.dgreco.rya.rdftriplestore.inference.InferenceOptimizer;
+import io.github.dgreco.rya.rdftriplestore.stats.GraphSizeOptimizer;
 import org.eclipse.rdf4j.query.algebra.evaluation.EvaluationStrategy;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryOptimizer;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryOptimizerPipeline;
@@ -40,9 +41,9 @@ import org.eclipse.rdf4j.query.algebra.evaluation.optimizer.RegexAsStringFunctio
 import org.eclipse.rdf4j.query.algebra.evaluation.optimizer.StandardQueryOptimizerPipeline;
 
 /**
- * RDF4J's standard optimizer pipeline (as of 6.1), with Rya's inference rewrite inserted
- * after the tree is normalized and before join ordering. Join ordering therefore runs once,
- * on the final tree, using Rya's cardinality statistics.
+ * RDF4J's standard optimizer pipeline (as of 6.1), with Rya's graph-size, inference and index
+ * rewrites inserted after the tree is normalized and before join ordering. Join ordering
+ * therefore runs once, on the final tree, using Rya's cardinality statistics.
  */
 public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
     private final EvaluationStrategy strategy;
@@ -50,6 +51,7 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
     private final EvaluationStatistics statistics;
     private final InferenceOptimizer inference;
     private final IndexSearchOptimizer indexSearch;
+    private final GraphSizeOptimizer graphSizes;
 
     /** Without secondary indexes. */
     public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
@@ -64,11 +66,22 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
     public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
             final EvaluationStatistics statistics, final InferenceOptimizer inference, final IndexCatalog indexes,
             final RdfCloudTripleStoreConfiguration conf) {
+        this(strategy, tripleSource, statistics, inference, indexes, conf, null);
+    }
+
+    /**
+     * @param graphSizes answers {@code stats:approxSize} patterns from the statistics; null
+     *        leaves them as ordinary patterns
+     */
+    public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
+            final EvaluationStatistics statistics, final InferenceOptimizer inference, final IndexCatalog indexes,
+            final RdfCloudTripleStoreConfiguration conf, final GraphSizeOptimizer graphSizes) {
         this.strategy = strategy;
         this.tripleSource = tripleSource;
         this.statistics = statistics;
         this.inference = inference;
         this.indexSearch = indexes == IndexCatalog.NONE || conf == null ? null : new IndexSearchOptimizer(indexes, conf);
+        this.graphSizes = graphSizes;
     }
 
     @Override
@@ -86,8 +99,12 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
                 StandardQueryOptimizerPipeline.SAME_TERM_FILTER_OPTIMIZER,
                 StandardQueryOptimizerPipeline.UNION_SCOPE_CHANGE_OPTIMIZER,
                 StandardQueryOptimizerPipeline.QUERY_MODEL_NORMALIZER,
-                StandardQueryOptimizerPipeline.PROJECTION_REMOVAL_OPTIMIZER,
-                inference));
+                StandardQueryOptimizerPipeline.PROJECTION_REMOVAL_OPTIMIZER));
+        if (graphSizes != null) {
+            // Before inference, which leaves the fixed patterns it produces alone.
+            optimizers.add(graphSizes);
+        }
+        optimizers.add(inference);
         if (indexSearch != null) {
             // After inference, so inferred sub-properties are searched too; before join ordering,
             // which then sees the much smaller indexed patterns.

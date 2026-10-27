@@ -77,6 +77,7 @@ public class SparqlEndpointIT {
         registry.add("rya.inference", () -> "true");
         registry.add("rya.sparql.authorizations", () -> "A,B");
         registry.add("rya.sparql.allow-request-visibility", () -> "true");
+        registry.add("rya.sparql.max-query-timeout", () -> "60s");
     }
 
     @BeforeAll
@@ -216,6 +217,28 @@ public class SparqlEndpointIT {
     }
 
     @Test
+    void timeoutParameterIsCheckedAndCapped() throws Exception {
+        final String ask = "ASK { ?s ?p ?o }";
+        assertEquals(200, getWith(ask, "timeout=60").statusCode());
+        assertEquals(400, getWith(ask, "timeout=soon").statusCode());
+        assertEquals(400, getWith(ask, "timeout=0").statusCode());
+        final HttpResponse<String> tooLong = getWith(ask, "timeout=61");
+        assertEquals(403, tooLong.statusCode());
+        assertTrue(tooLong.body().contains("at most 60 seconds"), tooLong.body());
+        assertEquals(403, post(SparqlController.SPARQL_UPDATE, "CLEAR SILENT GRAPH <urn:none>", null, "timeout=61").statusCode());
+    }
+
+    @Test
+    void approximateGraphSizes() throws Exception {
+        assertEquals(204, update("INSERT DATA { GRAPH <urn:g1> { <urn:a> <urn:p> <urn:b> . <urn:a> <urn:q> <urn:c> } "
+                + "GRAPH <urn:g2> { <urn:a> <urn:p> <urn:c> } }").statusCode());
+        final HttpResponse<String> r = get("PREFIX stats: <urn:rya-ng:stats#> "
+                + "SELECT ?g ?n WHERE { ?g stats:approxSize ?n } ORDER BY ?g", "text/csv");
+        assertEquals(200, r.statusCode(), r.body());
+        assertEquals("g,n\r\nurn:g1,2\r\nurn:g2,1\r\n", r.body());
+    }
+
+    @Test
     void subClassOfInference() throws Exception {
         update("INSERT DATA { <urn:Dog> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <urn:Animal> . "
                 + "<urn:rex> a <urn:Dog> }");
@@ -246,8 +269,18 @@ public class SparqlEndpointIT {
                 HttpResponse.BodyHandlers.ofString());
     }
 
+    private HttpResponse<String> getWith(final String query, final String params) throws Exception {
+        return http.send(HttpRequest.newBuilder(uri("?query=" + enc(query) + "&" + params)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
     private HttpResponse<String> post(final String contentType, final String body, final String accept) throws Exception {
-        final HttpRequest.Builder b = HttpRequest.newBuilder(uri("")).header("Content-Type", contentType)
+        return post(contentType, body, accept, null);
+    }
+
+    private HttpResponse<String> post(final String contentType, final String body, final String accept, final String params)
+            throws Exception {
+        final HttpRequest.Builder b = HttpRequest.newBuilder(uri(params == null ? "" : "?" + params)).header("Content-Type", contentType)
                 .POST(HttpRequest.BodyPublishers.ofString(body));
         if (accept != null) {
             b.header("Accept", accept);

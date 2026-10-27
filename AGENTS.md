@@ -95,11 +95,16 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
 - **Inference nodes:** `RyaEvaluationStrategy.prepare(StatementPattern)` handles the two node types inference produces. `FixedStatementPattern` is matched from in-memory ontology statements; `TransitivePropertySP` goes through `InferenceEngine.findTransitiveProperty`.
 - **`InferenceEngine`:** loads the ontology into memory (`ValueGraph` for the subClassOf/subPropertyOf hierarchies) and reloads it on a timer. Ontology changes are invisible until the next `refreshGraph()`; tests call it explicitly.
 - **Wiring:** `RyaAccumuloSailFactory` builds DAO + stats + inference + sail from an `AccumuloClient` and an `AccumuloRdfConfiguration`. The caller owns the client.
+- **Graph sizes:** `GraphSizeOptimizer`, run just before inference, replaces `?g stats:approxSize ?n` patterns with a `FixedStatementPattern` built from `GraphSizes`.
+  - `GraphSizes` sums each graph's eval `p` counters (qualifier = graph), for graphs that still have a marker.
+  - It finds the predicates with a skip scan of `po` (one seek each) and keeps the list 5 minutes per set of auths.
+  - Don't scan eval by column family instead: without a locality group that reads the whole table.
 
 ### Endpoint (`rya.sparql`)
 
 - `SparqlController` implements the SPARQL 1.1 Protocol at `/sparql`, with content negotiation in `ContentNegotiation` and errors mapped in `SparqlExceptionHandler`.
 - Settings are `RyaProperties` (`rya.*` in `application.yaml`).
+- A request's `timeout=` (seconds) replaces `rya.sparql.query-timeout`, up to `rya.sparql.max-query-timeout`; the query page sends it from its Timeout field.
 - **Query page** (`src/main/resources/static`): `index.html` plus `ui/` (our code: `rya-ui.js` sets up YASGUI on `sparql`, `rya-map.js` is the Map result tab, `wkt.js` turns WKT into GeoJSON).
   - Third-party files go to `static/vendor` at build time. The `maven-antrun-plugin` execution in `rya.sparql/pom.xml` downloads pinned npm tarballs into `~/.m2/repository/.cache/rya-ng-ui` and checks their SHA-512.
   - To upgrade one, change its `*.version` and `*.sha512` properties (the hex of npm's `integrity`), and regenerate `static/vendor/THIRD-PARTY-NOTICES.txt`.

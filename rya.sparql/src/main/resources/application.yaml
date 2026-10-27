@@ -52,4 +52,7 @@ rya:
     # Visibility label written on inserted statements. Empty: no label.
     default-visibility: ""
     allow-request-visibility: false
+    # Longest a query or update may run, unless the request asks for another limit with timeout=.
     query-timeout: 120s
+    # Longest limit a request may ask for with timeout= (which it gives in seconds). 0: no limit.
+    max-query-timeout: 30m

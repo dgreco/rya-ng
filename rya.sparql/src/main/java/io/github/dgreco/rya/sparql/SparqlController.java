@@ -70,7 +70,8 @@ import jakarta.servlet.http.HttpServletResponse;
  *   <li>Dataset: {@code default-graph-uri} / {@code named-graph-uri} for queries,
  *       {@code using-graph-uri} / {@code using-named-graph-uri} for updates.</li>
  *   <li>Rya extensions: {@code auths} (comma-separated) narrows the configured read
- *       authorizations; {@code visibility} labels inserted statements when enabled.</li>
+ *       authorizations; {@code visibility} labels inserted statements when enabled;
+ *       {@code timeout} (seconds) replaces the default time limit, up to the configured maximum.</li>
  * </ul>
  */
 @RestController
@@ -144,7 +145,7 @@ public class SparqlController {
         try (SailRepositoryConnection conn = repository.getConnection()) {
             applySecurity(conn, params, false);
             final Query query = conn.prepareQuery(QueryLanguage.SPARQL, queryString);
-            limitTime(query);
+            limitTime(query, params);
             final SimpleDataset dataset = dataset(params, "default-graph-uri", "named-graph-uri");
             if (dataset != null) {
                 query.setDataset(dataset);
@@ -178,7 +179,7 @@ public class SparqlController {
         try (SailRepositoryConnection conn = repository.getConnection()) {
             applySecurity(conn, params, true);
             final Update update = conn.prepareUpdate(QueryLanguage.SPARQL, updateString);
-            limitTime(update);
+            limitTime(update, params);
             final SimpleDataset dataset = dataset(params, "using-graph-uri", "using-named-graph-uri");
             if (dataset != null) {
                 update.setDataset(dataset);
@@ -224,8 +225,27 @@ public class SparqlController {
         }
     }
 
-    private void limitTime(final Operation operation) {
-        final long seconds = settings.queryTimeout().toSeconds();
+    /**
+     * Sets the time limit: the request's {@code timeout} parameter (whole seconds, at most the
+     * configured maximum) or else the configured default.
+     */
+    private void limitTime(final Operation operation, final MultiValueMap<String, String> params) {
+        long seconds = settings.queryTimeout().toSeconds();
+        final String requested = params.getFirst("timeout");
+        if (requested != null && !requested.isBlank()) {
+            try {
+                seconds = Long.parseLong(requested.trim());
+            } catch (final NumberFormatException e) {
+                seconds = 0;
+            }
+            if (seconds < 1) {
+                throw new SparqlRequestException(HttpStatus.BAD_REQUEST, "'timeout' must be a whole number of seconds, at least 1");
+            }
+            final long max = settings.maxQueryTimeout().toSeconds();
+            if (max > 0 && seconds > max) {
+                throw new SparqlRequestException(HttpStatus.FORBIDDEN, "'timeout' may be at most " + max + " seconds");
+            }
+        }
         if (seconds > 0) {
             operation.setMaxExecutionTime((int) Math.min(seconds, Integer.MAX_VALUE));
         }

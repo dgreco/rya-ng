@@ -75,12 +75,15 @@ public record RyaProperties(
      * @param defaultVisibility visibility label for written statements; empty for none.
      * @param allowRequestVisibility whether an update may set its own label with the
      *        {@code visibility} parameter.
-     * @param queryTimeout maximum query or update time.
+     * @param queryTimeout maximum query or update time, unless the request sets its own with the
+     *        {@code timeout} parameter.
+     * @param maxQueryTimeout the longest a request may ask for with {@code timeout}; zero for no limit.
      */
     public record Sparql(
             @DefaultValue List<String> authorizations,
             @DefaultValue("") String defaultVisibility,
             @DefaultValue("false") boolean allowRequestVisibility,
-            @DefaultValue("120s") Duration queryTimeout) {
+            @DefaultValue("120s") Duration queryTimeout,
+            @DefaultValue("30m") Duration maxQueryTimeout) {
     }
 }

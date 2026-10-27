@@ -768,6 +768,41 @@ The counters only influence join order, never results, so some drift is accepted
 - `ac.stats.maintain=false` (`setMaintainStats(false)`) stops counting on writes.
 - The endpoint's `rya.stats` sets both.
 
+### 11.4 Graph sizes from the counters
+
+*How many statements does each named graph hold?* `COUNT(*)` grouped by graph answers it exactly, but it reads every statement: minutes on a store of hundreds of millions. The counters answer it approximately with a handful of reads, and queries reach that answer through the predicate `stats:approxSize` (namespace `urn:rya-ng:stats#`):
+
+```sparql
+PREFIX stats: <urn:rya-ng:stats#>
+SELECT ?graph ?statements WHERE { ?graph stats:approxSize ?statements }
+```
+
+**Where the number comes from.** Every statement in a named graph adds 1 to the counter of its predicate *for that graph*: family `p`, qualifier = the graph IRI ([section 11.1](#111-what-is-counted)). A graph's size is therefore the sum of its `p` counters over all predicates. There are few predicates (55 in the loader's dataset), so that is a few dozen small rows.
+
+`GraphSizes` (`rya.accumulo`, used through `AccumuloRdfEvalStatsDAO.graphSizes(conf)`) computes it in three steps, all with the reader's authorizations:
+
+```mermaid
+flowchart TD
+    g["1. graphs table: the graphs with a visible marker"] --> p["2. po table: the distinct predicates,<br/>one seek each (skip scan), reused for 5 minutes"]
+    p --> e["3. eval table: one exact row per predicate, family p,<br/>summed per qualifier (graph)"]
+    e --> out["graph IRI to approximate size,<br/>graphs without a marker or with a total of 0 left out"]
+```
+
+1. **Graphs.** The visible markers in the `graphs` table. A dropped graph keeps its counters ([section 10.2](#102-dropping-graphs-dropgraph)) but loses its marker, so it isn't listed.
+2. **Predicates.** A skip scan of `po`:
+   - read the first row, whose first part is a predicate;
+   - seek to the predicate followed by byte `01`, the first possible row of the next predicate;
+   - repeat until the table ends.
+
+   That is one seek per predicate, not a read of the whole table. Seeks are usually milliseconds, but can take seconds while a bulk load keeps the tablet servers busy, so the list is kept for 5 minutes (`PREDICATES_TTL_MS`) per set of authorizations. A predicate used for the first time within that window isn't counted until the list is read again.
+3. **Counters.** One `BatchScanner` over the exact `eval` rows of those predicates, family `p`. The values are added up per qualifier, keeping the graphs from step 1.
+
+Scanning `eval` for family `p` directly would be simpler but much slower. A column-family restriction still reads the whole table unless the family has its own locality group, and `eval` holds about 50 bytes per statement.
+
+**How the query uses it.** `GraphSizeOptimizer` (`rya.sail`) runs just before the inference rewrite ([section 12.3](#123-the-optimizer-pipeline)). It replaces every pattern whose predicate is `stats:approxSize` with a `FixedStatementPattern` holding one statement per graph (`<graph> stats:approxSize "n"^^xsd:long`), the same in-memory node inference uses ([section 14.3](#143-example-rdfssubclassof)). The rest of the query, such as filters, joins, bound subjects and `ORDER BY`, works as for any pattern. The sizes are read only if the query contains such a pattern, and fail with an explanation when the store was opened without statistics.
+
+**Approximate**, like every counter: re-inserted statements and resumed load blocks count twice, and a new predicate shows up only after the predicate list is read again.
+
 ---
 
 ## 12. The query path
@@ -833,19 +868,21 @@ Results are lazy: Accumulo is scanned as the result writer asks for rows, so `LI
 
 ### 12.3 The optimizer pipeline
 
-`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with three Rya steps added (marked ★):
+`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with four Rya steps added (marked ★):
 
 ```mermaid
 flowchart TD
     o1["BindingAssigner<br/>BindingSetAssignmentInliner"] --> o2["★ TextQueryValidator<br/>rejects malformed constant text:matches queries"]
     o2 --> o3["ConstantOptimizer, RegexAsStringFunctionOptimizer,<br/>CompareOptimizer, ConjunctiveConstraintSplitter,<br/>DisjunctiveConstraintOptimizer, SameTermFilterOptimizer,<br/>UnionScopeChangeOptimizer, QueryModelNormalizer,<br/>ProjectionRemovalOptimizer"]
-    o3 --> o4["★ InferenceOptimizer<br/>15 OWL/RDFS rewrites (section 14)"]
+    o3 --> o3b["★ GraphSizeOptimizer<br/>stats:approxSize patterns from the counters (section 11.4)"]
+    o3b --> o4["★ InferenceOptimizer<br/>15 OWL/RDFS rewrites (section 14)"]
     o4 --> o5["★ IndexSearchOptimizer<br/>text and geo patterns (section 15)<br/>only when the store has indexes"]
     o5 --> o6["QueryJoinOptimizer<br/>join order from Rya statistics (section 11)"]
     o6 --> o7["IterativeEvaluationOptimizer, FilterOptimizer,<br/>FilterInValuesOptimizer, FilterOptimizer,<br/>OrderLimitOptimizer"]
 ```
 
 **Where the Rya steps sit:**
+- **Graph sizes** are filled in before inference, which leaves the in-memory pattern they produce alone.
 - **Inference** runs after the tree is normalized and before join ordering. Join ordering therefore runs once, on the final tree, and sees the patterns inference created.
 - **The index rewrite** runs after inference, so sub-properties added by inference are searched too. It runs before join ordering, which then sees the much smaller indexed patterns.
 
@@ -1319,13 +1356,15 @@ flowchart TD
 ```
 
 - **Formats:** `ContentNegotiation` picks the format from `Accept`, by quality and then by the client's order. The first format of each list is the default. If nothing supported is acceptable, the answer is `406`.
-- **Time limit:** every query and update gets RDF4J's maximum execution time, `rya.sparql.query-timeout` (120 s by default).
+- **Time limit:** every query and update gets RDF4J's maximum execution time:
+  - by default `rya.sparql.query-timeout` (120 s);
+  - or the request's `timeout=` parameter, in whole seconds, up to `rya.sparql.max-query-timeout` (30 min by default; `0s` for no limit). The query page sends it from its **Timeout** field.
 - **Errors:** `SparqlExceptionHandler` maps them to plain-text answers:
 
   | Status | Cause |
   |---|---|
-  | `400` | malformed query, or a bad parameter |
-  | `403` | `auths=` beyond the configured auths, or `visibility=` while it is disabled |
+  | `400` | malformed query, or a bad parameter (including a `timeout=` that isn't a positive whole number) |
+  | `403` | `auths=` beyond the configured auths, `visibility=` while it is disabled, or `timeout=` above the maximum |
   | `406` | no acceptable result format |
   | `503` | timeout |
   | `500` | anything else |
@@ -1333,7 +1372,7 @@ flowchart TD
 ### 17.3 The query page
 
 `src/main/resources/static/index.html` and `ui/` hold the browser page:
-- **`rya-ui.js`** sets up YASGUI on `/sparql`.
+- **`rya-ui.js`** sets up YASGUI on `/sparql`, with the Examples menu and two header fields the browser remembers: **Authorizations** (sent as `auths=`) and **Timeout** (sent as `timeout=`).
 - **`rya-map.js`** draws `geo:wktLiteral` results on a map.
 - **`wkt.js`** turns WKT into GeoJSON.
 
