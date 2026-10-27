@@ -1374,7 +1374,7 @@ flowchart TD
 
 `src/main/resources/static/index.html` and `ui/` hold the browser page:
 - **`rya-ui.js`** sets up YASGUI on `/sparql`, with the Examples menu and header fields the browser remembers: **Authorizations** (sent as `auths=`), **Timeout** (sent as `timeout=`) and the **Trace** switch.
-- **`rya-trace.js`** is the trace panel under the results ([section 17.5](#175-tracing-a-query)).
+- **`rya-trace.js`** is the resizable trace panel on the right ([section 17.5](#175-tracing-a-query)).
 - **`rya-map.js`** draws `geo:wktLiteral` results on a map.
 - **`wkt.js`** turns WKT into GeoJSON.
 
@@ -1396,6 +1396,7 @@ A trace answers *what does this query do in Accumulo?* while it runs. It covers 
   - Without a trace, everything is passed straight through.
 - **Reasons come from the call sites.** Code that is about to scan opens `AccumuloTrace.reason(() -> "…")` around creating the scanner. Reasons nest, so a scan can read `batched join: 5 right-hand lookups fetched together › batched lookup of 5 patterns on SPO`. Reasons are recorded by: the query engine (lookups, batched lookups), the statistics reader, graph sizes, the index searcher, the DAO (deletes, graph drops, graph list, size, namespaces), the batched join, inference (transitive closures, `owl:sameAs`), and query planning.
 - **Plans.** `RdfCloudTripleStoreConnection.evaluateInternal` reports the tree as parsed and as optimized. When traced, it prepares the optimized tree exactly as `evaluate` would and then reports it, so the plan shows which joins became `RyaBatchedJoin`. Tracing doesn't turn on RDF4J's own result-size or time tracking, which would turn batched joins off.
+- **Progress of long scans.** A scan's counters live in its iterator: entries, time inside Accumulo calls, the call in progress (if any) and the last key read. A daemon thread (`rya-trace-progress`) asks every running trace once a second for a `progress` event. The event lists each scan that has run for at least a second: its entries so far, the time spent, how long the current call has been waiting for the tablet servers, and the last row it read. A long scan therefore shows where it is in the table instead of looking stuck. Progress is only read, never written, by that thread.
 - **One trace per thread.** A trace lives in a `ThreadLocal` from `AccumuloTrace.start(listener)` until its `Scope` is closed, which reports the `summary`. Scans capture their trace when they are created, so closing one from another thread still reports to the right trace.
 - **Caps.** Up to 1,000 scans and flushes are reported one by one, with at most 10 ranges each. Past that, only the totals grow, and the summary says how many were left out.
 
@@ -1413,7 +1414,7 @@ sequenceDiagram
     B->>S: query or update with trace=ID
     S->>H: forRequest(ID): 409 if already used
     S->>R: AccumuloTrace.start(channel) and run the request
-    R-->>H: note, plan, scan, scan-end, flush events
+    R-->>H: note, plan, scan, progress, scan-end, flush events
     H-->>B: the same events, as Server-Sent Events
     S->>H: summary, then end (ok, error or timeout)
     H-->>B: end, then the stream closes
@@ -1425,7 +1426,12 @@ sequenceDiagram
 - **Clean-up:** the request always closes the trace in a `finally`, so a pooled server thread is never left traced. Otherwise it could report another user's next request.
 - **Turning it off:** `rya.sparql.allow-trace=false` refuses both sides with `403`.
 
-**The panel (`ui/rya-trace.js`)** lists the notes (the query and its authorizations), the two plans, one row per scan or flush, and a per-table summary. It writes everything as text, and shows the separator bytes as small badges. It keeps one stream at a time: starting a query, or receiving `end`, closes the previous one.
+**The panel (`ui/rya-trace.js`)** is an `aside` to the right of the editor and results, as tall as the window, with its own scroll.
+- **Contents:** the notes (the query and its authorizations), the two plans, one card per scan or flush, and a per-table summary.
+- **While the query runs:** the header shows a running clock, and each running scan's card shows its entries so far, the row it has reached, and any wait for the tablet servers.
+- **Resizing:** the divider before it resizes it by dragging or with the arrow keys.
+- **Folding:** the **⟩** button folds it into a vertical tab, which blinks while a traced query runs.
+- **Memory and narrow screens:** the width and the folded state are kept in `localStorage`. Below 900 pixels the panel goes under the results. It writes everything as text, and shows the separator bytes as small badges. It keeps one stream at a time: starting a query, or receiving `end`, closes the previous one.
 
 ---
 

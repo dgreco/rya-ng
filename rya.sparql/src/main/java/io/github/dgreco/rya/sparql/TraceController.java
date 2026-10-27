@@ -26,7 +26,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 /**
  * {@code GET /sparql/trace/<id>}: a Server-Sent Events stream of what the request sent with
  * {@code trace=<id>} does in Accumulo. Events: {@code note}, {@code plan}, {@code scan},
- * {@code scan-end}, {@code flush}, {@code summary} and a final {@code end} with the status.
+ * {@code progress} (long scans, about once a second), {@code scan-end}, {@code flush},
+ * {@code summary} and a final {@code end} with the status.
  * Open the stream first or right after sending the request: events wait for it.
  */
 @RestController

@@ -153,7 +153,7 @@ Open the server's root URL (for example `http://localhost:8080/`) for a query pa
 **Header fields,** remembered by the browser:
 - **Authorizations** is sent as `auths=`, so a query reads with fewer labels than the server allows.
 - **Timeout (s)** is sent as `timeout=`, so a long query can run for longer than the server's default, up to `rya.sparql.max-query-timeout`. Empty uses the default.
-- **Trace** shows, under the results, what each query does in Accumulo while it runs (see [Tracing a query](#tracing-a-query)).
+- **Trace** opens a panel on the right that shows what each query does in Accumulo while it runs (see [Tracing a query](#tracing-a-query)).
 
 The page's JavaScript and CSS are packaged into the jar at build time. Their licenses are listed at `/vendor/THIRD-PARTY-NOTICES.txt`.
 
@@ -198,15 +198,20 @@ A trace shows how a query or an update maps onto Accumulo, live:
 - **every scan:** the table, `Scanner` or `BatchScanner`, the ranges (with the separator bytes shown as `⟨00⟩`, `⟨01⟩`, `⟨ff⟩`), the column families and server-side iterators, the authorizations, how many entries came back and the time spent in Accumulo;
 - **why each scan happened:** for example `query planning › statistics: PREDICATE count of …`, `lookup <urn:alice> <urn:knows> ? on SPO`, or `batched join: 5 right-hand lookups fetched together`;
 - **every flush of writes:** the mutations, cells, deletes and bytes sent to each table;
+- **progress of long scans:** about once a second, each scan that has run for a second reports the entries it has read so far, the last row it reached, and how long it has been waiting for the tablet servers;
 - **a summary** per table.
 
-**On the query page:** tick **Trace** in the header. A panel under the results fills in while each query runs.
+**On the query page:** tick **Trace** in the header.
+- **The panel:** a panel on the right of the editor and results fills in while each query runs. Its header shows how long the query has been running, and a running scan's card shows where it has got to.
+- **Resizing:** drag its left edge (or focus it and use the arrow keys; double-click resets the width).
+- **Folding:** fold it into a tab on the right edge with **⟩**; the tab shows a dot while a traced query runs.
+- **Memory:** the browser remembers the width and whether the panel is folded. On narrow screens the panel sits under the results.
 
 **Over HTTP:** pick a random id of 16 to 64 letters, digits, `-` or `_`. Read the stream, and send the request with the same id:
 
 ```bash
 ID=$(uuidgen)
-curl -N http://localhost:8080/sparql/trace/$ID &        # Server-Sent Events: note, plan, scan, scan-end, flush, summary, end
+curl -N http://localhost:8080/sparql/trace/$ID &        # Server-Sent Events: note, plan, scan, progress, scan-end, flush, summary, end
 curl http://localhost:8080/sparql --data-urlencode 'query=SELECT * WHERE { ?s ?p ?o } LIMIT 5' --data-urlencode "trace=$ID"
 ```
 

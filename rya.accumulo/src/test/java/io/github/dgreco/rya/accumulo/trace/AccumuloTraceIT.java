@@ -101,6 +101,28 @@ public class AccumuloTraceIT extends AccumuloITBase {
     }
 
     @Test
+    public void aLongScanReportsWhereItIsWhileItRuns() throws Exception {
+        try (AccumuloTrace.Scope scope = AccumuloTrace.start(events::add);
+                CloseableIteration<RyaStatement> it = dao.getQueryEngine().query(new RyaStatement(null, KNOWS, null), conf)) {
+            while (it.hasNext()) {
+                it.next();
+                Thread.sleep(900);
+            }
+        }
+        final List<TraceEvent.Progress> progress = events.stream().filter(e -> e instanceof TraceEvent.Progress)
+                .map(e -> (TraceEvent.Progress) e).toList();
+        assertTrue(!progress.isEmpty(), events.toString());
+        final TraceEvent.ScanProgress last = progress.get(progress.size() - 1).scans().get(0);
+        assertEquals(only(TraceEvent.ScanStart.class).id(), last.id());
+        assertTrue(last.entries() >= 1, last.toString());
+        assertTrue(last.position().startsWith("urn:test#knows⟨00⟩"), last.position());
+        // Progress stops with the trace.
+        final int seen = events.size();
+        Thread.sleep(2 * Trace.PROGRESS_INTERVAL_MS);
+        assertEquals(seen, events.size());
+    }
+
+    @Test
     public void aBatchedLookupListsTheFirstRangesAndCountsThemAll() {
         final List<RyaStatement> patterns = new ArrayList<>();
         for (int i = 0; i < 15; i++) {

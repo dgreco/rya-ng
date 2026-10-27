@@ -70,6 +70,29 @@ public sealed interface TraceEvent {
         }
     }
 
+    /**
+     * Scans still running, about once a second while any has run for at least a second: what
+     * each has read so far, and the totals of the trace so far.
+     */
+    record Progress(double at, List<ScanProgress> scans, int openScans, long scansSoFar, long entriesSoFar)
+            implements TraceEvent {
+        @Override
+        public String type() {
+            return "progress";
+        }
+    }
+
+    /**
+     * A running scan.
+     *
+     * @param ms time spent in Accumulo calls so far, including a call still waiting
+     * @param waitingMs how long the current call has been waiting for the tablet servers; 0 when
+     *        the query is busy with the entries it already has
+     * @param position the last row read, readable; null before the first entry
+     */
+    record ScanProgress(int id, long entries, double ms, double waitingMs, String position) {
+    }
+
     /** Buffered writes are sent to the tablet servers: what each table received since the last flush. */
     record Flush(double at, double ms, List<TableWrites> tables) implements TraceEvent {
         @Override

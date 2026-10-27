@@ -119,22 +119,22 @@
     const authsInput = rememberedInput("rya-auths", "rya-ng.auths");
     const timeoutInput = rememberedInput("rya-timeout", "rya-ng.timeout");
 
-    // The Trace switch: when on, each query streams its Accumulo operations to the trace panel.
+    // The Trace switch: when on, the trace panel (or its tab) is shown on the right, and each
+    // query streams its Accumulo operations to it.
     const traceInput = document.getElementById("rya-trace-on");
     try {
         traceInput.checked = window.localStorage.getItem("rya-ng.trace") === "on";
     } catch (e) {
         // Starts off.
     }
+    window.RyaTrace.setEnabled(traceInput.checked);
     traceInput.addEventListener("change", () => {
         try {
             window.localStorage.setItem("rya-ng.trace", traceInput.checked ? "on" : "off");
         } catch (e) {
             // Not remembered.
         }
-        if (!traceInput.checked) {
-            window.RyaTrace.stop();
-        }
+        window.RyaTrace.setEnabled(traceInput.checked);
     });
 
     function requestArgs() {

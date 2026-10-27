@@ -37,6 +37,22 @@ public final class Trace {
     public static final int MAX_DETAILED_EVENTS = 1000;
     /** Ranges listed in one scan event; the event still says how many there are. */
     public static final int MAX_RANGES = 10;
+    /** How often running scans report progress, and how long one runs before it does. */
+    public static final long PROGRESS_INTERVAL_MS = 1000;
+
+    /** What a running scan has done so far. Read by the progress thread, so thread-safe. */
+    interface Live {
+        long entries();
+
+        /** Time inside Accumulo calls, including a call in progress. */
+        long nanos(long now);
+
+        /** How long the call in progress has been waiting; 0 when no call is in progress. */
+        long waitingNanos(long now);
+
+        /** The last row read, readable; null before the first. */
+        String position();
+    }
 
     private final TraceListener listener;
     private final long startNanos = System.nanoTime();
@@ -48,6 +64,7 @@ public final class Trace {
     private int nextScanId = 1;
     private int detailedEvents;
     private long omitted;
+    private boolean finished;
 
     private static final class Totals {
         long scans;
@@ -67,7 +84,14 @@ public final class Trace {
         long bytes;
     }
 
-    private record OpenScan(String table) {
+    private static final class OpenScan {
+        final String table;
+        final long openedNanos = System.nanoTime();
+        Live live;
+
+        OpenScan(final String table) {
+            this.table = table;
+        }
     }
 
     Trace(final TraceListener listener) {
@@ -130,12 +154,52 @@ public final class Trace {
         if (scan == null) {
             return;
         }
-        final Totals t = totals.computeIfAbsent(scan.table(), k -> new Totals());
+        final Totals t = totals.computeIfAbsent(scan.table, k -> new Totals());
         t.entries += Math.max(0, entries);
         t.nanos += nanos;
         if (detailed.remove(id)) {
             emit(new TraceEvent.ScanEnd(now(), id, entries, nanos / 1e6, how));
         }
+    }
+
+    /** Lets the progress reports see what scan {@code id} has read so far. */
+    synchronized void track(final int id, final Live live) {
+        final OpenScan scan = open.get(id);
+        if (scan != null) {
+            scan.live = live;
+        }
+    }
+
+    /**
+     * Reports the scans that have run for at least {@link #PROGRESS_INTERVAL_MS}, if any. Called
+     * about once a second by {@link AccumuloTrace}'s progress thread.
+     */
+    synchronized void tick(final long now) {
+        if (finished) {
+            return;
+        }
+        final List<TraceEvent.ScanProgress> running = new ArrayList<>();
+        long inFlight = 0;
+        for (final Map.Entry<Integer, OpenScan> e : open.entrySet()) {
+            final OpenScan scan = e.getValue();
+            if (scan.live == null) {
+                continue;
+            }
+            final long entries = scan.live.entries();
+            inFlight += entries;
+            if (detailed.contains(e.getKey()) && now - scan.openedNanos >= PROGRESS_INTERVAL_MS * 1_000_000) {
+                running.add(new TraceEvent.ScanProgress(e.getKey(), entries, scan.live.nanos(now) / 1e6,
+                        scan.live.waitingNanos(now) / 1e6, scan.live.position()));
+            }
+        }
+        if (running.isEmpty()) {
+            return;
+        }
+        long done = 0;
+        for (final Totals t : totals.values()) {
+            done += t.entries;
+        }
+        emit(new TraceEvent.Progress((now - startNanos) / 1e6, running, open.size(), nextScanId - 1L, done + inFlight));
     }
 
     synchronized void wrote(final String table, final Mutation m) {
@@ -175,6 +239,7 @@ public final class Trace {
 
     /** Ends the scans still open, counts unflushed writes, and reports the totals. */
     synchronized void finish() {
+        finished = true;
         for (final Integer id : new ArrayList<>(open.keySet())) {
             scanEnded(id, -1, 0, "open");
         }

@@ -15,6 +15,11 @@
  */
 package io.github.dgreco.rya.accumulo.trace;
 
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import org.apache.accumulo.core.client.AccumuloClient;
@@ -34,6 +39,8 @@ import org.apache.accumulo.core.client.AccumuloClient;
  */
 public final class AccumuloTrace {
     private static final ThreadLocal<Trace> CURRENT = new ThreadLocal<>();
+    /** Traces running now, for the progress thread. */
+    private static final Set<Trace> ACTIVE = ConcurrentHashMap.newKeySet();
     private static final Reason NO_REASON = () -> {
     };
 
@@ -60,6 +67,8 @@ public final class AccumuloTrace {
         final Trace previous = CURRENT.get();
         final Trace trace = new Trace(listener);
         CURRENT.set(trace);
+        Progress.start();
+        ACTIVE.add(trace);
         return new Scope() {
             private boolean closed;
 
@@ -69,6 +78,7 @@ public final class AccumuloTrace {
                     return;
                 }
                 closed = true;
+                ACTIVE.remove(trace);
                 try {
                     trace.finish();
                 } finally {
@@ -80,6 +90,32 @@ public final class AccumuloTrace {
                 }
             }
         };
+    }
+
+    /** Asks every running trace, about once a second, to report its long scans. Started on first use. */
+    private static final class Progress {
+        private static final ScheduledExecutorService TICKER = Executors.newSingleThreadScheduledExecutor(r -> {
+            final Thread t = new Thread(r, "rya-trace-progress");
+            t.setDaemon(true);
+            return t;
+        });
+
+        static {
+            TICKER.scheduleWithFixedDelay(() -> {
+                final long now = System.nanoTime();
+                for (final Trace trace : ACTIVE) {
+                    try {
+                        trace.tick(now);
+                    } catch (final RuntimeException e) {
+                        // Progress is best effort; the trace itself carries on.
+                    }
+                }
+            }, Trace.PROGRESS_INTERVAL_MS, Trace.PROGRESS_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        }
+
+        static void start() {
+            // Loading the class starts the thread.
+        }
     }
 
     /** The trace of this thread, or null. */

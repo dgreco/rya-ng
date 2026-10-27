@@ -54,8 +54,14 @@
         <a class="rya-link" href="sparql?query=ASK%7B%7D" title="The SPARQL 1.1 Protocol endpoint">/sparql</a>
     </div>
 </header>
-<main id="yasgui"></main>
-<section id="rya-trace" class="rya-trace" aria-label="Accumulo trace" hidden></section>
+<div class="rya-workspace">
+    <main id="yasgui"></main>
+    <div id="rya-trace-resizer" class="rya-trace-resizer" role="separator" aria-orientation="vertical"
+         aria-label="Resize the trace panel" aria-valuemin="300" tabindex="0"
+         title="Drag, or use the arrow keys, to resize the trace panel. Double-click for the default width." hidden></div>
+    <aside id="rya-trace" class="rya-trace" aria-label="Accumulo trace" hidden></aside>
+    <button id="rya-trace-tab" class="rya-trace-tab" type="button" aria-label="Open the Accumulo trace panel" hidden></button>
+</div>
 <script src="vendor/yasgui/yasgui.min.js"></script>
 <script src="vendor/leaflet/leaflet.js"></script>
 <script src="vendor/yasgui-chart-plugin/yasgui-chart-plugin.min.js"></script>

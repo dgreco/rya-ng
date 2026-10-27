@@ -26,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.accumulo.core.client.AccumuloClient;
 import org.apache.accumulo.core.client.BatchDeleter;
@@ -220,7 +221,9 @@ final class TracingProxies {
         }
 
         private Iterator<?> start(final Iterator<?> real) {
-            final CountingIterator it = new CountingIterator(trace, opened(), real);
+            final int id = opened();
+            final CountingIterator it = new CountingIterator(trace, id, real);
+            trace.track(id, it);
             synchronized (this) {
                 running.add(it);
             }
@@ -230,6 +233,27 @@ final class TracingProxies {
         private Object delete(final Method method, final Object[] args) throws Throwable {
             final int id = opened();
             final long t0 = System.nanoTime();
+            trace.track(id, new Trace.Live() {
+                @Override
+                public long entries() {
+                    return 0;
+                }
+
+                @Override
+                public long nanos(final long now) {
+                    return now - t0;
+                }
+
+                @Override
+                public long waitingNanos(final long now) {
+                    return now - t0;
+                }
+
+                @Override
+                public String position() {
+                    return null;
+                }
+            });
             try {
                 return call(scanner, method, args);
             } finally {
@@ -249,14 +273,20 @@ final class TracingProxies {
         }
     }
 
-    /** Counts what a scan returns and the time spent in Accumulo; reports the end once. */
-    private static final class CountingIterator implements Iterator<Map.Entry<Key, Value>> {
+    /**
+     * Counts what a scan returns and the time spent in Accumulo, and reports the end once. The
+     * scan's own thread updates the counters; the progress thread only reads them.
+     */
+    private static final class CountingIterator implements Iterator<Map.Entry<Key, Value>>, Trace.Live {
         private final Trace trace;
         private final int id;
         private final Iterator<Map.Entry<Key, Value>> real;
-        private long entries;
-        private long nanos;
-        private boolean ended;
+        private final AtomicBoolean ended = new AtomicBoolean();
+        private volatile long entries;
+        private volatile long nanos;
+        /** When the call in progress started; 0 when none is. */
+        private volatile long callStart;
+        private volatile Key lastKey;
 
         @SuppressWarnings("unchecked")
         CountingIterator(final Trace trace, final int id, final Iterator<?> real) {
@@ -268,11 +298,13 @@ final class TracingProxies {
         @Override
         public boolean hasNext() {
             final long t0 = System.nanoTime();
+            callStart = t0;
             final boolean more;
             try {
                 more = real.hasNext();
             } finally {
-                add(System.nanoTime() - t0);
+                nanos += System.nanoTime() - t0;
+                callStart = 0;
             }
             if (!more) {
                 end("exhausted");
@@ -283,36 +315,48 @@ final class TracingProxies {
         @Override
         public Map.Entry<Key, Value> next() {
             final long t0 = System.nanoTime();
+            callStart = t0;
             try {
                 final Map.Entry<Key, Value> e = real.next();
-                synchronized (this) {
-                    entries++;
-                }
+                entries++;
+                lastKey = e.getKey();
                 return e;
             } catch (final NoSuchElementException e) {
                 end("exhausted");
                 throw e;
             } finally {
-                add(System.nanoTime() - t0);
+                nanos += System.nanoTime() - t0;
+                callStart = 0;
             }
         }
 
-        private synchronized void add(final long n) {
-            nanos += n;
+        @Override
+        public long entries() {
+            return entries;
+        }
+
+        @Override
+        public long nanos(final long now) {
+            final long started = callStart;
+            return nanos + (started == 0 ? 0 : Math.max(0, now - started));
+        }
+
+        @Override
+        public long waitingNanos(final long now) {
+            final long started = callStart;
+            return started == 0 ? 0 : Math.max(0, now - started);
+        }
+
+        @Override
+        public String position() {
+            final Key k = lastKey;
+            return k == null ? null : TraceText.text(k.getRow());
         }
 
         void end(final String how) {
-            final long e;
-            final long n;
-            synchronized (this) {
-                if (ended) {
-                    return;
-                }
-                ended = true;
-                e = entries;
-                n = nanos;
+            if (ended.compareAndSet(false, true)) {
+                trace.scanEnded(id, entries, nanos, how);
             }
-            trace.scanEnded(id, e, n, how);
         }
     }
 

@@ -80,6 +80,51 @@ public class TraceTest {
     }
 
     @Test
+    public void runningScansReportTheirProgress() {
+        final List<TraceEvent> events = new ArrayList<>();
+        final Trace trace = new Trace(events::add);
+        final int id = trace.scanStarted("Scanner", "t", List.of(), 1, List.of(), List.of(), "none", "");
+        final long t0 = System.nanoTime();
+        trace.track(id, new Trace.Live() {
+            @Override
+            public long entries() {
+                return 42;
+            }
+
+            @Override
+            public long nanos(final long now) {
+                return 5_000_000;
+            }
+
+            @Override
+            public long waitingNanos(final long now) {
+                return 3_000_000;
+            }
+
+            @Override
+            public String position() {
+                return "row⟨00⟩x";
+            }
+        });
+        trace.tick(t0);
+        assertFalse(events.stream().anyMatch(e -> e instanceof TraceEvent.Progress), "a scan reports once it ran for a while");
+
+        trace.tick(t0 + 2_000_000_000L);
+        final TraceEvent.Progress progress = (TraceEvent.Progress) events.get(events.size() - 1);
+        assertEquals(List.of(new TraceEvent.ScanProgress(id, 42, 5.0, 3.0, "row⟨00⟩x")), progress.scans());
+        assertEquals(1, progress.openScans());
+        assertEquals(1, progress.scansSoFar());
+        assertEquals(42, progress.entriesSoFar());
+
+        trace.scanEnded(id, 42, 5_000_000, "exhausted");
+        final int before = events.size();
+        trace.tick(t0 + 4_000_000_000L);
+        trace.finish();
+        trace.tick(t0 + 6_000_000_000L);
+        assertEquals(before + 1, events.size(), "no progress once nothing runs or the trace ended: " + events);
+    }
+
+    @Test
     public void aScopeAlwaysLeavesTheThreadUntraced() {
         final List<TraceEvent> events = new ArrayList<>();
         try {

@@ -15,24 +15,58 @@
  */
 
 /*
- * The "Accumulo trace" panel: what a query does in Accumulo, live. Before each traced query,
- * rya-ui.js calls RyaTrace.begin(), sends the id it returns as trace=, and this file reads the
- * server-sent events of sparql/trace/<id>: notes, plans, scans, flushes, a summary and the end.
- * Everything from the server is written as text (textContent), never as HTML.
+ * The "Accumulo trace" side panel: what a query does in Accumulo, live. Before each traced
+ * query, rya-ui.js calls RyaTrace.begin(), sends the id it returns as trace=, and this file
+ * reads the server-sent events of sparql/trace/<id>: notes, plans, scans, progress, flushes, a
+ * summary and the end. Everything from the server is written as text, never as HTML.
+ *
+ * The panel (#rya-trace) sits right of the editor and results. The divider (#rya-trace-resizer)
+ * resizes it by dragging or with the arrow keys; it folds into a vertical tab (#rya-trace-tab).
+ * The browser remembers its width and whether it is folded.
  */
 (function () {
     "use strict";
 
     const MAX_ROWS = 1000;
     const RANGES_SHOWN = 3;
+    const MIN_WIDTH = 300;
+    const DEFAULT_WIDTH = 520;
+    const STEP = 32;
+    const WIDTH_KEY = "rya-ng.trace.width";
+    const FOLDED_KEY = "rya-ng.trace.folded";
 
     const panel = document.getElementById("rya-trace");
+    const resizer = document.getElementById("rya-trace-resizer");
+    const tab = document.getElementById("rya-trace-tab");
+    const bar = document.querySelector(".rya-bar");
+
+    let enabled = false;
+    let folded = load(FOLDED_KEY) === "yes";
+    let width = Number(load(WIDTH_KEY)) || DEFAULT_WIDTH;
     let source = null;
     let ended = true;
+    let clock = null;
+    let startedAt = 0;
     let rowsShown = 0;
     let rowsSkipped = 0;
     let rows = new Map();
     let live = { scans: 0, entries: 0, ms: 0, mutations: 0 };
+
+    function load(key) {
+        try {
+            return window.localStorage.getItem(key);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function save(key, value) {
+        try {
+            window.localStorage.setItem(key, value);
+        } catch (e) {
+            // Not remembered.
+        }
+    }
 
     function el(tag, className, text) {
         const e = document.createElement(tag);
@@ -47,6 +81,14 @@
 
     function fmt(n, digits) {
         return Number(n).toLocaleString(undefined, { maximumFractionDigits: digits === undefined ? 0 : digits });
+    }
+
+    function plural(n, word) {
+        return fmt(n) + " " + word + (n === 1 ? "" : "s");
+    }
+
+    function entries(n) {
+        return fmt(n) + (n === 1 ? " entry" : " entries");
     }
 
     /** Text with each ⟨xx⟩ byte shown as a small badge; every piece is a text node. */
@@ -71,44 +113,125 @@
         return e;
     }
 
-    function plural(n, word) {
-        return fmt(n) + " " + word + (n === 1 ? "" : "s");
-    }
-
     // ---- skeleton ----
 
     const head = el("div", "rya-trace-head");
-    const toggle = el("button", "rya-trace-toggle", "▾");
-    toggle.type = "button";
-    toggle.setAttribute("aria-expanded", "true");
-    toggle.title = "Show or hide the trace";
     const title = el("h2", "rya-trace-title", "Accumulo trace");
-    const status = el("span", "rya-trace-status");
-    const totals = el("span", "rya-trace-totals");
-    head.append(toggle, title, status, totals);
+    const status = el("span", "rya-trace-status", "idle");
+    const fold = el("button", "rya-trace-fold", "⟩");
+    fold.type = "button";
+    fold.title = "Fold the panel into a tab";
+    fold.setAttribute("aria-label", "Fold the trace panel");
+    const totals = el("div", "rya-trace-totals");
+    head.append(title, status, fold, totals);
 
     const body = el("div", "rya-trace-body");
+    const hint = el("p", "rya-trace-hint", "Run a query: its plan, every Accumulo scan and every write show up here while it runs.");
     const notes = el("div", "rya-trace-notes");
     const plans = el("div", "rya-trace-plans");
-    const table = el("table", "rya-trace-ops");
-    const thead = el("thead");
-    const headRow = el("tr");
-    for (const h of ["#", "+ms", "Operation", "Table", "What", "Entries", "ms"]) {
-        headRow.appendChild(el("th", null, h));
-    }
-    thead.appendChild(headRow);
-    const tbody = el("tbody");
-    table.append(thead, tbody);
+    const ops = el("div", "rya-trace-cards");
     const skippedNote = el("div", "rya-trace-skipped");
     const summary = el("div", "rya-trace-summary");
-    body.append(notes, plans, table, skippedNote, summary);
+    body.append(hint, notes, plans, ops, skippedNote, summary);
     panel.append(head, body);
+    tab.replaceChildren(el("span", null, "Accumulo trace"));
 
-    toggle.addEventListener("click", () => {
-        const open = body.hidden;
-        body.hidden = !open;
-        toggle.textContent = open ? "▾" : "▸";
-        toggle.setAttribute("aria-expanded", String(open));
+    // ---- layout ----
+
+    function maxWidth() {
+        return Math.max(MIN_WIDTH, Math.floor(window.innerWidth * 0.75));
+    }
+
+    function applyWidth(w) {
+        width = Math.round(Math.min(Math.max(w, MIN_WIDTH), maxWidth()));
+        panel.style.width = width + "px";
+        resizer.setAttribute("aria-valuenow", String(width));
+        resizer.setAttribute("aria-valuemax", String(maxWidth()));
+    }
+
+    let relayoutPending = false;
+
+    /** The editor, the results and the map have to notice their new width. */
+    function relayout() {
+        if (relayoutPending) {
+            return;
+        }
+        relayoutPending = true;
+        window.requestAnimationFrame(() => {
+            relayoutPending = false;
+            window.dispatchEvent(new Event("resize"));
+        });
+    }
+
+    function layout() {
+        panel.hidden = !enabled || folded;
+        resizer.hidden = panel.hidden;
+        tab.hidden = !enabled || !folded;
+        relayout();
+    }
+
+    function setBarHeight() {
+        document.documentElement.style.setProperty("--rya-bar-height", bar.offsetHeight + "px");
+    }
+
+    window.addEventListener("resize", () => {
+        setBarHeight();
+        if (width > maxWidth()) {
+            applyWidth(width);
+        }
+    });
+    setBarHeight();
+    applyWidth(width);
+
+    fold.addEventListener("click", () => {
+        folded = true;
+        save(FOLDED_KEY, "yes");
+        layout();
+        tab.focus();
+    });
+    tab.addEventListener("click", () => {
+        folded = false;
+        save(FOLDED_KEY, "no");
+        layout();
+        fold.focus();
+    });
+
+    let drag = null;
+    resizer.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        resizer.setPointerCapture(e.pointerId);
+        drag = { x: e.clientX, width: width };
+        document.body.classList.add("rya-resizing");
+    });
+    resizer.addEventListener("pointermove", (e) => {
+        if (drag) {
+            applyWidth(drag.width + drag.x - e.clientX);
+        }
+    });
+    function endDrag() {
+        if (!drag) {
+            return;
+        }
+        drag = null;
+        document.body.classList.remove("rya-resizing");
+        save(WIDTH_KEY, String(width));
+        relayout();
+    }
+    resizer.addEventListener("pointerup", endDrag);
+    resizer.addEventListener("pointercancel", endDrag);
+    resizer.addEventListener("dblclick", () => {
+        applyWidth(DEFAULT_WIDTH);
+        save(WIDTH_KEY, String(width));
+        relayout();
+    });
+    resizer.addEventListener("keydown", (e) => {
+        const next = { ArrowLeft: width + STEP, ArrowRight: width - STEP, Home: MIN_WIDTH, End: maxWidth() }[e.key];
+        if (next !== undefined) {
+            e.preventDefault();
+            applyWidth(next);
+            save(WIDTH_KEY, String(width));
+            relayout();
+        }
     });
 
     // ---- state ----
@@ -119,8 +242,7 @@
     }
 
     function showTotals() {
-        const parts = [plural(live.scans, "scan"), plural(live.entries, "entry").replace("entrys", "entries"),
-            fmt(live.ms, 1) + " ms in Accumulo"];
+        const parts = [plural(live.scans, "scan"), entries(live.entries), fmt(live.ms, 1) + " ms in Accumulo"];
         if (live.mutations) {
             parts.push(plural(live.mutations, "mutation"));
         }
@@ -130,9 +252,10 @@
     function reset() {
         notes.replaceChildren();
         plans.replaceChildren();
-        tbody.replaceChildren();
+        ops.replaceChildren();
         summary.replaceChildren();
         skippedNote.textContent = "";
+        hint.hidden = true;
         rows = new Map();
         rowsShown = 0;
         rowsSkipped = 0;
@@ -145,6 +268,19 @@
             source.close();
             source = null;
         }
+        if (clock) {
+            window.clearInterval(clock);
+            clock = null;
+        }
+        tab.classList.remove("running");
+    }
+
+    /** While a query runs, the status shows for how long, so the panel never looks stuck. */
+    function startClock() {
+        startedAt = performance.now();
+        clock = window.setInterval(() => {
+            setStatus("running · " + fmt((performance.now() - startedAt) / 1000, 1) + " s", "running");
+        }, 200);
     }
 
     function newId() {
@@ -153,37 +289,47 @@
         return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
     }
 
-    // ---- rows ----
+    // ---- operations: one card each ----
 
-    function addRow(cells) {
+    /** A card: "#id  op  table  +at ms ........ figures", then the details. */
+    function addCard(kind, id, op, table, at, details) {
         if (rowsShown >= MAX_ROWS) {
             rowsSkipped++;
             skippedNote.textContent = plural(rowsSkipped, "more operation") + " not listed; the summary counts them all.";
             return null;
         }
         rowsShown++;
-        const tr = el("tr");
-        for (const c of cells) {
-            tr.appendChild(c);
+        const card = el("div", "rya-trace-card " + kind);
+        const top = el("div", "rya-trace-card-head");
+        if (id !== null) {
+            top.appendChild(el("span", "rya-trace-id", "#" + id));
         }
-        tbody.appendChild(tr);
-        return tr;
+        top.appendChild(el("span", "rya-trace-op", op));
+        top.appendChild(el("span", "rya-trace-table", table));
+        top.appendChild(el("span", "rya-trace-at", "+" + fmt(at, 1) + " ms"));
+        const figures = el("span", "rya-trace-figures");
+        const count = el("span", "rya-trace-count", "…");
+        const ms = el("span", "rya-trace-ms", "");
+        figures.append(count, ms);
+        top.appendChild(figures);
+        card.append(top, details);
+        ops.appendChild(card);
+        return { card: card, details: details, count: count, ms: ms, live: null };
     }
 
-    function what(event) {
-        const td = el("td", "rya-trace-what");
+    function details(event) {
+        const box = el("div", "rya-trace-what");
         if (event.reason) {
-            td.appendChild(el("div", "rya-trace-reason", event.reason));
+            box.appendChild(el("div", "rya-trace-reason", event.reason));
         }
         const ranges = event.ranges || [];
         const listed = ranges.slice(0, RANGES_SHOWN);
         for (const r of listed) {
-            td.appendChild(code("div", "rya-trace-range", r));
+            box.appendChild(code("div", "rya-trace-range", r));
         }
         if (event.rangeCount > listed.length) {
             const more = el("details", "rya-trace-more");
-            more.appendChild(el("summary", null, (event.rangeCount - listed.length) + " more range"
-                + (event.rangeCount - listed.length === 1 ? "" : "s")));
+            more.appendChild(el("summary", null, plural(event.rangeCount - listed.length, "more range")));
             for (const r of ranges.slice(RANGES_SHOWN)) {
                 more.appendChild(code("div", "rya-trace-range", r));
             }
@@ -191,33 +337,57 @@
                 more.appendChild(el("div", "rya-trace-dim", "(the server lists the first " + ranges.length + " of "
                     + fmt(event.rangeCount) + ")"));
             }
-            td.appendChild(more);
+            box.appendChild(more);
         }
-        const extra = [];
         for (const c of event.columns || []) {
-            extra.push(c);
+            box.appendChild(code("div", "rya-trace-dim", c));
         }
         for (const i of event.iterators || []) {
-            extra.push("iterator " + i);
+            box.appendChild(code("div", "rya-trace-dim", "iterator " + i));
         }
         if (event.auths) {
-            extra.push("authorizations " + event.auths);
+            box.appendChild(el("div", "rya-trace-dim", "authorizations " + event.auths));
         }
-        for (const x of extra) {
-            td.appendChild(code("div", "rya-trace-dim", x));
-        }
-        return td;
+        return box;
     }
 
     function onScan(event) {
         live.scans++;
         showTotals();
-        const entries = el("td", "rya-trace-num", "…");
-        const ms = el("td", "rya-trace-num", "…");
-        const tr = addRow([el("td", "rya-trace-num", event.id), el("td", "rya-trace-num", fmt(event.at, 1)),
-            el("td", "rya-trace-op", event.op), el("td", "rya-trace-table", event.table), what(event), entries, ms]);
-        if (tr) {
-            rows.set(event.id, { entries: entries, ms: ms });
+        const row = addCard("scan", event.id, event.op, event.table, event.at, details(event));
+        if (row) {
+            rows.set(event.id, row);
+        }
+    }
+
+    /** The scans still running: entries so far, time, the last row read, any wait. */
+    function onProgress(event) {
+        totals.textContent = plural(event.scansSoFar, "scan") + " (" + fmt(event.openScans) + " running) · "
+            + fmt(event.entriesSoFar) + " entries so far";
+        for (const p of event.scans) {
+            const row = rows.get(p.id);
+            if (!row) {
+                continue;
+            }
+            row.card.classList.add("rya-trace-running");
+            row.count.textContent = fmt(p.entries) + " so far";
+            row.ms.textContent = fmt(p.ms, 1) + " ms";
+            if (!row.live) {
+                row.live = el("div", "rya-trace-live");
+                row.details.appendChild(row.live);
+            }
+            const parts = [];
+            if (p.waitingMs >= 1000) {
+                parts.push(el("div", "rya-trace-waiting", "waiting " + fmt(p.waitingMs / 1000, 1) + " s for the tablet servers"));
+            }
+            if (p.position) {
+                const at = code("div", "rya-trace-position", p.position);
+                at.insertBefore(el("span", "rya-trace-dim", "at "), at.firstChild);
+                parts.push(at);
+            } else {
+                parts.push(el("div", "rya-trace-dim", "no entry yet"));
+            }
+            row.live.replaceChildren(...parts);
         }
     }
 
@@ -231,35 +401,42 @@
         if (!row) {
             return;
         }
-        row.entries.textContent = event.entries < 0 ? "—" : fmt(event.entries);
-        row.ms.textContent = fmt(event.ms, 1);
+        row.card.classList.remove("rya-trace-running");
+        if (row.live) {
+            row.live.remove();
+            row.live = null;
+        }
+        row.count.textContent = event.entries < 0 ? "" : entries(event.entries);
+        row.ms.textContent = fmt(event.ms, 1) + " ms";
         if (event.how !== "exhausted" && event.how !== "deleted") {
-            row.entries.title = "The scan was " + event.how + " before it reached its end";
-            row.entries.textContent += " (" + event.how + ")";
+            row.count.textContent += " (" + event.how + ")";
+            row.count.title = "The scan was " + event.how + " before it reached its end";
         }
     }
 
     function onFlush(event) {
         let mutations = 0;
-        const td = el("td", "rya-trace-what");
-        td.appendChild(el("div", "rya-trace-reason", "buffered writes sent to the tablet servers"));
+        const box = el("div", "rya-trace-what");
+        box.appendChild(el("div", "rya-trace-reason", "buffered writes sent to the tablet servers"));
         for (const t of event.tables) {
             mutations += t.mutations;
-            td.appendChild(el("div", "rya-trace-range", t.table + ": " + plural(t.mutations, "mutation") + ", "
+            box.appendChild(el("div", "rya-trace-range", t.table + ": " + plural(t.mutations, "mutation") + ", "
                 + plural(t.cells, "cell") + (t.deletes ? " (" + fmt(t.deletes) + " deletes)" : "") + ", " + fmt(t.bytes) + " bytes"));
         }
         live.mutations += mutations;
         live.ms += event.ms;
         showTotals();
-        addRow([el("td", "rya-trace-num", ""), el("td", "rya-trace-num", fmt(event.at, 1)), el("td", "rya-trace-op", "flush"),
-            el("td", "rya-trace-table", event.tables.length + " tables"), td, el("td", "rya-trace-num", fmt(mutations)),
-            el("td", "rya-trace-num", fmt(event.ms, 1))]);
+        const row = addCard("flush", null, "flush", plural(event.tables.length, "table"), event.at, box);
+        if (row) {
+            row.count.textContent = plural(mutations, "mutation");
+            row.ms.textContent = fmt(event.ms, 1) + " ms";
+        }
     }
 
     function onSummary(event) {
         live = { scans: event.scans, entries: event.entries, ms: event.scanMs, mutations: event.mutations };
         showTotals();
-        const t = el("table", "rya-trace-ops rya-trace-totals-table");
+        const t = el("table", "rya-trace-totals-table");
         const h = el("tr");
         for (const name of ["Table", "Scans", "Ranges", "Entries", "Scan ms", "Mutations", "Cells", "Deletes", "Bytes"]) {
             h.appendChild(el("th", null, name));
@@ -276,7 +453,9 @@
             tb.appendChild(r);
         }
         t.append(th, tb);
-        summary.replaceChildren(el("h3", null, "Per table, at " + fmt(event.at, 1) + " ms"), t);
+        const scroll = el("div", "rya-trace-scroll");
+        scroll.appendChild(t);
+        summary.replaceChildren(el("h3", null, "Per table, at " + fmt(event.at, 1) + " ms"), scroll);
         if (event.omitted > 0) {
             summary.appendChild(el("div", "rya-trace-dim", plural(event.omitted, "operation")
                 + " were counted but not reported one by one."));
@@ -308,25 +487,39 @@
         });
     }
 
+    // ---- API for rya-ui.js ----
+
+    /** Shows the panel (or its tab) while the Trace switch is on. */
+    function setEnabled(on) {
+        enabled = on;
+        if (!on) {
+            stop();
+        }
+        layout();
+    }
+
     /** Starts showing a new trace and returns its id, to send as trace=. */
     function begin() {
         close();
         reset();
-        panel.hidden = false;
         ended = false;
         setStatus("running", "running");
+        startClock();
+        tab.classList.add("running");
         const id = newId();
         source = new EventSource(new URL("sparql/trace/" + id, window.location.href).href);
         listen("note", onNote);
         listen("plan", onPlan);
         listen("scan", onScan);
+        listen("progress", onProgress);
         listen("scan-end", onScanEnd);
         listen("flush", onFlush);
         listen("summary", onSummary);
         listen("end", (event) => {
+            const took = " · " + fmt((performance.now() - startedAt) / 1000, 1) + " s";
             ended = true;
             close();
-            setStatus(event.status === "ok" ? "done" : event.status, event.status === "ok" ? "ok" : "failed");
+            setStatus((event.status === "ok" ? "done" : event.status) + took, event.status === "ok" ? "ok" : "failed");
             if (event.dropped > 0) {
                 skippedNote.textContent = plural(event.dropped, "event") + " were dropped before this page connected.";
             }
@@ -341,11 +534,14 @@
         return id;
     }
 
-    /** Stops listening (tracing switched off). */
+    /** Stops listening. */
     function stop() {
+        if (!ended) {
+            setStatus("stopped", "failed");
+        }
         close();
         ended = true;
     }
 
-    window.RyaTrace = { begin: begin, stop: stop };
+    window.RyaTrace = { begin: begin, stop: stop, setEnabled: setEnabled };
 })();
