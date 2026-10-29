@@ -171,16 +171,38 @@
 
     // Fired synchronously before the request is built: put the current authorizations, timeout
     // and trace id on the tab, keeping any other request arguments set in the tab's settings.
+    // A query run without the trace drops the tab's old trace, which no longer matches its results.
     yasgui.on("queryBefore", (instance, tab) => {
         const current = tab.getRequestConfig().args;
         const others = (Array.isArray(current) ? current : [])
             .filter((a) => a.name !== "auths" && a.name !== "timeout" && a.name !== "trace");
         const args = others.concat(requestArgs());
         if (traceInput.checked) {
-            args.push({ name: "trace", value: window.RyaTrace.begin() });
+            args.push({ name: "trace", value: window.RyaTrace.begin(tab.getId()) });
+        } else {
+            window.RyaTrace.drop(tab.getId());
         }
         tab.setRequestConfig({ args: args });
     });
+
+    // Each tab keeps its own trace, and the panel shows the selected tab's. YASGUI fires
+    // "tabSelect" before it records the new selection, and a tab opened by addTab (the Examples
+    // menu, the + button) is selected after "tabAdd" without any "tabSelect", so the panel
+    // catches up once YASGUI is done.
+    function showSelectedTrace() {
+        const tab = yasgui.getTab();
+        window.RyaTrace.show(tab ? tab.getId() : null);
+    }
+    function showSelectedTraceSoon() {
+        window.setTimeout(showSelectedTrace, 0);
+    }
+    yasgui.on("tabSelect", showSelectedTraceSoon);
+    yasgui.on("tabAdd", showSelectedTraceSoon);
+    yasgui.on("tabClose", (instance, tab) => {
+        window.RyaTrace.drop(tab.getId());
+        showSelectedTraceSoon();
+    });
+    showSelectedTrace();
 
     // ---- examples ----
 

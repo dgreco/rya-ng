@@ -1430,8 +1430,9 @@ sequenceDiagram
 - **Contents:** the notes (the query and its authorizations), the two plans, one card per scan or flush, and a per-table summary.
 - **While the query runs:** the header shows a running clock, and each running scan's card shows its entries so far, the row it has reached, and any wait for the tablet servers.
 - **Resizing:** the divider before it resizes it by dragging or with the arrow keys.
-- **Folding:** the **⟩** button folds it into a vertical tab, which blinks while a traced query runs.
-- **Memory and narrow screens:** the width and the folded state are kept in `localStorage`. Below 900 pixels the panel goes under the results. It writes everything as text, and shows the separator bytes as small badges. It keeps one stream at a time: starting a query, or receiving `end`, closes the previous one.
+- **Folding:** the **⟩** button folds it into a vertical tab, which blinks while the selected tab's traced query runs.
+- **One trace per query tab:** the panel shows the selected tab's trace and switches with the tab. A tab keeps its stream open until `end` arrives, its next query starts, or it closes, so a query in a tab that isn't selected keeps being traced. A query run with Trace off clears its tab's trace.
+- **Memory and narrow screens:** the width and the folded state are kept in `localStorage`. Below 900 pixels the panel goes under the results. It writes everything as text, and shows the separator bytes as small badges.
 
 ---
 

@@ -203,8 +203,9 @@ A trace shows how a query or an update maps onto Accumulo, live:
 
 **On the query page:** tick **Trace** in the header.
 - **The panel:** a panel on the right of the editor and results fills in while each query runs. Its header shows how long the query has been running, and a running scan's card shows where it has got to.
+- **Query tabs:** each query tab has its own trace, and the panel shows the selected tab's. A query keeps being traced while you look at another tab.
 - **Resizing:** drag its left edge (or focus it and use the arrow keys; double-click resets the width).
-- **Folding:** fold it into a tab on the right edge with **⟩**; the tab shows a dot while a traced query runs.
+- **Folding:** fold it into a tab on the right edge with **⟩**; the tab shows a dot while the selected tab's traced query runs.
 - **Memory:** the browser remembers the width and whether the panel is folded. On narrow screens the panel sits under the results.
 
 **Over HTTP:** pick a random id of 16 to 64 letters, digits, `-` or `_`. Read the stream, and send the request with the same id:
