@@ -28,9 +28,9 @@ import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 
-import io.github.dgreco.rya.accumulo.index.TextIndex;
-import io.github.dgreco.rya.accumulo.index.text.TextQuery;
-import io.github.dgreco.rya.accumulo.index.text.TextQueryException;
+import io.github.dgreco.rya.store.index.TextIndex;
+import io.github.dgreco.rya.store.index.text.TextQuery;
+import io.github.dgreco.rya.store.index.text.TextQueryException;
 
 /**
  * {@code text:matches(?literal, "query")}: true when a string literal satisfies a full-text query

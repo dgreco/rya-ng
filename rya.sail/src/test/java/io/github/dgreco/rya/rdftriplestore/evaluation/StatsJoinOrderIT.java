@@ -26,9 +26,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 import io.github.dgreco.rya.RyaSailITBase;
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRdfEvalStatsDAO;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreEvalStatsDAO;
+import io.github.dgreco.rya.store.RyaStoreDAO;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStoreConnection.StoreTripleSource;
@@ -53,8 +53,8 @@ public class StatsJoinOrderIT extends RyaSailITBase {
     private static final String QUERY =
             "SELECT * WHERE { ?s <urn:common> ?o . ?s <urn:rare> ?x }";
 
-    private AccumuloRdfConfiguration conf;
-    private AccumuloRyaDAO dao;
+    private StoreRdfConfiguration conf;
+    private RyaStoreDAO dao;
 
     @BeforeEach
     public void load() {
@@ -75,7 +75,7 @@ public class StatsJoinOrderIT extends RyaSailITBase {
 
     @Test
     public void ryaStatisticsPutTheRarePatternFirst() throws Exception {
-        final AccumuloRdfEvalStatsDAO stats = new AccumuloRdfEvalStatsDAO(getClient(), conf);
+        final RyaStoreEvalStatsDAO stats = new RyaStoreEvalStatsDAO(getStore(), conf);
         stats.init();
         assertEquals(50.0, stats.getCardinality(conf, io.github.dgreco.rya.api.persist.RdfEvalStatsDAO.CARDINALITY_OF.PREDICATE,
                 List.of(org.eclipse.rdf4j.model.impl.SimpleValueFactory.getInstance().createIRI("urn:common"))));
@@ -92,7 +92,7 @@ public class StatsJoinOrderIT extends RyaSailITBase {
 
     /** @return the predicates of the optimized query's statement patterns, in evaluation order. */
     private List<String> joinOrder(final EvaluationStatistics statistics) {
-        final StoreTripleSource<AccumuloRdfConfiguration> source = new StoreTripleSource<>(conf, dao);
+        final StoreTripleSource<StoreRdfConfiguration> source = new StoreTripleSource<>(conf, dao);
         final RyaEvaluationStrategy strategy = new RyaEvaluationStrategy(source, null, null, statistics);
         strategy.setOptimizerPipeline(new RyaQueryOptimizerPipeline(strategy, source, statistics,
                 new InferenceOptimizer(conf, null)));

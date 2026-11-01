@@ -32,8 +32,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import io.github.dgreco.rya.RyaSailITBase;
-import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
-import io.github.dgreco.rya.accumulo.trace.TraceEvent;
+import io.github.dgreco.rya.store.trace.StoreTrace;
+import io.github.dgreco.rya.store.trace.TraceEvent;
 
 public class QueryTraceIT extends RyaSailITBase {
     private static final String JOIN = "SELECT ?f ?a WHERE { <urn:alice> <urn:knows> ?f . ?f <urn:age> ?a }";
@@ -65,7 +65,7 @@ public class QueryTraceIT extends RyaSailITBase {
         final Set<String> untraced = results(JOIN);
         final List<TraceEvent> events = new ArrayList<>();
         final Set<String> traced;
-        try (AccumuloTrace.Scope scope = AccumuloTrace.start(events::add)) {
+        try (StoreTrace.Scope scope = StoreTrace.start(events::add)) {
             traced = results(JOIN);
         }
         assertEquals(untraced, traced);
@@ -83,13 +83,13 @@ public class QueryTraceIT extends RyaSailITBase {
                 && s.reason().contains("› batched lookup of ")), scans.toString());
         final TraceEvent.Summary summary = (TraceEvent.Summary) events.get(events.size() - 1);
         assertEquals(scans.size(), summary.scans());
-        assertTrue(!AccumuloTrace.isActive());
+        assertTrue(!StoreTrace.isActive());
     }
 
     @Test
     public void anUpdateReportsItsWrites() {
         final List<TraceEvent> events = new ArrayList<>();
-        try (AccumuloTrace.Scope scope = AccumuloTrace.start(events::add)) {
+        try (StoreTrace.Scope scope = StoreTrace.start(events::add)) {
             conn.prepareUpdate("INSERT DATA { <urn:bob> <urn:age> 30 }").execute();
         }
         assertTrue(events.stream().anyMatch(e -> e instanceof TraceEvent.Flush f

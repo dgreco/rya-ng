@@ -18,40 +18,32 @@
  */
 package io.github.dgreco.rya.accumulo;
 
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Map.Entry;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.apache.accumulo.core.client.IteratorSetting;
 import org.apache.accumulo.core.security.Authorizations;
 import org.apache.hadoop.conf.Configuration;
-import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 
 import com.google.common.base.Preconditions;
 
-public class AccumuloRdfConfiguration extends RdfCloudTripleStoreConfiguration {
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.spi.ServerIterator;
+
+/**
+ * Settings of a store on Accumulo: the neutral ones of {@link StoreRdfConfiguration}, plus the
+ * Accumulo credentials and scan iterators.
+ */
+public class AccumuloRdfConfiguration extends StoreRdfConfiguration {
 
     public static final String CLOUDBASE_INSTANCE = "sc.cloudbase.instancename";
     public static final String CLOUDBASE_ZOOKEEPERS = "sc.cloudbase.zookeepers";
     public static final String CLOUDBASE_USER = "sc.cloudbase.username";
     public static final String CLOUDBASE_PASSWORD = "sc.cloudbase.password";
 
-    public static final String MAXRANGES_SCANNER = "ac.query.maxranges";
 
-    public static final String CONF_FLUSH_EACH_UPDATE = "ac.dao.flush";
 
-    /** When true (the default), every write also updates the cardinality counters in the eval table. */
-    public static final String CONF_MAINTAIN_STATS = "ac.stats.maintain";
 
-    public static final String ITERATOR_SETTINGS_SIZE = "ac.iterators.size";
-    public static final String ITERATOR_SETTINGS_BASE = "ac.iterators.%d.";
-    public static final String ITERATOR_SETTINGS_NAME = ITERATOR_SETTINGS_BASE + "name";
-    public static final String ITERATOR_SETTINGS_CLASS = ITERATOR_SETTINGS_BASE + "iteratorClass";
-    public static final String ITERATOR_SETTINGS_PRIORITY = ITERATOR_SETTINGS_BASE + "priority";
-    public static final String ITERATOR_SETTINGS_OPTIONS_SIZE = ITERATOR_SETTINGS_BASE + "optionsSize";
-    public static final String ITERATOR_SETTINGS_OPTIONS_KEY = ITERATOR_SETTINGS_BASE + "option.%d.name";
-    public static final String ITERATOR_SETTINGS_OPTIONS_VALUE = ITERATOR_SETTINGS_BASE + "option.%d.value";
 
     public AccumuloRdfConfiguration() {
         super();
@@ -230,78 +222,22 @@ public class AccumuloRdfConfiguration extends RdfCloudTripleStoreConfiguration {
         return new Authorizations(auths);
     }
 
-    public void setMaxRangesForScanner(final Integer max) {
-        setInt(MAXRANGES_SCANNER, max);
-    }
-
-    public Integer getMaxRangesForScanner() {
-        return getInt(MAXRANGES_SCANNER, 2);
-    }
-
-    public boolean flushEachUpdate(){
-        return getBoolean(CONF_FLUSH_EACH_UPDATE, true);
-    }
-
-    public void setFlush(final boolean flush){
-        setBoolean(CONF_FLUSH_EACH_UPDATE, flush);
-    }
-
-    public void setAdditionalIterators(final IteratorSetting... additionalIterators){
-        //TODO do we need to worry about cleaning up
-        this.set(ITERATOR_SETTINGS_SIZE, Integer.toString(additionalIterators.length));
-        int i = 0;
-        for(final IteratorSetting iterator : additionalIterators) {
-            this.set(String.format(ITERATOR_SETTINGS_NAME, i), iterator.getName());
-            this.set(String.format(ITERATOR_SETTINGS_CLASS, i), iterator.getIteratorClass());
-            this.set(String.format(ITERATOR_SETTINGS_PRIORITY, i), Integer.toString(iterator.getPriority()));
-            final Map<String, String> options = iterator.getOptions();
-
-            this.set(String.format(ITERATOR_SETTINGS_OPTIONS_SIZE, i), Integer.toString(options.size()));
-            final Iterator<Entry<String, String>> it = options.entrySet().iterator();
-            int j = 0;
-            while(it.hasNext()) {
-                final Entry<String, String> item = it.next();
-                this.set(String.format(ITERATOR_SETTINGS_OPTIONS_KEY, i, j), item.getKey());
-                this.set(String.format(ITERATOR_SETTINGS_OPTIONS_VALUE, i, j), item.getValue());
-                j++;
-            }
-            i++;
+    /** Adds Accumulo scan iterators to every read. */
+    public void setAdditionalIterators(final IteratorSetting... additionalIterators) {
+        final List<ServerIterator> iterators = new ArrayList<>(additionalIterators.length);
+        for (final IteratorSetting it : additionalIterators) {
+            iterators.add(new ServerIterator(it.getPriority(), it.getName(), it.getIteratorClass(), it.getOptions()));
         }
+        setServerIterators(iterators);
     }
 
-    public IteratorSetting[] getAdditionalIterators(){
-        final int size = Integer.valueOf(this.get(ITERATOR_SETTINGS_SIZE, "0"));
-        if(size == 0) {
-            return new IteratorSetting[0];
+    public IteratorSetting[] getAdditionalIterators() {
+        final List<ServerIterator> iterators = getServerIterators();
+        final IteratorSetting[] settings = new IteratorSetting[iterators.size()];
+        for (int i = 0; i < settings.length; i++) {
+            final ServerIterator it = iterators.get(i);
+            settings[i] = new IteratorSetting(it.priority(), it.name(), it.className(), it.options());
         }
-
-        final IteratorSetting[] settings = new IteratorSetting[size];
-        for(int i = 0; i < size; i++) {
-            final String name = this.get(String.format(ITERATOR_SETTINGS_NAME, i));
-            final String iteratorClass = this.get(String.format(ITERATOR_SETTINGS_CLASS, i));
-            final int priority = Integer.valueOf(this.get(String.format(ITERATOR_SETTINGS_PRIORITY, i)));
-
-            final int optionsSize = Integer.valueOf(this.get(String.format(ITERATOR_SETTINGS_OPTIONS_SIZE, i)));
-            final Map<String, String> options = new HashMap<>(optionsSize);
-            for(int j = 0; j < optionsSize; j++) {
-                final String key = this.get(String.format(ITERATOR_SETTINGS_OPTIONS_KEY, i, j));
-                final String value = this.get(String.format(ITERATOR_SETTINGS_OPTIONS_VALUE, i, j));
-                options.put(key, value);
-            }
-            settings[i] = new IteratorSetting(priority, name, iteratorClass, options);
-        }
-
         return settings;
-    }
-
-    /**
-     * @return true if writes keep the eval-table cardinality counters up to date. Default true.
-     */
-    public boolean isMaintainStats() {
-        return getBoolean(CONF_MAINTAIN_STATS, true);
-    }
-
-    public void setMaintainStats(final boolean maintain) {
-        setBoolean(CONF_MAINTAIN_STATS, maintain);
     }
 }

@@ -26,9 +26,10 @@ import org.apache.accumulo.core.client.AccumuloClient;
 import org.apache.accumulo.core.security.Authorizations;
 import org.apache.hadoop.io.Text;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
-import io.github.dgreco.rya.accumulo.index.IndexType;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.accumulo.AccumuloStore;
+import io.github.dgreco.rya.store.RyaStoreDAO;
+import io.github.dgreco.rya.store.index.IndexType;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.loader.gen.EntityGenerator;
 import io.github.dgreco.rya.loader.gen.ReferenceData;
@@ -44,9 +45,9 @@ public final class Prepare {
 
     public static void run(final AccumuloClient client, final LoaderOptions o, final PrintStream out) throws Exception {
         StoreCheck.forPrepare(client, o);
-        final AccumuloRdfConfiguration conf = o.rdfConf();
+        final StoreRdfConfiguration conf = o.rdfConf();
         final EntityGenerator generator = new EntityGenerator(o.genConfig());
-        final AccumuloRyaDAO dao = new AccumuloRyaDAO(client, conf);
+        final RyaStoreDAO dao = new RyaStoreDAO(AccumuloStore.wrap(client), conf);
         dao.init();
         try {
             for (final IndexType type : IndexType.values()) {

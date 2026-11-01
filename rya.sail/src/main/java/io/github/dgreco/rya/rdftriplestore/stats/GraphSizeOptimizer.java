@@ -32,7 +32,7 @@ import org.eclipse.rdf4j.query.algebra.Var;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryOptimizer;
 import org.eclipse.rdf4j.query.algebra.helpers.AbstractSimpleQueryModelVisitor;
 
-import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
+import io.github.dgreco.rya.store.trace.StoreTrace;
 import io.github.dgreco.rya.rdftriplestore.utils.FixedStatementPattern;
 
 /**
@@ -78,7 +78,7 @@ public class GraphSizeOptimizer implements QueryOptimizer {
         }
         final List<Statement> statements = new ArrayList<>();
         final Map<String, Long> read;
-        try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "stats:approxSize")) {
+        try (StoreTrace.Reason why = StoreTrace.reason(() -> "stats:approxSize")) {
             read = sizes.get();
         }
         for (final Map.Entry<String, Long> e : read.entrySet()) {

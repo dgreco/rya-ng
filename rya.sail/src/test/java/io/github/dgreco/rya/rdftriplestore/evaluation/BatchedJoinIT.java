@@ -29,8 +29,8 @@ import java.util.List;
 import java.util.Map;
 
 import io.github.dgreco.rya.RyaSailITBase;
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreDAO;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStoreConnection.StoreTripleSource;
 import io.github.dgreco.rya.rdftriplestore.inference.InferenceOptimizer;
@@ -163,8 +163,8 @@ public class BatchedJoinIT extends RyaSailITBase {
     public void oneBatchReplacesThePerRowLookups() {
         final String query = "SELECT * WHERE { ?a <urn:knows> ?b . ?b <urn:name> ?n }";
 
-        final StoreTripleSource<AccumuloRdfConfiguration> perRow = evaluate(query, 1);
-        final StoreTripleSource<AccumuloRdfConfiguration> batched = evaluate(query, 1000);
+        final StoreTripleSource<StoreRdfConfiguration> perRow = evaluate(query, 1);
+        final StoreTripleSource<StoreRdfConfiguration> batched = evaluate(query, 1000);
 
         assertEquals(0, perRow.getPrefetchCount());
         assertEquals(0, perRow.getCacheHitCount());
@@ -182,7 +182,7 @@ public class BatchedJoinIT extends RyaSailITBase {
     }
 
     private SailRepository repository(final int batchSize, final boolean stats, final boolean inference) {
-        final AccumuloRdfConfiguration conf = newConf();
+        final StoreRdfConfiguration conf = newConf();
         conf.setJoinBatchSize(batchSize);
         conf.setUseStats(stats);
         final SailRepository repo = new SailRepository(newStore(conf, inference));
@@ -211,11 +211,11 @@ public class BatchedJoinIT extends RyaSailITBase {
     }
 
     /** Runs the query straight through a strategy so the triple source's counters can be read. */
-    private StoreTripleSource<AccumuloRdfConfiguration> evaluate(final String query, final int batchSize) {
-        final AccumuloRdfConfiguration conf = newConf();
+    private StoreTripleSource<StoreRdfConfiguration> evaluate(final String query, final int batchSize) {
+        final StoreRdfConfiguration conf = newConf();
         conf.setJoinBatchSize(batchSize);
-        final AccumuloRyaDAO dao = newDao(conf);
-        final StoreTripleSource<AccumuloRdfConfiguration> source = new StoreTripleSource<>(conf, dao);
+        final RyaStoreDAO dao = newDao(conf);
+        final StoreTripleSource<StoreRdfConfiguration> source = new StoreTripleSource<>(conf, dao);
         final RyaDefaultStatistics stats = new RyaDefaultStatistics();
         final RyaEvaluationStrategy strategy = new RyaEvaluationStrategy(source, null, null, stats);
         strategy.setOptimizerPipeline(new RyaQueryOptimizerPipeline(strategy, source, stats,

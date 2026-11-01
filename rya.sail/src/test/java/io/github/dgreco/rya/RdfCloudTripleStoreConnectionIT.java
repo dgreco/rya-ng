@@ -28,8 +28,8 @@ import static io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.NAMESPACE;
 import java.io.InputStream;
 import java.util.List;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreDAO;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;

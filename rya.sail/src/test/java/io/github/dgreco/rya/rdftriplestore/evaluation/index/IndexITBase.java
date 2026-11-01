@@ -35,8 +35,8 @@ import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.junit.jupiter.api.AfterEach;
 
 import io.github.dgreco.rya.RyaSailITBase;
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.index.IndexSearcher;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.index.IndexSearcher;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 
 /** Helpers for search tests: a store with both indexes, and on/off comparisons. */
@@ -59,14 +59,14 @@ abstract class IndexITBase extends RyaSailITBase {
     }
 
     /** A configuration with both indexes on. */
-    AccumuloRdfConfiguration indexedConf() {
-        final AccumuloRdfConfiguration conf = newConf();
+    StoreRdfConfiguration indexedConf() {
+        final StoreRdfConfiguration conf = newConf();
         conf.setTextIndex(true);
         conf.setGeoIndex(true);
         return conf;
     }
 
-    SailRepository open(final AccumuloRdfConfiguration conf, final boolean inference) {
+    SailRepository open(final StoreRdfConfiguration conf, final boolean inference) {
         final SailRepository repo = new SailRepository(newStore(conf, inference));
         repo.init();
         repositories.add(repo);

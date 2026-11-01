@@ -23,9 +23,9 @@ import java.util.List;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.junit.jupiter.api.Test;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.index.IndexType;
-import io.github.dgreco.rya.accumulo.index.IndexVerifier;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.index.IndexType;
+import io.github.dgreco.rya.store.index.IndexVerifier;
 
 /** SPARQL updates keep the indexes exactly in step with the stored statements. */
 class IndexUpdateIT extends IndexITBase {
@@ -41,10 +41,10 @@ class IndexUpdateIT extends IndexITBase {
             "SELECT * WHERE { GRAPH ?g { ?s ?p ?l } FILTER(text:matches(?l, \"fox\")) }",
             "SELECT * WHERE { ?s geo:asWKT ?w FILTER(geof:sfIntersects(?w, \"POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))\"^^geo:wktLiteral)) }");
 
-    private void assertInStep(final AccumuloRdfConfiguration conf, final SailRepository repo, final String after)
+    private void assertInStep(final StoreRdfConfiguration conf, final SailRepository repo, final String after)
             throws Exception {
         for (final IndexType type : IndexType.values()) {
-            final IndexVerifier.Report report = IndexVerifier.verify(getClient(), conf, type);
+            final IndexVerifier.Report report = IndexVerifier.verify(getStore(), conf, type);
             assertTrue(report.isClean(), after + ", " + type + ": " + report);
         }
         for (final String q : QUERIES) {
@@ -54,7 +54,7 @@ class IndexUpdateIT extends IndexITBase {
 
     @Test
     void everyKindOfUpdateKeepsTheIndexesInStep() throws Exception {
-        final AccumuloRdfConfiguration conf = indexedConf();
+        final StoreRdfConfiguration conf = indexedConf();
         final SailRepository repo = open(conf, false);
         update(repo, DATA);
         assertInStep(conf, repo, "INSERT DATA");

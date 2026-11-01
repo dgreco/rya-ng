@@ -29,14 +29,14 @@ import org.eclipse.rdf4j.query.MalformedQueryException;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.junit.jupiter.api.Test;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
 
 /** Without indexes, text:matches and the geof: functions still work, by checking every candidate. */
 class SearchFunctionsNoIndexIT extends IndexITBase {
 
     @Test
     void functionsWorkWithoutIndexes() {
-        final AccumuloRdfConfiguration conf = newConf();
+        final StoreRdfConfiguration conf = newConf();
         conf.setTextIndex(false);
         conf.setGeoIndex(false);
         final SailRepository repo = open(conf, false);
@@ -53,7 +53,7 @@ class SearchFunctionsNoIndexIT extends IndexITBase {
         assertEquals(Set.of("urn:a"), subjects(assertAgrees(repo,
                 "SELECT ?s WHERE { ?s geo:asWKT ?w FILTER(geof:distance(?w, \"POINT(12.5 41.9)\"^^geo:wktLiteral, "
                         + "uom:metre) < 5000) }", false)));
-        assertFalse(getClient().tableOperations().exists(conf.getTableLayoutStrategy().getText()));
+        assertFalse(getStore().tables().exists(conf.getTableLayoutStrategy().getText()));
         final Exception e = assertThrows(Exception.class, () -> run(repo,
                 "SELECT ?s WHERE { ?s rdfs:label ?l FILTER(text:matches(?l, \"(fox\")) }", false, null));
         assertTrue(causedBy(e, MalformedQueryException.class), e.toString());

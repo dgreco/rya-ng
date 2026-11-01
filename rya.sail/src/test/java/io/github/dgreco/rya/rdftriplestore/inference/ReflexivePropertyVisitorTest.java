@@ -21,7 +21,7 @@ package io.github.dgreco.rya.rdftriplestore.inference;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.ValueFactory;
@@ -41,7 +41,7 @@ import org.junit.jupiter.api.Test;
  * Tests the methods of {@link ReflexivePropertyVisitor}.
  */
 public class ReflexivePropertyVisitorTest {
-    private final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+    private final StoreRdfConfiguration conf = new StoreRdfConfiguration();
     private static final ValueFactory VF = SimpleValueFactory.getInstance();
 
     private static final IRI ALICE = VF.createIRI("urn:Alice");

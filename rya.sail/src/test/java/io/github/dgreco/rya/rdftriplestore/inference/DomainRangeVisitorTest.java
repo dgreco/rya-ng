@@ -25,7 +25,7 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.Stack;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import io.github.dgreco.rya.rdftriplestore.utils.FixedStatementPattern;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Resource;
@@ -46,7 +46,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 public class DomainRangeVisitorTest {
-    private static final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+    private static final StoreRdfConfiguration conf = new StoreRdfConfiguration();
     private static final ValueFactory VF = SimpleValueFactory.getInstance();
     private static final IRI person = VF.createIRI("lubm:Person");
     private static final IRI advisor = VF.createIRI("lubm:advisor");

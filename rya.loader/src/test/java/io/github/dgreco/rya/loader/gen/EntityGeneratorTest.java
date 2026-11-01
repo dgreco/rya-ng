@@ -31,8 +31,8 @@ import org.eclipse.rdf4j.model.vocabulary.GEO;
 import org.eclipse.rdf4j.model.vocabulary.RDF;
 import org.junit.jupiter.api.Test;
 
-import io.github.dgreco.rya.accumulo.index.geo.GeoCells;
-import io.github.dgreco.rya.accumulo.index.geo.GeoSupport;
+import io.github.dgreco.rya.store.index.geo.GeoCells;
+import io.github.dgreco.rya.store.index.geo.GeoSupport;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.api.resolver.RyaContext;

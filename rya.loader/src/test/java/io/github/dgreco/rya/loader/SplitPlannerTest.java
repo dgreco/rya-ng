@@ -22,18 +22,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.SortedSet;
 
-import org.apache.accumulo.core.data.Mutation;
 import org.apache.hadoop.io.Text;
+
+import io.github.dgreco.rya.store.spi.RowMutation;
 import org.junit.jupiter.api.Test;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.RyaTableMutationsFactory;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaTableMutationsFactory;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.api.resolver.RyaTripleContext;
@@ -84,7 +84,7 @@ class SplitPlannerTest {
 
     @Test
     void planSplitsEveryTableAndBalancesTheMainOnes() {
-        final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+        final StoreRdfConfiguration conf = new StoreRdfConfiguration();
         conf.setTablePrefix("t_");
         conf.setTextIndex(true);
         conf.setGeoIndex(true);
@@ -104,16 +104,14 @@ class SplitPlannerTest {
             int total = 0;
             for (long e = 500_000; e < 505_000; e++) {
                 for (final RyaStatement st : generator.generate(e)) {
-                    final Collection<Mutation> rows;
+                    final RowMutation m;
                     try {
-                        rows = factory.serialize(st).get(layout);
+                        m = factory.serialize(st).get(layout);
                     } catch (final Exception ex) {
                         throw new IllegalStateException(ex);
                     }
-                    for (final Mutation m : rows) {
-                        perTablet[tablet(points, new Text(m.getRow()))]++;
-                        total++;
-                    }
+                    perTablet[tablet(points, new Text(m.row()))]++;
+                    total++;
                 }
             }
             final double fair = (double) total / perTablet.length;

@@ -27,8 +27,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreDAO;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
 import org.eclipse.rdf4j.model.IRI;
@@ -42,15 +42,15 @@ import org.junit.jupiter.api.Assertions;
 
 
 public class PropertyChainIT extends RyaSailITBase {
-    private AccumuloRyaDAO ryaDAO;
+    private RyaStoreDAO ryaDAO;
     private static final ValueFactory VF = SimpleValueFactory.getInstance();
     private String namespace = "urn:test#";
-    private AccumuloRdfConfiguration conf;
+    private StoreRdfConfiguration conf;
 
     @BeforeEach
     public void setUp() throws Exception {
         conf = newConf();
-        ryaDAO = new AccumuloRyaDAO(getClient(), null);
+        ryaDAO = new RyaStoreDAO(getStore(), null);
         ryaDAO.setConf(conf);
         ryaDAO.init();
     }

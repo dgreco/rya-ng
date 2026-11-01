@@ -25,9 +25,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.accumulo.core.client.Durability;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.spi.Durability;
 import io.github.dgreco.rya.loader.gen.EntityClass;
 import io.github.dgreco.rya.loader.gen.EntityGenerator;
 import io.github.dgreco.rya.loader.gen.GenConfig;
@@ -225,8 +225,8 @@ public final class LoaderOptions {
     }
 
     /** The store configuration for this prefix and these index settings. */
-    public AccumuloRdfConfiguration rdfConf() {
-        final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+    public StoreRdfConfiguration rdfConf() {
+        final StoreRdfConfiguration conf = new StoreRdfConfiguration();
         // dry-run needs no prefix; any prefix gives the same row bytes.
         conf.setTablePrefix(tablePrefix() == null ? "dryrun_" : tablePrefix());
         conf.setTextIndex(textIndex());

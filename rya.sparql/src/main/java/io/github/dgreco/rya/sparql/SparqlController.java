@@ -24,8 +24,8 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.accumulo.core.security.ColumnVisibility;
-import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
+import io.github.dgreco.rya.store.trace.StoreTrace;
+import io.github.dgreco.rya.store.visibility.VisibilityExpression;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStoreConnection;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.ValueFactory;
@@ -224,8 +224,8 @@ public class SparqlController {
         final TraceChannel channel = traces.forRequest(id);
         String status = "error";
         try {
-            try (AccumuloTrace.Scope scope = AccumuloTrace.start(event -> channel.publish(event.type(), event))) {
-                AccumuloTrace.note(kind, () -> text);
+            try (StoreTrace.Scope scope = StoreTrace.start(event -> channel.publish(event.type(), event))) {
+                StoreTrace.note(kind, () -> text);
                 work.run();
                 status = "ok";
             }
@@ -271,13 +271,13 @@ public class SparqlController {
                 throw new SparqlRequestException(HttpStatus.FORBIDDEN, "Per-request 'visibility' is disabled");
             }
             try {
-                new ColumnVisibility(visibility);
+                VisibilityExpression.parse(visibility);
             } catch (final IllegalArgumentException e) {
                 throw new SparqlRequestException(HttpStatus.BAD_REQUEST, "Invalid visibility expression: " + visibility);
             }
             rya.getConf().setCv(visibility);
         }
-        AccumuloTrace.note("settings", () -> {
+        StoreTrace.note("settings", () -> {
             final String[] readWith = rya.getConf().getAuths();
             return "authorizations " + (readWith == null || readWith.length == 0 ? "none" : String.join(",", readWith))
                     + (write && rya.getConf().getCv() != null ? ", writes labelled " + rya.getConf().getCv() : "");

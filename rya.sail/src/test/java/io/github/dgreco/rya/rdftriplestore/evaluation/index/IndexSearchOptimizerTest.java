@@ -34,11 +34,11 @@ import org.eclipse.rdf4j.query.impl.EmptyBindingSet;
 import org.eclipse.rdf4j.query.parser.sparql.SPARQLParser;
 import org.junit.jupiter.api.Test;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.index.IndexCatalog;
-import io.github.dgreco.rya.accumulo.index.IndexQuery;
-import io.github.dgreco.rya.accumulo.index.IndexType;
-import io.github.dgreco.rya.accumulo.index.text.TextCandidates;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.index.IndexCatalog;
+import io.github.dgreco.rya.store.index.IndexQuery;
+import io.github.dgreco.rya.store.index.IndexType;
+import io.github.dgreco.rya.store.index.text.TextCandidates;
 
 class IndexSearchOptimizerTest {
     private static final String PREFIXES = """
@@ -75,7 +75,7 @@ class IndexSearchOptimizerTest {
     }
 
     private static List<IndexedStatementPattern> indexed(final String query, final IndexCatalog catalog,
-            final AccumuloRdfConfiguration conf) {
+            final StoreRdfConfiguration conf) {
         final TupleExpr expr = parse(query);
         final int calls = functionCalls(expr);
         new IndexSearchOptimizer(catalog, conf).optimize(expr, null, EmptyBindingSet.getInstance());
@@ -93,7 +93,7 @@ class IndexSearchOptimizerTest {
     }
 
     private static List<IndexedStatementPattern> indexed(final String query) {
-        return indexed(query, BOTH, new AccumuloRdfConfiguration());
+        return indexed(query, BOTH, new StoreRdfConfiguration());
     }
 
     private static int functionCalls(final TupleExpr expr) {
@@ -154,17 +154,17 @@ class IndexSearchOptimizerTest {
     @Test
     void textPredicateListAndSwitches() {
         final IndexCatalog labelsOnly = new Catalog(true, false, Set.of("http://www.w3.org/2000/01/rdf-schema#label"));
-        final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+        final StoreRdfConfiguration conf = new StoreRdfConfiguration();
         assertEquals(1, indexed("SELECT * { ?d rdfs:label ?l FILTER(text:matches(?l, \"x\")) }", labelsOnly, conf).size());
         assertEquals(0, indexed("SELECT * { ?d rdfs:comment ?l FILTER(text:matches(?l, \"x\")) }", labelsOnly, conf).size());
         assertEquals(0, indexed("SELECT * { ?d ?p ?l FILTER(text:matches(?l, \"x\")) }", labelsOnly, conf).size());
 
         final String q = "SELECT * { ?d rdfs:label ?l FILTER(text:matches(?l, \"x\")) }";
         assertEquals(0, indexed(q, new Catalog(false, true, Set.of()), conf).size(), "text index not ready");
-        final AccumuloRdfConfiguration off = new AccumuloRdfConfiguration();
+        final StoreRdfConfiguration off = new StoreRdfConfiguration();
         off.setUseIndex(false);
         assertEquals(0, indexed(q, BOTH, off).size());
-        final AccumuloRdfConfiguration limited = new AccumuloRdfConfiguration();
+        final StoreRdfConfiguration limited = new StoreRdfConfiguration();
         limited.setLimit(5L);
         assertEquals(0, indexed(q, BOTH, limited).size());
     }

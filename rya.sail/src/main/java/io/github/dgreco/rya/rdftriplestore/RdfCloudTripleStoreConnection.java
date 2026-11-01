@@ -33,11 +33,11 @@ import java.util.NoSuchElementException;
 import java.util.Set;
 
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryEvaluationStep;
-import io.github.dgreco.rya.accumulo.trace.AccumuloTrace;
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRdfEvalStatsDAO;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
-import io.github.dgreco.rya.accumulo.index.IndexCatalog;
+import io.github.dgreco.rya.store.trace.StoreTrace;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreEvalStatsDAO;
+import io.github.dgreco.rya.store.RyaStoreDAO;
+import io.github.dgreco.rya.store.index.IndexCatalog;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
@@ -244,30 +244,30 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 ? new RdfCloudTripleStoreEvaluationStatistics<>(queryConf, rdfEvalStatsDAO)
                 : new RyaDefaultStatistics();
         final RyaEvaluationStrategy strategy = new RyaEvaluationStrategy(tripleSource, dataset, inferenceEngine, statistics);
-        final IndexCatalog indexes = ryaDAO instanceof AccumuloRyaDAO accumulo ? accumulo.getIndexCatalog() : IndexCatalog.NONE;
+        final IndexCatalog indexes = ryaDAO instanceof RyaStoreDAO accumulo ? accumulo.getIndexCatalog() : IndexCatalog.NONE;
         // Graph sizes come from the counters, read with this query's authorizations.
         final GraphSizeOptimizer graphSizes = new GraphSizeOptimizer(
-                rdfEvalStatsDAO instanceof AccumuloRdfEvalStatsDAO stats && queryConf instanceof AccumuloRdfConfiguration accumuloConf
+                rdfEvalStatsDAO instanceof RyaStoreEvalStatsDAO stats && queryConf instanceof StoreRdfConfiguration accumuloConf
                         ? () -> stats.graphSizes(accumuloConf)
                         : null);
         strategy.setOptimizerPipeline(new RyaQueryOptimizerPipeline(strategy, tripleSource, statistics,
                 new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf, graphSizes));
         try {
             final TupleExpr parsed = tupleExpr;
-            AccumuloTrace.plan("parsed", parsed::toString);
+            StoreTrace.plan("parsed", parsed::toString);
             final TupleExpr optimized;
-            try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "query planning")) {
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "query planning")) {
                 optimized = strategy.optimize(tupleExpr, statistics, bindings);
             }
             if (queryConf.isDisplayQueryPlan()) {
                 log.info("Rya query plan:\n{}", optimized);
             }
-            if (AccumuloTrace.isActive()) {
+            if (StoreTrace.isActive()) {
                 // Prepare exactly what evaluate() would, then report the plan with the join
                 // algorithms preparing chose (RyaBatchedJoin or RDF4J's own).
                 final TupleExpr root = optimized instanceof QueryRoot q ? q.getArg() : optimized;
                 final QueryEvaluationStep step = strategy.precompile(root);
-                AccumuloTrace.plan("optimized", optimized::toString);
+                StoreTrace.plan("optimized", optimized::toString);
                 return step.evaluate(bindings);
             }
             return strategy.evaluate(optimized, bindings);
@@ -458,7 +458,7 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
          */
         public AutoCloseable prefetch(final Collection<LookupKey> keys) {
             final Map<LookupKey, List<Statement>> fetched;
-            try (AccumuloTrace.Reason why = AccumuloTrace.reason(() -> "batched join: " + keys.size()
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "batched join: " + keys.size()
                     + " right-hand lookup" + (keys.size() == 1 ? "" : "s") + " fetched together")) {
                 fetched = BatchLookup.fetch(ryaDAO, conf, keys, conf.getJoinPrefetchLimit());
             }

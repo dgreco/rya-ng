@@ -24,15 +24,17 @@ import java.nio.file.Path;
 import org.apache.accumulo.core.client.Accumulo;
 import org.apache.accumulo.core.client.AccumuloClient;
 import io.github.dgreco.rya.accumulo.AccumuloClients;
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.accumulo.AccumuloStore;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.spi.Store;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
-import io.github.dgreco.rya.rdftriplestore.RyaAccumuloSailFactory;
+import io.github.dgreco.rya.rdftriplestore.RyaSailFactory;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.StringUtils;
 
-/** Wires the Accumulo client and the Rya repository. */
+/** Wires the Accumulo client, the store on it and the Rya repository. */
 @Configuration(proxyBeanMethods = false)
 public class RyaStoreConfiguration {
 
@@ -52,9 +54,15 @@ public class RyaStoreConfiguration {
                 .build();
     }
 
+    /** The store on the client; its operations report to the request's trace, if any. */
+    @Bean(destroyMethod = "close")
+    Store ryaStore(final AccumuloClient client) {
+        return AccumuloStore.wrap(client);
+    }
+
     @Bean
-    AccumuloRdfConfiguration ryaConfiguration(final RyaProperties props) {
-        final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+    StoreRdfConfiguration ryaConfiguration(final RyaProperties props) {
+        final StoreRdfConfiguration conf = new StoreRdfConfiguration();
         conf.setTablePrefix(props.tablePrefix());
         conf.setInfer(props.inference());
         conf.setUseStats(props.stats());
@@ -72,9 +80,9 @@ public class RyaStoreConfiguration {
     }
 
     @Bean(initMethod = "init", destroyMethod = "shutDown")
-    SailRepository ryaRepository(final AccumuloClient client, final AccumuloRdfConfiguration conf,
+    SailRepository ryaRepository(final Store store, final StoreRdfConfiguration conf,
             final RyaProperties props) {
-        final RdfCloudTripleStore<AccumuloRdfConfiguration> sail = RyaAccumuloSailFactory.createSail(client, conf);
+        final RdfCloudTripleStore<StoreRdfConfiguration> sail = RyaSailFactory.createSail(store, conf);
         if (sail.getInferenceEngine() != null) {
             sail.getInferenceEngine().setRefreshGraphSchedule(props.inferenceRefresh().toMillis());
         }

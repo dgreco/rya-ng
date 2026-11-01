@@ -28,7 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import io.github.dgreco.rya.api.utils.NullableStatementImpl;
 import io.github.dgreco.rya.rdftriplestore.utils.FixedStatementPattern;
 import org.eclipse.rdf4j.model.IRI;
@@ -50,7 +50,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 public class HasValueVisitorTest {
-    private final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+    private final StoreRdfConfiguration conf = new StoreRdfConfiguration();
     private static final ValueFactory VF = SimpleValueFactory.getInstance();
 
     private final IRI chordate = VF.createIRI("urn:Chordate");

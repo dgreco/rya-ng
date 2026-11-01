@@ -45,7 +45,6 @@ import org.apache.accumulo.core.client.AccumuloClient;
 import org.apache.accumulo.core.client.BatchWriter;
 import org.apache.accumulo.core.client.Scanner;
 import org.apache.accumulo.core.client.security.tokens.PasswordToken;
-import org.apache.accumulo.core.data.ColumnUpdate;
 import org.apache.accumulo.core.data.Key;
 import org.apache.accumulo.core.data.Mutation;
 import org.apache.accumulo.core.data.Range;
@@ -64,11 +63,11 @@ import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.EvalStatsMutations;
-import io.github.dgreco.rya.accumulo.index.IndexSearcher;
-import io.github.dgreco.rya.accumulo.index.IndexType;
-import io.github.dgreco.rya.accumulo.index.IndexVerifier;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.EvalStatsMutations;
+import io.github.dgreco.rya.store.index.IndexSearcher;
+import io.github.dgreco.rya.store.index.IndexType;
+import io.github.dgreco.rya.store.index.IndexVerifier;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import io.github.dgreco.rya.api.domain.RyaStatement;
@@ -76,7 +75,9 @@ import io.github.dgreco.rya.api.resolver.RyaTripleContext;
 import io.github.dgreco.rya.api.resolver.triple.TripleRow;
 import io.github.dgreco.rya.loader.gen.EntityGenerator;
 import io.github.dgreco.rya.loader.gen.ReferenceData;
-import io.github.dgreco.rya.rdftriplestore.RyaAccumuloSailFactory;
+import io.github.dgreco.rya.rdftriplestore.RyaSailFactory;
+import io.github.dgreco.rya.accumulo.AccumuloStore;
+import io.github.dgreco.rya.store.spi.RowMutation;
 import io.github.dgreco.rya.test.accumulo.AccumuloITBase;
 
 /** The loader against MiniAccumulo: prepare, parallel parts, stop and resume, failures, verify and drop. */
@@ -156,12 +157,12 @@ class LoaderIT extends AccumuloITBase {
             pool.shutdownNow();
         }
 
-        final AccumuloRdfConfiguration conf = assertStoreHoldsExactlyTheDataset();
+        final StoreRdfConfiguration conf = assertStoreHoldsExactlyTheDataset();
         assertEquals(7, getClient().tableOperations().listSplits(getTablePrefix() + "spo").size());
         assertFalse(getClient().tableOperations().listSplits(getTablePrefix() + "text").isEmpty());
         assertFalse(getClient().tableOperations().listSplits(getTablePrefix() + "geo").isEmpty());
         for (final IndexType type : IndexType.values()) {
-            final IndexVerifier.Report report = IndexVerifier.verify(getClient(), conf, type);
+            final IndexVerifier.Report report = IndexVerifier.verify(AccumuloStore.wrap(getClient()), conf, type);
             assertTrue(report.isClean(), type + ": " + report);
         }
         assertQueriesAgreeWithAndWithoutIndexes(conf);
@@ -312,9 +313,9 @@ class LoaderIT extends AccumuloITBase {
     // ---- checks ----
 
     /** spo holds exactly the generated statements and the reference data; eval holds exactly their summed counters. */
-    private AccumuloRdfConfiguration assertStoreHoldsExactlyTheDataset() throws Exception {
+    private StoreRdfConfiguration assertStoreHoldsExactlyTheDataset() throws Exception {
         final LoaderOptions o = options();
-        final AccumuloRdfConfiguration conf = o.rdfConf();
+        final StoreRdfConfiguration conf = o.rdfConf();
         conf.setAuths(AUTHS);
         final EntityGenerator generator = new EntityGenerator(o.genConfig());
         final List<RyaStatement> statements = new ArrayList<>(ReferenceData.statements(generator));
@@ -338,10 +339,9 @@ class LoaderIT extends AccumuloITBase {
         final EvalStatsMutations.CounterBatch batch = new EvalStatsMutations.CounterBatch();
         statements.forEach(st -> batch.add(st, 1));
         final Map<String, Long> expectedCounts = new HashMap<>();
-        for (final Mutation m : batch.drain()) {
-            for (final ColumnUpdate u : m.getUpdates()) {
-                expectedCounts.merge(cell(m.getRow(), u.getColumnFamily(), u.getColumnQualifier(), u.getColumnVisibility()),
-                        Long.parseLong(new String(u.getValue(), StandardCharsets.UTF_8)), Long::sum);
+        for (final RowMutation m : batch.drain()) {
+            for (final RowMutation.Update u : m.updates()) {
+                expectedCounts.merge(cell(m.row(), u.family(), u.qualifier(), u.visibility()), u.delta(), Long::sum);
             }
         }
         final Map<String, Long> actualCounts = new HashMap<>();
@@ -376,7 +376,7 @@ class LoaderIT extends AccumuloITBase {
     }
 
     /** Text and geo searches over the generated data return the same rows with and without the indexes. */
-    private void assertQueriesAgreeWithAndWithoutIndexes(final AccumuloRdfConfiguration conf) throws Exception {
+    private void assertQueriesAgreeWithAndWithoutIndexes(final StoreRdfConfiguration conf) throws Exception {
         final EntityGenerator generator = new EntityGenerator(options().genConfig());
         String word = null;
         String point = null;
@@ -399,9 +399,9 @@ class LoaderIT extends AccumuloITBase {
         final String box = String.format(java.util.Locale.ROOT, "POLYGON((%f %f, %f %f, %f %f, %f %f, %f %f))", lon - 2,
                 lat - 2, lon + 2, lat - 2, lon + 2, lat + 2, lon - 2, lat + 2, lon - 2, lat - 2);
 
-        final AccumuloRdfConfiguration queryConf = conf.clone();
+        final StoreRdfConfiguration queryConf = conf.clone();
         queryConf.setInfer(false);
-        final SailRepository repo = RyaAccumuloSailFactory.createRepository(getClient(), queryConf);
+        final SailRepository repo = RyaSailFactory.createRepository(AccumuloStore.wrap(getClient()), queryConf);
         repo.init();
         try {
             final Set<String> found = assertAgrees(repo, "SELECT ?d ?l WHERE { ?d ?p ?l FILTER(text:matches(?l, \"" + word
@@ -458,7 +458,7 @@ class LoaderIT extends AccumuloITBase {
         return rows;
     }
 
-    private void deleteOneEntityStatement(final AccumuloRdfConfiguration conf) throws Exception {
+    private void deleteOneEntityStatement(final StoreRdfConfiguration conf) throws Exception {
         final String subject = options().genConfig().entity(0);
         try (Scanner spo = getClient().createScanner(getTablePrefix() + "spo", new Authorizations(AUTHS))) {
             spo.setRange(Range.prefix(subject + "\u0000"));

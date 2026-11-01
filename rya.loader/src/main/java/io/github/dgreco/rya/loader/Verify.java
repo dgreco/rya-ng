@@ -32,9 +32,10 @@ import org.apache.accumulo.core.security.VisibilityEvaluator;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRdfEvalStatsDAO;
-import io.github.dgreco.rya.accumulo.query.AccumuloRyaQueryEngine;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.accumulo.AccumuloStore;
+import io.github.dgreco.rya.store.RyaStoreEvalStatsDAO;
+import io.github.dgreco.rya.store.query.RyaStoreQueryEngine;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.api.persist.RdfEvalStatsDAO.CARDINALITY_OF;
@@ -54,10 +55,10 @@ public final class Verify {
     public static boolean run(final AccumuloClient client, final LoaderOptions o, final PrintStream out) throws Exception {
         StoreCheck.forLoad(client, o);
         final EntityGenerator generator = new EntityGenerator(o.genConfig());
-        final AccumuloRdfConfiguration conf = o.rdfConf();
+        final StoreRdfConfiguration conf = o.rdfConf();
         final VisibilityEvaluator visible = new VisibilityEvaluator(new Authorizations(o.auths().toArray(new String[0])));
-        final AccumuloRyaQueryEngine engine = new AccumuloRyaQueryEngine(client, conf);
-        final AccumuloRdfEvalStatsDAO stats = o.stats() ? new AccumuloRdfEvalStatsDAO(client, conf) : null;
+        final RyaStoreQueryEngine engine = new RyaStoreQueryEngine(AccumuloStore.wrap(client), conf);
+        final RyaStoreEvalStatsDAO stats = o.stats() ? new RyaStoreEvalStatsDAO(AccumuloStore.wrap(client), conf) : null;
         if (stats != null) {
             stats.init();
         }

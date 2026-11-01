@@ -32,8 +32,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreDAO;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Resource;
@@ -49,9 +49,9 @@ import com.google.common.collect.Sets;
 
 
 public class InferenceEngineIT extends RyaSailITBase {
-    private AccumuloRyaDAO dao;
+    private RyaStoreDAO dao;
     private static final ValueFactory VF = SimpleValueFactory.getInstance();
-    private AccumuloRdfConfiguration conf;
+    private StoreRdfConfiguration conf;
     private RdfCloudTripleStore store;
     private InferenceEngine inferenceEngine;
     private SailRepository repository;
@@ -59,7 +59,7 @@ public class InferenceEngineIT extends RyaSailITBase {
 
     @BeforeEach
     public void setUp() throws Exception {
-        dao = new AccumuloRyaDAO(getClient(), null);
+        dao = new RyaStoreDAO(getStore(), null);
         conf = newConf();
         dao.setConf(conf);
         dao.init();

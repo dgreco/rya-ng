@@ -32,7 +32,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
-import io.github.dgreco.rya.accumulo.index.IndexSearcher;
+import io.github.dgreco.rya.store.index.IndexSearcher;
 import io.github.dgreco.rya.test.accumulo.MiniAccumuloSingleton;
 
 /** Text and geo search through the endpoint, with both indexes on. */

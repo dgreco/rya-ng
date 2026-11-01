@@ -23,7 +23,7 @@ import java.util.List;
 
 import java.util.ArrayList;
 
-import io.github.dgreco.rya.accumulo.index.IndexCatalog;
+import io.github.dgreco.rya.store.index.IndexCatalog;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import io.github.dgreco.rya.rdftriplestore.evaluation.index.IndexSearchOptimizer;
 import io.github.dgreco.rya.rdftriplestore.evaluation.index.TextQueryValidator;

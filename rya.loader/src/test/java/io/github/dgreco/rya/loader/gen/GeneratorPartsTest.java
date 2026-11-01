@@ -24,7 +24,7 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
-import io.github.dgreco.rya.accumulo.index.text.TextAnalyzer;
+import io.github.dgreco.rya.store.index.text.TextAnalyzer;
 import io.github.dgreco.rya.api.domain.RyaType;
 import io.github.dgreco.rya.api.resolver.RyaContext;
 import io.github.dgreco.rya.loader.gen.Vocabulary.Language;

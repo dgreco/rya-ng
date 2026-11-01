@@ -25,17 +25,17 @@ import java.util.SortedSet;
 import java.util.TreeSet;
 
 import org.apache.accumulo.core.client.AccumuloClient;
-import org.apache.accumulo.core.data.Mutation;
 import org.apache.hadoop.io.Text;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.EvalStatsMutations;
-import io.github.dgreco.rya.accumulo.RyaTableMutationsFactory;
-import io.github.dgreco.rya.accumulo.index.GeoIndex;
-import io.github.dgreco.rya.accumulo.index.SecondaryIndex;
-import io.github.dgreco.rya.accumulo.index.TextIndex;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.EvalStatsMutations;
+import io.github.dgreco.rya.store.RyaTableMutationsFactory;
+import io.github.dgreco.rya.store.spi.RowMutation;
+import io.github.dgreco.rya.store.index.GeoIndex;
+import io.github.dgreco.rya.store.index.SecondaryIndex;
+import io.github.dgreco.rya.store.index.TextIndex;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.api.layout.TableLayoutStrategy;
@@ -59,7 +59,7 @@ public final class SplitPlanner {
     }
 
     /** Split points per table name. Tables that get none are left out. */
-    public static Map<String, SortedSet<Text>> plan(final EntityGenerator generator, final AccumuloRdfConfiguration conf,
+    public static Map<String, SortedSet<Text>> plan(final EntityGenerator generator, final StoreRdfConfiguration conf,
             final int splits) {
         final TableLayoutStrategy tables = conf.getTableLayoutStrategy();
         final RyaTableMutationsFactory factory = new RyaTableMutationsFactory(RyaTripleContext.getInstance(conf));
@@ -80,10 +80,10 @@ public final class SplitPlanner {
                 final List<RyaStatement> statements = generator.generate(entity);
                 final EvalStatsMutations.CounterBatch counts = new EvalStatsMutations.CounterBatch();
                 for (final RyaStatement st : statements) {
-                    final Map<TABLE_LAYOUT, Collection<Mutation>> m = factory.serialize(st);
-                    addRows(rows.get(tables.getSpo()), m.get(TABLE_LAYOUT.SPO));
-                    addRows(rows.get(tables.getPo()), m.get(TABLE_LAYOUT.PO));
-                    addRows(rows.get(tables.getOsp()), m.get(TABLE_LAYOUT.OSP));
+                    final Map<TABLE_LAYOUT, RowMutation> m = factory.serialize(st);
+                    addRows(rows.get(tables.getSpo()), List.of(m.get(TABLE_LAYOUT.SPO)));
+                    addRows(rows.get(tables.getPo()), List.of(m.get(TABLE_LAYOUT.PO)));
+                    addRows(rows.get(tables.getOsp()), List.of(m.get(TABLE_LAYOUT.OSP)));
                     if (text != null) {
                         addRows(rows.get(tables.getText()), text.puts(st));
                     }
@@ -110,9 +110,9 @@ public final class SplitPlanner {
         return plan;
     }
 
-    private static void addRows(final List<byte[]> out, final Collection<Mutation> mutations) {
-        for (final Mutation m : mutations) {
-            out.add(m.getRow());
+    private static void addRows(final List<byte[]> out, final Collection<RowMutation> mutations) {
+        for (final RowMutation m : mutations) {
+            out.add(m.row());
         }
     }
 
