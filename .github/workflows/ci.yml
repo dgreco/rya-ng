@@ -1,5 +1,5 @@
 # Build, unit tests, integration tests and coverage on every push and pull request: the full build on Accumulo
-# (build), and the store and Sail integration tests again on an in-process HBase cluster (hbase).
+# (build), and the integration tests again on an in-process HBase cluster (hbase).
 # Pushes to main also publish the coverage report to GitHub Pages:
 #   https://dgreco.github.io/rya-ng/coverage/   (badge data: /badge.json for coverage, /tests.json for tests)
 name: CI
@@ -112,9 +112,9 @@ jobs:
       - name: Build
         run: mvn -B -ntp install -DskipTests -DskipITs
 
-      # The store-level and Sail ITs, with HBase counters summed by rya-ng's coprocessor (the default)...
+      # The store, Sail, loader and endpoint ITs, with HBase counters summed by rya-ng's coprocessor (the default)...
       - name: Test on HBase (coprocessor counters)
-        run: mvn -B -ntp verify -pl rya.test,rya.sail -Drya.test.backend=hbase
+        run: mvn -B -ntp verify -pl rya.test,rya.sail,rya.loader,rya.sparql -Drya.test.backend=hbase
 
       # ...and the store-level ITs again with HBase increments, the mode for clusters without the coprocessor.
       - name: Test on HBase (increment counters)

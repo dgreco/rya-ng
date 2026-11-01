@@ -65,7 +65,7 @@ mvn -pl rya.test verify -Dit.test=RyaStoreDAOIT -Dtest=none -Dsurefire.failIfNoS
 mvn clean verify -Pcoverage
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) runs `mvn clean verify -Pcoverage` on every push and pull request, and the store and Sail integration tests again on HBase:
+GitHub Actions (`.github/workflows/ci.yml`) runs `mvn clean verify -Pcoverage` on every push and pull request, and the integration tests again on HBase:
 - Each run's summary lists the tests and the coverage per module, and the HTML coverage report is attached to the run.
 - For pushes to `main`, the report is published at <https://dgreco.github.io/rya-ng/coverage/>. The coverage and tests badges above show its line coverage and test count.
 
@@ -87,17 +87,18 @@ The endpoint is packaged as `rya.sparql/target/rya.sparql-<version>.jar`.
 
 ## Storage backends
 
-`rya.backend` (endpoint) or `--backend` (loader) picks the store: `accumulo` (the default) or `hbase`. Both behave the same, labels included; the integration tests run on both. Data is not moved between them.
+`rya.backend` (endpoint) or `--backend` (loader) picks the store: `accumulo` (the default) or `hbase`. Both behave the same, labels included; the integration tests run on both. One difference: asking for labels the account doesn't hold fails on Accumulo, but returns fewer rows on HBase. The endpoint checks its labels at startup on HBase; code that embeds the Sail must grant its account the labels it asks for. Data is not moved between them.
 
 **HBase** needs:
 - **HBase 3.0.x**, with `org.apache.hadoop.hbase.security.visibility.VisibilityController` in both `hbase.coprocessor.master.classes` and `hbase.coprocessor.region.classes`, and `hbase.security.authorization=true`. Without that setting HBase ignores labels; rya-ng then refuses labelled data.
-- **A normal account** for the endpoint and the loader: HBase superusers, and holders of its `system` label, see every cell whatever they ask for. rya-ng checks this at startup and refuses to run as one.
+- **A normal account** for the endpoint and the loader: HBase superusers, and holders of its `system` label, see every cell whatever they ask for. Once labels have been registered through rya-ng (below), a store checks this when it opens and refuses to run as one. Before that, there is no canary to check against: it only logs a warning.
 - **Registered labels.** HBase only accepts labels registered in advance. Register them, as a superuser, with the loader:
   ```bash
   rya.loader/run.sh labels --backend hbase --hbase-site /etc/hbase/conf/hbase-site.xml --labels A,B --grant-to rya
   ```
   This also writes a *canary* cell per label, which the endpoint reads at startup to check that its account holds every label of `rya.sparql.authorizations` (HBase would otherwise drop the missing ones silently).
 - **The counter coprocessor**, for fast statistics: put `rya.hbase.coprocessor/target/rya.hbase.coprocessor-<version>.jar` on the region servers' classpath, or give its hdfs path as `rya.hbase.counters-jar`. Without it, set `rya.hbase.counters=increment`: HBase increments work everywhere but lock a row and sync the WAL for every counter write.
+  - Configure the same mode for every endpoint and loader of a store. A writer reads the counter table's mode from its descriptor, but an account that may not read descriptors (with HBase's `AccessController`, that needs ADMIN or CREATE) falls back to its configured mode. Writing in the wrong mode loses counts.
 - Literals of more than about 32 KB (rows over 32,767 bytes, HBase's limit) are refused.
 - **Finding the cluster:** give the cluster's `hbase-site.xml` (`rya.hbase.site`), or only a ZooKeeper quorum (`rya.hbase.conf[hbase.zookeeper.quorum]`), in which case rya-ng finds the cluster through ZooKeeper. HBase 3's client otherwise asks its masters (`hbase.client.bootstrap.servers`, by default `localhost:16000`).
 

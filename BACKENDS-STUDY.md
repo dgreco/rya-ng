@@ -56,6 +56,10 @@ Status: written 2026-10-31 against `main` at `860fa66`; implemented on the `hbas
 - **Kerberos and TLS** against a real HBase cluster. The client settings pass through (`hbase.site`, `hbase.conf.*`), but they are untested.
 - **The loader's `dry-run`** still sizes cells as Accumulo sends them.
 - **Data copy between backends** (section 5.4) is not built.
+- **Gaps in the superuser check.** The startup probe needs label canaries, which exist only after a label was registered through rya-ng (the loader's `labels` command). Until then a store opens with a warning. A superuser with labels registered outside rya-ng would then read labelled cells while asking for none.
+- **The counter mode isn't recorded in `ns`,** as 3.8 planned. Writers read it from the table descriptor, and an account that may not read descriptors uses its configured mode, so every writer of a store must be configured alike.
+- **Unheld labels in embedded use.** Through the embedded Sail or DAO, labels the account doesn't hold make HBase return fewer rows instead of failing. Only the endpoint checks its labels at startup.
+- **The loader's executable jar** has not been run out of process on HBase, unlike the endpoint's.
 
 ## 1. Summary
 
