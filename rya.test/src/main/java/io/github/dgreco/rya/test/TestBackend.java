@@ -16,6 +16,8 @@
 package io.github.dgreco.rya.test;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 
 import io.github.dgreco.rya.store.spi.Store;
 
@@ -42,4 +44,10 @@ public interface TestBackend {
 
     /** Writes a table's memory to disk and fully compacts it, and waits until it is done. */
     void compact(String table);
+
+    /** Settings for the backend's {@code StoreProvider.open} that connect to the cluster as the test account. */
+    Properties storeSettings();
+
+    /** {@code rya.*} properties that point the SPARQL endpoint at the cluster, as the test account. */
+    Map<String, String> endpointProperties();
 }

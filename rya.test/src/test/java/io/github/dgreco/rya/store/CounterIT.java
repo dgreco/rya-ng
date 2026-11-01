@@ -112,6 +112,37 @@ class CounterIT extends StoreITBase {
         assertEquals(0, count(CARDINALITY_OF.SUBJECT, VF.createIRI("urn:s0")));
     }
 
+    /** Many writers hitting the same counter cells at once: no delta may replace another. */
+    @Test
+    void concurrentDeltasToOneCounterAllCount() throws Exception {
+        final int threads = 16;
+        final int perThread = 400;
+        final ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            final List<Future<?>> done = new ArrayList<>();
+            for (int t = 0; t < threads; t++) {
+                final int id = t;
+                done.add(pool.submit(() -> {
+                    final RyaStoreDAO dao = newDao();
+                    for (int i = 0; i < perThread; i++) {
+                        // one subject, so the subject and predicate counters are the same cells for all
+                        dao.add(st(0, id * perThread + i));
+                    }
+                    return null;
+                }));
+            }
+            for (final Future<?> f : done) {
+                f.get();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        assertEquals(threads * perThread, count(CARDINALITY_OF.PREDICATE, VF.createIRI(P.getData())));
+        assertEquals(threads * perThread, count(CARDINALITY_OF.SUBJECT, VF.createIRI("urn:s0")));
+        backend().compact(conf.getTableLayoutStrategy().getEval());
+        assertEquals(threads * perThread, count(CARDINALITY_OF.SUBJECT, VF.createIRI("urn:s0")), "after a compaction");
+    }
+
     @Test
     void aHotCounterSurvivesFlushesCompactionsAndDrops() {
         final RyaStoreDAO dao = daos.get(0);
@@ -129,7 +160,9 @@ class CounterIT extends StoreITBase {
         }
         assertEquals(n + 100, count(CARDINALITY_OF.PREDICATE, p), "deltas after a compaction count on top of the sum");
         dao.dropGraph(conf);
-        assertEquals(-1, count(CARDINALITY_OF.PREDICATE, p), "a drop of everything removes the counters");
+        // -1 (no counter) where counters are deleted, 0 where HBase increment counters are set back to zero.
+        final long dropped = count(CARDINALITY_OF.PREDICATE, p);
+        assertEquals(true, dropped == -1 || dropped == 0, "a drop of everything clears the counters: " + dropped);
         dao.add(st(0, 0));
         dao.add(st(1, 1));
         assertEquals(2, count(CARDINALITY_OF.PREDICATE, p), "counting starts again from zero");

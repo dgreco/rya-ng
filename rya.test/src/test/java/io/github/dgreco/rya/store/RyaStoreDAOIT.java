@@ -709,8 +709,12 @@ public class RyaStoreDAOIT extends StoreITBase {
             // The ns table always holds the storage version row.
             if (tableExists(table) && !table.endsWith("ns")) {
                 try (CellScanner cells = getStore().scan(table, KeyRange.all(), ScanSpec.of(conf.getStoreAuths()))) {
-                    if (cells.hasNext()) {
-                        return false;
+                    while (cells.hasNext()) {
+                        final var cell = cells.next();
+                        // A counter at zero counts nothing (HBase increment counters are set back to zero, not deleted).
+                        if (!table.equals(conf.getTableLayoutStrategy().getEval()) || getStore().counterValue(cell.value()) != 0) {
+                            return false;
+                        }
                     }
                 }
             }

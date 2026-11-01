@@ -43,6 +43,8 @@ under the License.
         <module>rya.api</module>
         <module>rya.store</module>
         <module>rya.accumulo</module>
+        <module>rya.hbase</module>
+        <module>rya.hbase.coprocessor</module>
         <module>rya.test</module>
         <module>rya.sail</module>
         <module>rya.loader</module>
@@ -140,6 +142,11 @@ under the License.
                 <version>${project.version}</version>
             </dependency>
             <dependency>
+                <groupId>io.github.dgreco.rya</groupId>
+                <artifactId>rya.hbase.coprocessor</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>org.apache.hbase</groupId>
                 <artifactId>hbase-client</artifactId>
                 <version>${hbase.version}</version>
@@ -165,6 +172,12 @@ under the License.
                 <artifactId>hbase-testing-util</artifactId>
                 <version>${hbase.version}</version>
                 <exclusions>
+                    <!-- HBase's web UI pages, off in the test cluster. Its javax JSP engine breaks Spring Boot's
+                         Tomcat in rya.sparql's tests. -->
+                    <exclusion>
+                        <groupId>org.apache.tomcat</groupId>
+                        <artifactId>tomcat-jasper</artifactId>
+                    </exclusion>
                     <exclusion>
                         <groupId>org.slf4j</groupId>
                         <artifactId>slf4j-reload4j</artifactId>

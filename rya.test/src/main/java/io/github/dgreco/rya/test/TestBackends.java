@@ -16,6 +16,7 @@
 package io.github.dgreco.rya.test;
 
 import io.github.dgreco.rya.test.accumulo.AccumuloTestBackend;
+import io.github.dgreco.rya.test.hbase.HBaseTestBackend;
 
 /** The backend the integration tests run on: {@code -Drya.test.backend=accumulo} (the default) or {@code hbase}. */
 public final class TestBackends {
@@ -38,6 +39,7 @@ public final class TestBackends {
         if (current == null) {
             current = switch (id()) {
                 case "accumulo" -> new AccumuloTestBackend();
+                case "hbase" -> new HBaseTestBackend();
                 default -> throw new IllegalArgumentException("Unknown test backend '" + id() + "' (" + PROPERTY + ")");
             };
         }

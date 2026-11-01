@@ -1,4 +1,5 @@
-# Build, unit tests, MiniAccumulo integration tests and coverage on every push and pull request.
+# Build, unit tests, integration tests and coverage on every push and pull request: the full build on Accumulo
+# (build), and the store and Sail integration tests again on an in-process HBase cluster (hbase).
 # Pushes to main also publish the coverage report to GitHub Pages:
 #   https://dgreco.github.io/rya-ng/coverage/   (badge data: /badge.json for coverage, /tests.json for tests)
 name: CI
@@ -94,6 +95,40 @@ jobs:
         uses: actions/upload-pages-artifact@v5
         with:
           path: site
+
+  hbase:
+    name: Integration tests on HBase
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Build
+        run: mvn -B -ntp install -DskipTests -DskipITs
+
+      # The store-level and Sail ITs, with HBase counters summed by rya-ng's coprocessor (the default)...
+      - name: Test on HBase (coprocessor counters)
+        run: mvn -B -ntp verify -pl rya.test,rya.sail -Drya.test.backend=hbase
+
+      # ...and the store-level ITs again with HBase increments, the mode for clusters without the coprocessor.
+      - name: Test on HBase (increment counters)
+        run: mvn -B -ntp verify -pl rya.test -Drya.test.backend=hbase -Drya.test.hbaseCounters=increment
+
+      - name: Upload test reports
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: hbase-test-reports
+          path: |
+            */target/surefire-reports/
+            */target/failsafe-reports/
+          retention-days: 14
 
   publish:
     name: Publish the coverage report

@@ -19,6 +19,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 
 import org.apache.accumulo.core.client.Accumulo;
 import org.apache.accumulo.core.client.AccumuloClient;
@@ -64,6 +66,32 @@ public final class AccumuloTestBackend implements TestBackend {
         } catch (final Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    @Override
+    public Properties storeSettings() {
+        try {
+            final java.nio.file.Path file = java.nio.file.Files.createTempFile("rya-accumulo-client", ".properties");
+            file.toFile().deleteOnExit();
+            try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(file)) {
+                MiniAccumuloSingleton.getClientProperties().store(out, null);
+            }
+            final Properties settings = new Properties();
+            settings.setProperty(io.github.dgreco.rya.accumulo.AccumuloStoreProvider.CLIENT_PROPERTIES, file.toString());
+            return settings;
+        } catch (final java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @Override
+    public Map<String, String> endpointProperties() {
+        final var cluster = MiniAccumuloSingleton.getCluster();
+        return Map.of("rya.backend", "accumulo",
+                "rya.accumulo.instance", cluster.getInstanceName(),
+                "rya.accumulo.zookeepers", cluster.getZooKeepers(),
+                "rya.accumulo.user", MiniAccumuloSingleton.ROOT_USER,
+                "rya.accumulo.password", MiniAccumuloSingleton.ROOT_PASSWORD);
     }
 
     @Override

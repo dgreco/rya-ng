@@ -37,6 +37,20 @@ under the License.
             <artifactId>rya.accumulo</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.hbase</artifactId>
+        </dependency>
+        <dependency>
+            <!-- On the in-process cluster's classpath, as on real region servers. -->
+            <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.hbase.coprocessor</artifactId>
+        </dependency>
+        <dependency>
+            <!-- The in-process HBase cluster. Its Hadoop is pinned to ${hadoop.version} by the root POM. -->
+            <groupId>org.apache.hbase</groupId>
+            <artifactId>hbase-testing-util</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.apache.accumulo</groupId>
             <artifactId>accumulo-core</artifactId>
         </dependency>
