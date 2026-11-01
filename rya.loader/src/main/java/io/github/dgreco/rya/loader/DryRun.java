@@ -27,11 +27,13 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.accumulo.core.data.Mutation;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.EvalStatsMutations;
-import io.github.dgreco.rya.accumulo.RyaTableMutationsFactory;
-import io.github.dgreco.rya.accumulo.index.GeoIndex;
-import io.github.dgreco.rya.accumulo.index.TextIndex;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.accumulo.AccumuloStore;
+import io.github.dgreco.rya.store.EvalStatsMutations;
+import io.github.dgreco.rya.store.RyaTableMutationsFactory;
+import io.github.dgreco.rya.store.spi.RowMutation;
+import io.github.dgreco.rya.store.index.GeoIndex;
+import io.github.dgreco.rya.store.index.TextIndex;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
@@ -54,7 +56,7 @@ public final class DryRun {
 
     public static void run(final LoaderOptions o, final PrintStream out) throws Exception {
         final EntityGenerator generator = new EntityGenerator(o.genConfig());
-        final AccumuloRdfConfiguration conf = o.rdfConf();
+        final StoreRdfConfiguration conf = o.rdfConf();
         final long[] range = o.partRange();
         final long measured = Math.min(range[1] - range[0], MAX_MEASURED);
 
@@ -133,7 +135,7 @@ public final class DryRun {
                 + "measure it with a small load; storage that keeps 3 replicas uses 3 times that).%n", raw / 1e9);
     }
 
-    private static void measure(final EntityGenerator generator, final AccumuloRdfConfiguration conf, final int blockSize,
+    private static void measure(final EntityGenerator generator, final StoreRdfConfiguration conf, final int blockSize,
             final AtomicLong cursor, final long end, final AtomicLong triples, final Map<String, AtomicLong> bytes,
             final Map<String, AtomicLong> cells) {
         final RyaTableMutationsFactory factory = new RyaTableMutationsFactory(RyaTripleContext.getInstance(conf));
@@ -152,10 +154,10 @@ public final class DryRun {
                 for (long e = from; e < Math.min(from + blockSize, end); e++) {
                     for (final RyaStatement st : generator.generate(e)) {
                         n++;
-                        final Map<TABLE_LAYOUT, Collection<Mutation>> rows = factory.serialize(st);
-                        add(b, c, 0, rows.get(TABLE_LAYOUT.SPO));
-                        add(b, c, 1, rows.get(TABLE_LAYOUT.PO));
-                        add(b, c, 2, rows.get(TABLE_LAYOUT.OSP));
+                        final Map<TABLE_LAYOUT, RowMutation> rows = factory.serialize(st);
+                        add(b, c, 0, List.of(rows.get(TABLE_LAYOUT.SPO)));
+                        add(b, c, 1, List.of(rows.get(TABLE_LAYOUT.PO)));
+                        add(b, c, 2, List.of(rows.get(TABLE_LAYOUT.OSP)));
                         if (text != null) {
                             add(b, c, 4, text.puts(st));
                         }
@@ -179,8 +181,10 @@ public final class DryRun {
         }
     }
 
-    private static void add(final long[] bytes, final long[] cells, final int table, final Collection<Mutation> mutations) {
-        for (final Mutation m : mutations) {
+    /** Sizes as Accumulo would send them. */
+    private static void add(final long[] bytes, final long[] cells, final int table, final Collection<RowMutation> mutations) {
+        for (final RowMutation rm : mutations) {
+            final Mutation m = AccumuloStore.toMutation(rm);
             bytes[table] += m.numBytes();
             cells[table] += m.size();
         }

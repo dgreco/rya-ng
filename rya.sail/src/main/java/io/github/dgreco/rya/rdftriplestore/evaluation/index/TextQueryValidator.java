@@ -28,8 +28,8 @@ import org.eclipse.rdf4j.query.algebra.Var;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryOptimizer;
 import org.eclipse.rdf4j.query.algebra.helpers.AbstractSimpleQueryModelVisitor;
 
-import io.github.dgreco.rya.accumulo.index.TextIndex;
-import io.github.dgreco.rya.accumulo.index.text.TextQueryException;
+import io.github.dgreco.rya.store.index.TextIndex;
+import io.github.dgreco.rya.store.index.text.TextQueryException;
 import io.github.dgreco.rya.rdftriplestore.function.RyaText;
 import io.github.dgreco.rya.rdftriplestore.function.TextMatchesFunction;
 

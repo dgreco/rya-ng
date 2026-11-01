@@ -16,19 +16,16 @@
 package io.github.dgreco.rya.loader;
 
 import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.SortedSet;
 
-import org.apache.accumulo.core.client.AccumuloClient;
-import org.apache.accumulo.core.security.Authorizations;
 import org.apache.hadoop.io.Text;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
-import io.github.dgreco.rya.accumulo.index.IndexType;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.spi.Store;
+import io.github.dgreco.rya.store.RyaStoreDAO;
+import io.github.dgreco.rya.store.index.IndexType;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.loader.gen.EntityGenerator;
 import io.github.dgreco.rya.loader.gen.ReferenceData;
@@ -42,11 +39,11 @@ public final class Prepare {
     private Prepare() {
     }
 
-    public static void run(final AccumuloClient client, final LoaderOptions o, final PrintStream out) throws Exception {
-        StoreCheck.forPrepare(client, o);
-        final AccumuloRdfConfiguration conf = o.rdfConf();
+    public static void run(final Store store, final LoaderOptions o, final PrintStream out) throws Exception {
+        StoreCheck.forPrepare(store, o);
+        final StoreRdfConfiguration conf = o.rdfConf();
         final EntityGenerator generator = new EntityGenerator(o.genConfig());
-        final AccumuloRyaDAO dao = new AccumuloRyaDAO(client, conf);
+        final RyaStoreDAO dao = new RyaStoreDAO(store, conf);
         dao.init();
         try {
             for (final IndexType type : IndexType.values()) {
@@ -55,17 +52,17 @@ public final class Prepare {
                             + "(the store had data before the index was added)");
                 }
             }
-            final String stored = StoreCheck.storedFingerprint(client, conf, o.genConfig());
+            final String stored = StoreCheck.storedFingerprint(store, conf, o.genConfig());
             if (stored != null && !stored.equals(o.genConfig().fingerprint())) {
                 throw new StoreCheck.Mismatch("store " + o.tablePrefix() + " was prepared for a different dataset");
             }
 
-            final int servers = Math.max(1, client.instanceOperations().getTabletServers().size());
+            final int servers = Math.max(1, store.tables().serverCount());
             final int splits = o.splits() < 0 ? 4 * servers - 1 : o.splits();
             if (splits > 0) {
-                out.println("Planning " + splits + " splits per table (" + servers + " tablet servers)…");
+                out.println("Planning " + splits + " splits per table (" + servers + " servers)…");
                 final Map<String, SortedSet<Text>> plan = SplitPlanner.plan(generator, conf, splits);
-                SplitPlanner.apply(client, plan);
+                SplitPlanner.apply(store, plan);
             }
 
             if (stored == null) {
@@ -78,12 +75,9 @@ public final class Prepare {
             }
 
             if (o.grantAuths() && !o.genConfig().labels().isEmpty()) {
-                final String user = client.whoami();
-                final List<byte[]> merged = new ArrayList<>(client.securityOperations().getUserAuthorizations(user).getAuthorizations());
-                for (final String label : o.genConfig().labels()) {
-                    merged.add(label.getBytes(StandardCharsets.UTF_8));
-                }
-                client.securityOperations().changeUserAuthorizations(user, new Authorizations(merged));
+                final String user = store.access().whoami();
+                // On HBase this also registers the labels and writes their canaries (it needs a superuser).
+                Labels.grant(store, user, o.genConfig().labels());
                 out.println("Added " + o.genConfig().labels() + " to the authorizations of " + user + ".");
             }
         } finally {

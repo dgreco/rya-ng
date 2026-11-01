@@ -28,8 +28,8 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreDAO;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import io.github.dgreco.rya.rdftriplestore.inference.InferenceEngine;
@@ -59,7 +59,7 @@ public class ArbitraryLengthQueryIT extends RyaSailITBase {
     @BeforeEach
     public void setUp() throws Exception {
 
-        final RdfCloudTripleStore<AccumuloRdfConfiguration> store = newStore(newConf(), false);
+        final RdfCloudTripleStore<StoreRdfConfiguration> store = newStore(newConf(), false);
 
         repository = new SailRepository(store);
         repository.init();

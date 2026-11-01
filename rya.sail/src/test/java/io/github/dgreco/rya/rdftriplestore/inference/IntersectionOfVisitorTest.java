@@ -30,7 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.ValueFactory;
@@ -51,7 +51,7 @@ import com.google.common.collect.Sets;
  * Tests the methods of {@link IntersectionOfVisitor}.
  */
 public class IntersectionOfVisitorTest {
-    private final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+    private final StoreRdfConfiguration conf = new StoreRdfConfiguration();
     private static final ValueFactory VF = SimpleValueFactory.getInstance();
 
     private static final IRI MOTHER = VF.createIRI("urn:Mother");
@@ -201,7 +201,7 @@ public class IntersectionOfVisitorTest {
                 new StatementPattern(new Var("s"), new Var("p", RDF.TYPE), new Var("o", MOTHER)),
                 new ProjectionElemList(new ProjectionElem("s", "subject")));
 
-        final AccumuloRdfConfiguration disabledConf = conf.clone();
+        final StoreRdfConfiguration disabledConf = conf.clone();
         disabledConf.setInferIntersectionOf(false);
 
         query.visit(new IntersectionOfVisitor(disabledConf, inferenceEngine));

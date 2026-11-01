@@ -20,7 +20,7 @@ import java.util.Objects;
 import org.eclipse.rdf4j.query.algebra.StatementPattern;
 import org.eclipse.rdf4j.query.algebra.Var;
 
-import io.github.dgreco.rya.accumulo.index.IndexQuery;
+import io.github.dgreco.rya.store.index.IndexQuery;
 
 /**
  * A statement pattern whose object is filtered by a text or geo function, so its matches can be

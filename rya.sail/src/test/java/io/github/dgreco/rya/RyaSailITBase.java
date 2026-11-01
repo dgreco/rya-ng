@@ -23,19 +23,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.AfterEach;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.index.IndexType;
-import io.github.dgreco.rya.accumulo.index.IndexVerifier;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.index.IndexType;
+import io.github.dgreco.rya.store.index.IndexVerifier;
+import io.github.dgreco.rya.store.RyaStoreDAO;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
+import io.github.dgreco.rya.rdftriplestore.RyaSailFactory;
 import io.github.dgreco.rya.rdftriplestore.inference.InferenceEngine;
-import io.github.dgreco.rya.test.accumulo.AccumuloITBase;
+import io.github.dgreco.rya.test.StoreITBase;
 
 /**
- * Helpers for sail tests on the shared MiniAccumuloCluster. Every object built here uses the
- * test's unique table prefix.
+ * Helpers for sail tests on the shared test cluster of the backend named by
+ * {@code -Drya.test.backend}. Every object built here uses the test's unique table prefix.
  */
-public abstract class RyaSailITBase extends AccumuloITBase {
+public abstract class RyaSailITBase extends StoreITBase {
 
     /**
      * @return a configuration that points at this test's tables. System properties change every
@@ -43,8 +44,8 @@ public abstract class RyaSailITBase extends AccumuloITBase {
      *         {@code -Drya.test.indexes=true} turns on the text and geo indexes (each test then
      *         checks that the indexes match the stored statements).
      */
-    protected AccumuloRdfConfiguration newConf() {
-        final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+    protected StoreRdfConfiguration newConf() {
+        final StoreRdfConfiguration conf = new StoreRdfConfiguration();
         conf.setTablePrefix(getTablePrefix());
         final String batchSize = System.getProperty("rya.test.joinBatchSize");
         if (batchSize != null && !batchSize.isBlank()) {
@@ -60,21 +61,21 @@ public abstract class RyaSailITBase extends AccumuloITBase {
     /** Every index table of the test must hold exactly the entries its statements call for. */
     @AfterEach
     public void verifyIndexes() throws Exception {
-        final AccumuloRdfConfiguration conf = newConf();
-        if (!getClient().tableOperations().exists(conf.getTableLayoutStrategy().getSpo())) {
+        final StoreRdfConfiguration conf = newConf();
+        if (getStore() == null || !getStore().tables().exists(conf.getTableLayoutStrategy().getSpo())) {
             return;
         }
         for (final IndexType type : IndexType.values()) {
-            if (getClient().tableOperations().exists(type.table(conf.getTableLayoutStrategy()))) {
-                final IndexVerifier.Report report = IndexVerifier.verify(getClient(), conf, type);
+            if (getStore().tables().exists(type.table(conf.getTableLayoutStrategy()))) {
+                final IndexVerifier.Report report = IndexVerifier.verify(getStore(), conf, type);
                 assertTrue(report.isClean(), type + " index out of step: " + report);
             }
         }
     }
 
     /** @return an initialized DAO on this test's tables. */
-    protected AccumuloRyaDAO newDao(final AccumuloRdfConfiguration conf) {
-        final AccumuloRyaDAO dao = new AccumuloRyaDAO(getClient(), conf);
+    protected RyaStoreDAO newDao(final StoreRdfConfiguration conf) {
+        final RyaStoreDAO dao = new RyaStoreDAO(getStore(), conf);
         dao.init();
         return dao;
     }
@@ -83,11 +84,11 @@ public abstract class RyaSailITBase extends AccumuloITBase {
      * @return a store (not yet initialized) with statistics, and with an inference engine
      *         refreshing every few seconds when {@code inference} is true.
      */
-    protected RdfCloudTripleStore<AccumuloRdfConfiguration> newStore(final AccumuloRdfConfiguration conf,
+    protected RdfCloudTripleStore<StoreRdfConfiguration> newStore(final StoreRdfConfiguration conf,
             final boolean inference) {
         conf.setInfer(inference);
-        final RdfCloudTripleStore<AccumuloRdfConfiguration> store =
-                io.github.dgreco.rya.rdftriplestore.RyaAccumuloSailFactory.createSail(getClient(), conf);
+        final RdfCloudTripleStore<StoreRdfConfiguration> store =
+                RyaSailFactory.createSail(getStore(), conf);
         if (inference) {
             final InferenceEngine engine = new InferenceEngine();
             engine.setRefreshGraphSchedule(5000);

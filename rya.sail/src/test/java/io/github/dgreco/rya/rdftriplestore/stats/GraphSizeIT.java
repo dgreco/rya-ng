@@ -31,7 +31,7 @@ import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.junit.jupiter.api.Test;
 
 import io.github.dgreco.rya.RyaSailITBase;
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
 
 public class GraphSizeIT extends RyaSailITBase {
     private static final String PREFIX = "PREFIX stats: <urn:rya-ng:stats#>\n";
@@ -58,7 +58,7 @@ public class GraphSizeIT extends RyaSailITBase {
 
     @Test
     public void approxSizeNeedsStatistics() {
-        final AccumuloRdfConfiguration conf = newConf();
+        final StoreRdfConfiguration conf = newConf();
         conf.setUseStats(false);
         final SailRepository repo = new SailRepository(newStore(conf, false));
         repo.init();

@@ -29,8 +29,8 @@ import java.util.List;
 import javax.xml.datatype.DatatypeConfigurationException;
 import javax.xml.datatype.DatatypeFactory;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreDAO;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
 import org.eclipse.rdf4j.model.Namespace;
@@ -75,9 +75,9 @@ public class RdfCloudTripleStoreIT extends RyaSailITBase {
     public void setUp() throws Exception {
 
         RdfCloudTripleStore sail = new RdfCloudTripleStore();
-        AccumuloRdfConfiguration conf = newConf();
+        StoreRdfConfiguration conf = newConf();
         sail.setConf(conf);
-        AccumuloRyaDAO crdfdao = new AccumuloRyaDAO(getClient(), null);
+        RyaStoreDAO crdfdao = new RyaStoreDAO(getStore(), null);
         crdfdao.setConf(conf);
         sail.setRyaDAO(crdfdao);
 

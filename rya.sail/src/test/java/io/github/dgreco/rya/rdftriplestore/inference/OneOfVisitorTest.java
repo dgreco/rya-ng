@@ -27,7 +27,7 @@ import static org.mockito.Mockito.when;
 import java.util.Iterator;
 import java.util.Set;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.Value;
@@ -52,7 +52,7 @@ import com.google.common.collect.Sets;
  * Tests the methods of {@link OneOfVisitor}.
  */
 public class OneOfVisitorTest {
-    private final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+    private final StoreRdfConfiguration conf = new StoreRdfConfiguration();
     private static final ValueFactory VF = SimpleValueFactory.getInstance();
 
     private static final IRI SUITS = VF.createIRI("urn:Suits");
@@ -144,7 +144,7 @@ public class OneOfVisitorTest {
                 new StatementPattern(new Var("s"), new Var("p", RDF.TYPE), new Var("o", SUITS)),
                 new ProjectionElemList(new ProjectionElem("s", "subject")));
 
-        final AccumuloRdfConfiguration disabledConf = conf.clone();
+        final StoreRdfConfiguration disabledConf = conf.clone();
         disabledConf.setInferOneOf(false);
 
         query.visit(new OneOfVisitor(disabledConf, inferenceEngine));

@@ -25,9 +25,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.accumulo.core.client.Durability;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.spi.Durability;
 import io.github.dgreco.rya.loader.gen.EntityClass;
 import io.github.dgreco.rya.loader.gen.EntityGenerator;
 import io.github.dgreco.rya.loader.gen.GenConfig;
@@ -36,7 +36,7 @@ import io.github.dgreco.rya.loader.gen.GenConfig;
 public final class LoaderOptions {
 
     public enum Command {
-        PREPARE("prepare"), LOAD("load"), DRY_RUN("dry-run"), VERIFY("verify"), DROP("drop"), CHECK("check");
+        PREPARE("prepare"), LOAD("load"), DRY_RUN("dry-run"), VERIFY("verify"), DROP("drop"), CHECK("check"), LABELS("labels");
 
         private final String word;
 
@@ -54,7 +54,7 @@ public final class LoaderOptions {
                     return c;
                 }
             }
-            throw new IllegalArgumentException("unknown command '" + word + "' (prepare, load, dry-run, verify, drop, check)");
+            throw new IllegalArgumentException("unknown command '" + word + "' (prepare, load, dry-run, verify, drop, check, labels)");
         }
     }
 
@@ -62,6 +62,7 @@ public final class LoaderOptions {
     private static final Set<String> FLAGS = Set.of("text-index", "geo-index", "resume", "grant-auths", "help");
     /** Every option with a value. */
     private static final Set<String> VALUED = Set.of("table-prefix", "client-properties", "zookeepers", "instance", "user",
+            "backend", "hbase-site", "hbase-conf", "hbase-user", "hbase-counters", "hbase-labels-table", "grant-to",
             "text-predicates", "stats", "entities", "triples", "start-entity", "end-entity", "seed", "timestamp", "graphs",
             "default-graph-fraction", "labels", "labelled-fraction", "geo-scale", "polygon-fraction", "text-scale",
             "link-skew", "word-skew", "class-weights", "base-iri", "part", "parts", "threads", "block-size",
@@ -134,7 +135,10 @@ public final class LoaderOptions {
     }
 
     private void validate() {
-        if (command != Command.DRY_RUN && command != Command.CHECK && tablePrefix() == null) {
+        if (command == Command.LABELS && labelList().isEmpty()) {
+            throw new IllegalArgumentException("labels needs --labels A,B,...");
+        }
+        if (command != Command.DRY_RUN && command != Command.CHECK && command != Command.LABELS && tablePrefix() == null) {
             throw new IllegalArgumentException("--table-prefix is required (there is no default, so nothing lands in a "
                     + "store by accident)");
         }
@@ -182,6 +186,64 @@ public final class LoaderOptions {
         return env.get("RYA_ACCUMULO_PASSWORD");
     }
 
+    /** {@code accumulo} (the default) or {@code hbase}; also {@code RYA_BACKEND}. */
+    public String backend() {
+        return values.getOrDefault("backend", env.getOrDefault("RYA_BACKEND", "accumulo")).trim().toLowerCase(Locale.ROOT);
+    }
+
+    /** The settings of the HBase backend, from the {@code --hbase-*} options and {@code RYA_HBASE_*}. */
+    public java.util.Properties hbaseSettings() {
+        final java.util.Properties settings = new java.util.Properties();
+        final String site = values.getOrDefault("hbase-site", env.get("RYA_HBASE_SITE"));
+        if (site != null && !site.isBlank()) {
+            settings.setProperty("hbase.site", site);
+        }
+        // key=value pairs separated by ';' (values such as a ZooKeeper quorum hold commas)
+        final String conf = values.getOrDefault("hbase-conf", env.get("RYA_HBASE_CONF"));
+        if (conf != null) {
+            for (final String pair : conf.split(";")) {
+                final int eq = pair.indexOf('=');
+                if (eq > 0) {
+                    settings.setProperty("hbase.conf." + pair.substring(0, eq).trim(), pair.substring(eq + 1).trim());
+                } else if (!pair.isBlank()) {
+                    throw new IllegalArgumentException("--hbase-conf takes key=value pairs separated by ';' (got '" + pair + "')");
+                }
+            }
+        }
+        final String user = values.getOrDefault("hbase-user", env.get("RYA_HBASE_USER"));
+        if (user != null && !user.isBlank()) {
+            settings.setProperty("hbase.user", user);
+        }
+        settings.setProperty("hbase.counters", values.getOrDefault("hbase-counters", "coprocessor"));
+        settings.setProperty("hbase.labels-table", hbaseLabelsTable());
+        return settings;
+    }
+
+    /** The HBase table of label canaries; must match the endpoint's rya.hbase.labels-table. */
+    public String hbaseLabelsTable() {
+        return values.getOrDefault("hbase-labels-table", "rya_labels");
+    }
+
+    /** The account the labels command gives labels to; null for the connected one. */
+    public String grantTo() {
+        return values.get("grant-to");
+    }
+
+    /** {@code --labels}, as a list. */
+    public List<String> labelList() {
+        final String raw = values.get("labels");
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        final List<String> out = new ArrayList<>();
+        for (final String l : raw.split(",")) {
+            if (!l.isBlank()) {
+                out.add(l.trim());
+            }
+        }
+        return out;
+    }
+
     // ---- store settings (must match the endpoint) ----
 
     public boolean textIndex() {
@@ -225,8 +287,8 @@ public final class LoaderOptions {
     }
 
     /** The store configuration for this prefix and these index settings. */
-    public AccumuloRdfConfiguration rdfConf() {
-        final AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+    public StoreRdfConfiguration rdfConf() {
+        final StoreRdfConfiguration conf = new StoreRdfConfiguration();
         // dry-run needs no prefix; any prefix gives the same row bytes.
         conf.setTablePrefix(tablePrefix() == null ? "dryrun_" : tablePrefix());
         conf.setTextIndex(textIndex());
@@ -509,13 +571,20 @@ public final class LoaderOptions {
                   load      write the dataset (or this process's part of it); resumable with --resume
                   verify    regenerate a sample of entities and compare them with the store
                   drop      delete every table of the prefix (needs --confirm <prefix>)
-                  check     connect and report the instance, the tablet servers and the user's rights
+                  check     connect and report the backend, its servers and the account's rights
                             (with --table-prefix, also whether that store exists)
+                  labels    give an account labels: --labels A,B [--grant-to ACCOUNT]; on HBase also registers them
+                            and writes the canaries the endpoint checks at startup (needs an HBase superuser)
 
-                Connection: --client-properties FILE (rya.loader/configure.sh writes one), or --zookeepers,
+                Backend: --backend accumulo|hbase (default accumulo; also RYA_BACKEND).
+                Accumulo: --client-properties FILE (rya.loader/configure.sh writes one), or --zookeepers,
                   --instance, --user plus the password in the RYA_ACCUMULO_PASSWORD environment variable (also
                   RYA_ACCUMULO_ZOOKEEPERS/_INSTANCE/_USER/_CLIENT_PROPERTIES). A properties file without auth.token
                   takes the password from RYA_ACCUMULO_PASSWORD.
+                HBase: --hbase-site FILES (hbase-site.xml, and core-site.xml for Kerberos; comma-separated),
+                  --hbase-conf 'key=value;key=value' (for example hbase.zookeeper.quorum=zk1,zk2), --hbase-user U
+                  (simple authentication only), --hbase-counters coprocessor|increment, --hbase-labels-table T
+                  (also RYA_HBASE_SITE, RYA_HBASE_CONF, RYA_HBASE_USER).
 
                 Dataset (repeat on every command; prepare prints the exact arguments):
                   --table-prefix P          required; tables P<spo|po|osp|ns|eval|graphs|text|geo>
@@ -534,7 +603,7 @@ public final class LoaderOptions {
                   --max-latency 5s  --writer-timeout 15m  --durability default|sync|flush|log|none  --max-rate N
                   --report-interval 10s  --progress-file F  --resume
 
-                Prepare: --splits auto|N  --grant-auths (add --labels to the user's authorizations)
+                Prepare: --splits auto|N  --grant-auths (give the account the --labels; on HBase as the labels command)
                 Dry run: --print N (print the first statements)  --link-mbps 940
                 Verify:  --sample 1000  --auths A,B
                 Drop:    --confirm <prefix>

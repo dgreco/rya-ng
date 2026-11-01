@@ -40,7 +40,24 @@
         </dependency>
         <dependency>
             <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.store</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.dgreco.rya</groupId>
             <artifactId>rya.accumulo</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.hbase</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.hbase.coprocessor</artifactId>
+        </dependency>
+        <dependency>
+            <!-- its own tests are the store-level integration tests, which cover rya.store -->
+            <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.test</artifactId>
         </dependency>
         <dependency>
             <groupId>io.github.dgreco.rya</groupId>

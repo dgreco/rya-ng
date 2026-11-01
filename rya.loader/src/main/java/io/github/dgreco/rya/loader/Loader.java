@@ -19,16 +19,15 @@ import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.apache.accumulo.core.client.AccumuloClient;
-import org.apache.accumulo.core.client.BatchWriterConfig;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreDAO;
+import io.github.dgreco.rya.store.spi.Store;
+import io.github.dgreco.rya.store.spi.WriterOptions;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.loader.gen.EntityGenerator;
 
@@ -47,7 +46,7 @@ public final class Loader {
         }
     }
 
-    private final AccumuloClient client;
+    private final Store store;
     private final LoaderOptions options;
     private final PrintStream out;
     private final AtomicBoolean stop = new AtomicBoolean();
@@ -56,8 +55,8 @@ public final class Loader {
     private final AtomicLong generatedEntities = new AtomicLong();
     private RateLimiter limiter;
 
-    public Loader(final AccumuloClient client, final LoaderOptions options, final PrintStream out) {
-        this.client = client;
+    public Loader(final Store store, final LoaderOptions options, final PrintStream out) {
+        this.store = store;
         this.options = options;
         this.out = out;
     }
@@ -68,7 +67,7 @@ public final class Loader {
     }
 
     public Result run() throws Exception {
-        StoreCheck.forLoad(client, options);
+        StoreCheck.forLoad(store, options);
         final EntityGenerator generator = new EntityGenerator(options.genConfig());
         final long[] range = options.partRange();
         final int blockSize = options.blockSize();
@@ -115,15 +114,11 @@ public final class Loader {
 
     private void work(final EntityGenerator generator, final long first, final long last, final int blockSize,
             final long blocks, final AtomicLong cursor, final Progress progress) {
-        final AccumuloRdfConfiguration conf = options.rdfConf();
+        final StoreRdfConfiguration conf = options.rdfConf();
         conf.setFlush(false);
-        final AccumuloRyaDAO dao = new AccumuloRyaDAO(client, conf);
-        dao.setBatchWriterConfig(new BatchWriterConfig()
-                .setMaxMemory(options.batchMemoryBytes())
-                .setMaxWriteThreads(options.writerThreads())
-                .setMaxLatency(options.maxLatencyMs(), TimeUnit.MILLISECONDS)
-                .setTimeout(options.writerTimeoutMs(), TimeUnit.MILLISECONDS)
-                .setDurability(options.durability()));
+        final RyaStoreDAO dao = new RyaStoreDAO(store, conf);
+        dao.setWriterOptions(new WriterOptions(options.batchMemoryBytes(), options.maxLatencyMs(), options.writerTimeoutMs(),
+                options.writerThreads(), options.durability()));
         final List<Long> pending = new ArrayList<>();
         long pendingTriples = 0;
         boolean failed = false;

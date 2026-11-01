@@ -16,18 +16,21 @@
 package io.github.dgreco.rya.loader;
 
 import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.accumulo.core.client.AccumuloClient;
-import org.apache.accumulo.core.security.SystemPermission;
+import io.github.dgreco.rya.accumulo.AccumuloStore;
+import io.github.dgreco.rya.hbase.HBaseStore;
+import io.github.dgreco.rya.store.spi.Store;
 
-/** The loader's command line: {@code prepare}, {@code load}, {@code dry-run}, {@code verify}, {@code drop}, {@code check}. */
+/**
+ * The loader's command line: {@code prepare}, {@code load}, {@code dry-run}, {@code verify}, {@code drop},
+ * {@code check}, {@code labels}.
+ */
 public final class LoaderMain {
     /** Every table suffix a store uses (see TablePrefixLayoutStrategy). */
     static final List<String> SUFFIXES = List.of("spo", "po", "osp", "ns", "eval", "graphs", "text", "geo");
@@ -42,7 +45,8 @@ public final class LoaderMain {
 
     /** Keeps the output readable: the loader's own lines, and only warnings from the libraries. */
     private static void quietLibraries() {
-        for (final String noisy : List.of("org.apache.zookeeper", "org.apache.accumulo", "org.apache.hadoop", "org.apache.curator")) {
+        for (final String noisy : List.of("org.apache.zookeeper", "org.apache.accumulo", "org.apache.hadoop", "org.apache.curator",
+                "org.apache.hbase")) {
             if (System.getProperty("org.slf4j.simpleLogger.log." + noisy) == null) {
                 System.setProperty("org.slf4j.simpleLogger.log." + noisy, "warn");
             }
@@ -71,20 +75,24 @@ public final class LoaderMain {
                 DryRun.run(o, out);
                 return 0;
             }
-            try (AccumuloClient client = ClientFactory.create(o)) {
+            try (Store store = StoreFactory.open(o)) {
                 return switch (o.command) {
                     case PREPARE -> {
-                        Prepare.run(client, o, out);
+                        Prepare.run(store, o, out);
                         yield 0;
                     }
-                    case LOAD -> load(client, o, out);
-                    case VERIFY -> Verify.run(client, o, out) ? 0 : 1;
+                    case LOAD -> load(store, o, out);
+                    case VERIFY -> Verify.run(store, o, out) ? 0 : 1;
                     case DROP -> {
-                        drop(client, o, out);
+                        drop(store, o, out);
                         yield 0;
                     }
                     case CHECK -> {
-                        check(client, o, out);
+                        check(store, o, out);
+                        yield 0;
+                    }
+                    case LABELS -> {
+                        Labels.run(store, o, out);
                         yield 0;
                     }
                     default -> 2;
@@ -100,8 +108,8 @@ public final class LoaderMain {
         }
     }
 
-    private static int load(final AccumuloClient client, final LoaderOptions o, final PrintStream out) throws Exception {
-        final Loader loader = new Loader(client, o, out);
+    private static int load(final Store store, final LoaderOptions o, final PrintStream out) throws Exception {
+        final Loader loader = new Loader(store, o, out);
         final CountDownLatch finished = new CountDownLatch(1);
         // Ctrl-C: finish the current blocks, flush, record progress, then exit.
         final Thread hook = new Thread(() -> {
@@ -126,32 +134,41 @@ public final class LoaderMain {
     }
 
     /** What the loader will connect to and may do there. */
-    private static void check(final AccumuloClient client, final LoaderOptions o, final PrintStream out) throws Exception {
-        final String user = client.whoami();
-        final Properties props = client.properties();
-        out.println("Connected to instance " + props.getProperty("instance.name") + " (ZooKeepers "
-                + props.getProperty("instance.zookeepers") + ") as " + user + ".");
-        out.println("Tablet servers: " + client.instanceOperations().getTabletServers().size());
-        final List<String> auths = new ArrayList<>();
-        for (final byte[] a : client.securityOperations().getUserAuthorizations(user).getAuthorizations()) {
-            auths.add(new String(a, StandardCharsets.UTF_8));
+    private static void check(final Store store, final LoaderOptions o, final PrintStream out) throws Exception {
+        final String user = store.access().whoami();
+        if (store instanceof AccumuloStore accumulo) {
+            final Properties props = accumulo.client().properties();
+            out.println("Connected to Accumulo instance " + props.getProperty("instance.name") + " (ZooKeepers "
+                    + props.getProperty("instance.zookeepers") + ") as " + user + ".");
+        } else {
+            out.println("Connected to " + store.backend() + " as " + user + ".");
         }
-        out.println("Authorizations of " + user + ": " + (auths.isEmpty() ? "none (unlabeled data only)" : String.join(",", auths)));
-        out.println("May create tables: " + (client.securityOperations().hasSystemPermission(user,
-                SystemPermission.CREATE_TABLE) ? "yes" : "no (prepare needs it)"));
+        out.println("Servers: " + store.tables().serverCount());
+        final Optional<List<String>> labels = store.access().heldLabels();
+        if (labels.isPresent()) {
+            out.println("Labels of " + user + ": " + (labels.get().isEmpty() ? "none (unlabeled data only)"
+                    : String.join(",", labels.get())));
+        } else {
+            out.println("Labels of " + user + ": not readable on " + store.backend()
+                    + " (the endpoint checks its labels at startup)");
+        }
+        if (store instanceof HBaseStore hbase && !hbase.enforcesLabels()) {
+            out.println("Warning: this HBase cluster doesn't enforce cell visibility; labelled statements will be refused.");
+        }
+        out.println("May create tables: " + (store.access().mayCreateTables() ? "yes" : "no (prepare needs it)"));
         if (o.tablePrefix() != null) {
             final List<String> present = SUFFIXES.stream().map(s -> o.tablePrefix() + s)
-                    .filter(t -> client.tableOperations().exists(t)).toList();
+                    .filter(t -> store.tables().exists(t)).toList();
             out.println("Store " + o.tablePrefix() + ": " + (present.isEmpty() ? "not found" : "tables " + present));
         }
     }
 
-    private static void drop(final AccumuloClient client, final LoaderOptions o, final PrintStream out) throws Exception {
+    private static void drop(final Store store, final LoaderOptions o, final PrintStream out) throws Exception {
         int dropped = 0;
         for (final String suffix : SUFFIXES) {
             final String table = o.tablePrefix() + suffix;
-            if (client.tableOperations().exists(table)) {
-                client.tableOperations().delete(table);
+            if (store.tables().exists(table)) {
+                store.tables().delete(table);
                 out.println("Deleted " + table);
                 dropped++;
             }

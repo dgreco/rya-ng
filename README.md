@@ -23,45 +23,49 @@ under the License. -->
 [![license](https://img.shields.io/github/license/dgreco/rya-ng?color=blue)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-25%2B-orange)](#requirements)
 
-rya-ng is an RDF triple store on [Apache Accumulo](https://accumulo.apache.org/). It has two parts:
+rya-ng is an RDF triple store on [Apache Accumulo](https://accumulo.apache.org/) or [Apache HBase](https://hbase.apache.org/). It has two parts:
 - an [RDF4J](https://rdf4j.org/) Sail you can embed;
 - a standalone [SPARQL 1.1 Protocol](https://www.w3.org/TR/sparql11-protocol/) endpoint for queries and updates.
 
 It supports:
 - named graphs;
-- Accumulo cell-level visibility labels and scan authorizations;
+- cell-level visibility labels and scan authorizations, with the same meaning on both backends;
 - optional query-time OWL/RDFS inference;
 - join ordering driven by statistics that are kept up to date on every write;
-- batched join lookups: the matches for many left-hand rows are fetched in one Accumulo batch scan;
+- batched join lookups: the matches for many left-hand rows are fetched in one batched read;
 - full-text search and GeoSPARQL filters, sped up by optional text and geo indexes that honour visibility labels.
 
 rya-ng is derived from [Apache Rya](https://github.com/apache/rya). It keeps Rya's storage model and query-time inference, rebuilt for Accumulo 2.1, RDF4J 6 and Java 25, with everything else removed. It is an independent project, not part of the Apache Software Foundation. See `NOTICE`.
 
-[ARCH.md](ARCH.md) explains how rya-ng works inside, with diagrams: the storage layout, the write and query paths, statistics, batched joins, inference and the search indexes.
+[ARCH.md](ARCH.md) explains how rya-ng works inside, with diagrams: the storage layout, the write and query paths, statistics, batched joins, inference and the search indexes. [BACKENDS-STUDY.md](BACKENDS-STUDY.md) explains how the storage layer is split from its backends, and how rya-ng maps onto HBase.
 
 ## Requirements
 
 - **Java 25.** RDF4J 6 requires it.
 - **Maven 3.9 or newer.**
-- **Accumulo 2.1.x** to run against. Tests and the dev server start their own in-process MiniAccumuloCluster.
+- **Accumulo 2.1.x or HBase 3.0.x** to run against (see [Storage backends](#storage-backends)). Tests and the dev server start their own in-process cluster.
 
 ## Build and test
 
 ```bash
-mvn clean verify                 # build, unit tests (*Test) and MiniAccumuloCluster tests (*IT)
-mvn clean install -DskipTests    # build only
-mvn test                         # unit tests only (fast, no Accumulo)
+mvn clean verify                          # build, unit tests (*Test) and MiniAccumuloCluster tests (*IT)
+mvn clean install -DskipTests -DskipITs   # build only
+mvn test                                  # unit tests only (fast, no cluster)
+
+# the integration tests on an in-process HBase cluster instead of Accumulo
+mvn install -DskipTests -DskipITs
+mvn verify -pl rya.test,rya.sail,rya.loader,rya.sparql -Drya.test.backend=hbase
+mvn verify -pl rya.test -Drya.test.backend=hbase -Drya.test.hbaseCounters=increment
 
 # one test class: install the modules once, then run a single module
-mvn install -DskipTests
 mvn -pl rya.api test -Dtest=TypeEncodingDelimiterTest
-mvn -pl rya.accumulo verify -Dit.test=AccumuloRyaDAOIT -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false
+mvn -pl rya.test verify -Dit.test=RyaStoreDAOIT -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false
 
 # coverage of the unit and integration tests together, in rya.coverage/target/site/jacoco-aggregate
 mvn clean verify -Pcoverage
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) runs `mvn clean verify -Pcoverage` on every push and pull request:
+GitHub Actions (`.github/workflows/ci.yml`) runs `mvn clean verify -Pcoverage` on every push and pull request, and the integration tests again on HBase:
 - Each run's summary lists the tests and the coverage per module, and the HTML coverage report is attached to the run.
 - For pushes to `main`, the report is published at <https://dgreco.github.io/rya-ng/coverage/>. The coverage and tests badges above show its line coverage and test count.
 
@@ -72,11 +76,31 @@ The endpoint is packaged as `rya.sparql/target/rya.sparql-<version>.jar`.
 | Module | Purpose |
 |---|---|
 | `rya.api` | Storage-independent model (`RyaStatement`, `RyaIRI`, `RyaType`), DAO interfaces, and row and value encoding |
-| `rya.accumulo` | `AccumuloRyaDAO`: stores each statement in the SPO, PO and OSP tables, and maintains statistics and the named-graph list |
-| `rya.sail` | RDF4J Sail (`RdfCloudTripleStore`), query planning, inference, and `RyaAccumuloSailFactory` |
+| `rya.store` | The storage SPI, and what is written once on top of it: `RyaStoreDAO` (each statement in the SPO, PO and OSP tables, statistics, the named-graph list), the query engine, the search indexes and the trace |
+| `rya.accumulo` | The Accumulo backend |
+| `rya.hbase` | The HBase backend |
+| `rya.hbase.coprocessor` | The region observer for HBase's counter table, installed on the region servers |
+| `rya.sail` | RDF4J Sail (`RdfCloudTripleStore`), query planning, inference, and `RyaSailFactory` |
 | `rya.sparql` | Spring Boot SPARQL endpoint |
 | `rya.loader` | Synthetic data generator and parallel loader, for stress tests |
-| `rya.test.accumulo` | Test-only harness: one shared MiniAccumuloCluster per JVM |
+| `rya.test` | Test-only harness: one shared cluster per backend per JVM, and the store-level integration tests |
+
+## Storage backends
+
+`rya.backend` (endpoint) or `--backend` (loader) picks the store: `accumulo` (the default) or `hbase`. Both behave the same, labels included; the integration tests run on both. One difference: asking for labels the account doesn't hold fails on Accumulo, but returns fewer rows on HBase. The endpoint checks its labels at startup on HBase; code that embeds the Sail must grant its account the labels it asks for. Data is not moved between them.
+
+**HBase** needs:
+- **HBase 3.0.x**, with `org.apache.hadoop.hbase.security.visibility.VisibilityController` in both `hbase.coprocessor.master.classes` and `hbase.coprocessor.region.classes`, and `hbase.security.authorization=true`. Without that setting HBase ignores labels; rya-ng then refuses labelled data.
+- **A normal account** for the endpoint and the loader: HBase superusers, and holders of its `system` label, see every cell whatever they ask for. Once labels have been registered through rya-ng (below), a store checks this when it opens and refuses to run as one. Before that, there is no canary to check against: it only logs a warning.
+- **Registered labels.** HBase only accepts labels registered in advance. Register them, as a superuser, with the loader:
+  ```bash
+  rya.loader/run.sh labels --backend hbase --hbase-site /etc/hbase/conf/hbase-site.xml --labels A,B --grant-to rya
+  ```
+  This also writes a *canary* cell per label, which the endpoint reads at startup to check that its account holds every label of `rya.sparql.authorizations` (HBase would otherwise drop the missing ones silently).
+- **The counter coprocessor**, for fast statistics: put `rya.hbase.coprocessor/target/rya.hbase.coprocessor-<version>.jar` on the region servers' classpath, or give its hdfs path as `rya.hbase.counters-jar`. Without it, set `rya.hbase.counters=increment`: HBase increments work everywhere but lock a row and sync the WAL for every counter write.
+  - Configure the same mode for every endpoint and loader of a store. A writer reads the counter table's mode from its descriptor, but an account that may not read descriptors (with HBase's `AccessController`, that needs ADMIN or CREATE) falls back to its configured mode. Writing in the wrong mode loses counts.
+- Literals of more than about 32 KB (rows over 32,767 bytes, HBase's limit) are refused.
+- **Finding the cluster:** give the cluster's `hbase-site.xml` (`rya.hbase.site`), or only a ZooKeeper quorum (`rya.hbase.conf[hbase.zookeeper.quorum]`), in which case rya-ng finds the cluster through ZooKeeper. HBase 3's client otherwise asks its masters (`hbase.client.bootstrap.servers`, by default `localhost:16000`).
 
 ## Running the SPARQL endpoint
 
@@ -109,10 +133,24 @@ java -jar rya.sparql/target/rya.sparql-1.0.0-SNAPSHOT.jar \
   --rya.accumulo.instance=accumulo --rya.accumulo.zookeepers=zk1:2181 --rya.accumulo.user=rya
 ```
 
+On HBase, give the client configuration instead, and no password:
+
+```bash
+java -jar rya.sparql/target/rya.sparql-1.0.0-SNAPSHOT.jar --rya.backend=hbase \
+  --rya.hbase.site=/etc/hbase/conf/hbase-site.xml --rya.sparql.authorizations=A,B
+```
+
 Instead of the connection arguments, `--rya.accumulo.client-properties` can point at an `accumulo-client.properties` file, such as the one `rya.loader/configure.sh` writes. If the file has no password, it comes from `RYA_ACCUMULO_PASSWORD`. Settings can also come from environment variables, for example `RYA_ACCUMULO_ZOOKEEPERS`. Defaults are in `rya.sparql/src/main/resources/application.yaml`.
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `rya.backend` | `accumulo` | The store: `accumulo` or `hbase` |
+| `rya.hbase.site` | `[]` | `hbase-site.xml` files (and `core-site.xml` for Kerberos) |
+| `rya.hbase.conf[KEY]` | | Any HBase client setting, for example `rya.hbase.conf[hbase.zookeeper.quorum]=zk1,zk2` |
+| `rya.hbase.user` | | With simple authentication only, the account to connect as |
+| `rya.hbase.counters` | `coprocessor` | How new counter tables store deltas: `coprocessor` or `increment` |
+| `rya.hbase.counters-jar` | | The hdfs path region servers load the coprocessor from, when it isn't on their classpath |
+| `rya.hbase.labels-table` | `rya_labels` | The label canary table |
 | `rya.table-prefix` | `rya_` | Prefix of the Rya tables, which are created if missing |
 | `rya.inference` | `false` | Query-time OWL/RDFS inference |
 | `rya.inference-refresh` | `5m` | How often the ontology is reloaded. Ontology changes take effect after the next reload. |
@@ -122,14 +160,14 @@ Instead of the connection arguments, `--rya.accumulo.client-properties` can poin
 | `rya.text-index-predicates` | `[]` | Predicates whose literals are text-indexed; empty means all |
 | `rya.geo-index` | `false` | Keep the geospatial index |
 | `rya.rebuild-indexes` | `false` | At startup, build indexes that don't cover the stored data yet |
-| `rya.sparql.authorizations` | `[]` | The most a request may read with. The Accumulo user must hold all of them. |
+| `rya.sparql.authorizations` | `[]` | The most a request may read with. The store account must hold all of them; on HBase the endpoint checks it at startup. |
 | `rya.sparql.default-visibility` | `""` | Visibility label written on inserted statements |
 | `rya.sparql.allow-request-visibility` | `false` | Let an update set its own label with `visibility=` |
 | `rya.sparql.query-timeout` | `120s` | Maximum query or update time, unless the request sets `timeout=` |
 | `rya.sparql.max-query-timeout` | `30m` | Longest time a request may ask for with `timeout=`; `0s` means no limit |
 | `rya.sparql.allow-trace` | `true` | Let requests be traced (`trace=` and `/sparql/trace`, see [Tracing a query](#tracing-a-query)) |
 
-To try the endpoint without an Accumulo cluster:
+To try the endpoint without a cluster (add `-Dspring-boot.run.jvmArguments=-Drya.test.backend=hbase` for HBase):
 
 ```bash
 mvn -pl rya.sparql -am install -DskipTests
@@ -153,7 +191,7 @@ Open the server's root URL (for example `http://localhost:8080/`) for a query pa
 **Header fields,** remembered by the browser:
 - **Authorizations** is sent as `auths=`, so a query reads with fewer labels than the server allows.
 - **Timeout (s)** is sent as `timeout=`, so a long query can run for longer than the server's default, up to `rya.sparql.max-query-timeout`. Empty uses the default.
-- **Trace** opens a panel on the right that shows what each query does in Accumulo while it runs (see [Tracing a query](#tracing-a-query)).
+- **Trace** opens a panel on the right that shows what each query does in the store while it runs (see [Tracing a query](#tracing-a-query)).
 
 The page's JavaScript and CSS are packaged into the jar at build time. Their licenses are listed at `/vendor/THIRD-PARTY-NOTICES.txt`.
 
@@ -187,18 +225,18 @@ Rya extensions:
 - `auths=A,B` narrows the read authorizations for one request; asking for more than is configured gets `403`.
 - `visibility=A&B` labels the statements an update inserts, if `allow-request-visibility` is on.
 - `timeout=600` sets this request's time limit, in seconds. More than `rya.sparql.max-query-timeout` gets `403`; anything but a positive whole number gets `400`.
-- `trace=<id>` streams what the request does in Accumulo to `/sparql/trace/<id>` (see [Tracing a query](#tracing-a-query)).
+- `trace=<id>` streams what the request does in the store to `/sparql/trace/<id>` (see [Tracing a query](#tracing-a-query)).
 
 The endpoint has no HTTP authentication. Run it behind a proxy that authenticates users, or add Spring Security.
 
 ## Tracing a query
 
-A trace shows how a query or an update maps onto Accumulo, live:
+A trace shows how a query or an update maps onto the store, live:
 - **the plan:** RDF4J's query tree as parsed, then after Rya's rewrites, with the join order, the cardinality estimates and which joins are batched (`RyaBatchedJoin`);
-- **every scan:** the table, `Scanner` or `BatchScanner`, the ranges (with the separator bytes shown as `⟨00⟩`, `⟨01⟩`, `⟨ff⟩`), the column families and server-side iterators, the authorizations, how many entries came back and the time spent in Accumulo;
+- **every scan:** the table, the operation (Accumulo's `Scanner`, `BatchScanner`, `BatchDeleter`; HBase's `Scan`, `Get`, `BatchScan`), the ranges (with the separator bytes shown as `⟨00⟩`, `⟨01⟩`, `⟨ff⟩`), the column families and server-side filters, the authorizations, how many entries came back and the time spent in the store;
 - **why each scan happened:** for example `query planning › statistics: PREDICATE count of …`, `lookup <urn:alice> <urn:knows> ? on SPO`, or `batched join: 5 right-hand lookups fetched together`;
 - **every flush of writes:** the mutations, cells, deletes and bytes sent to each table;
-- **progress of long scans:** about once a second, each scan that has run for a second reports the entries it has read so far, the last row it reached, and how long it has been waiting for the tablet servers;
+- **progress of long scans:** about once a second, each scan that has run for a second reports the entries it has read so far, the last row it reached, and how long it has been waiting for the servers;
 - **a summary** per table.
 
 **On the query page:** tick **Trace** in the header.
@@ -221,10 +259,10 @@ curl http://localhost:8080/sparql --data-urlencode 'query=SELECT * WHERE { ?s ?p
 - **Closing:** the stream always ends with an `end` event whose status is `ok`, `error` or `timeout`.
 - **Size:** a trace reports up to 1,000 scans and flushes one by one; the summary counts them all.
 
-**Without the endpoint:** the same trace is available from Java. `RyaAccumuloSailFactory` wraps the Accumulo client it is given, so tracing the thread that runs a query is enough:
+**Without the endpoint:** the same trace is available from Java. Both backends report to the thread's trace (`AccumuloStore` wraps the Accumulo client it is given), so tracing the thread that runs a query is enough:
 
 ```java
-try (AccumuloTrace.Scope scope = AccumuloTrace.start(event -> System.out.println(event));
+try (StoreTrace.Scope scope = StoreTrace.start(event -> System.out.println(event));
         TupleQueryResult result = conn.prepareTupleQuery(query).evaluate()) {
     result.forEach(row -> { });
 }
@@ -327,7 +365,7 @@ rya.loader/configure.sh   # once: asks for the connection, writes ~/.rya-ng/accu
 R=rya.loader/run.sh       # builds the jar on first use; --build rebuilds it
 C="--client-properties $HOME/.rya-ng/accumulo-client.properties"
 
-$R check $C                                                # connection, tablet servers, the user's rights
+$R check $C                                                # connection, servers, the account's rights
 $R dry-run --triples 1B --text-index --geo-index           # no cluster: speed, bytes per triple, network ceiling
 $R prepare $C --table-prefix big_ --triples 1B --text-index --geo-index
 $R load    $C <the dataset options prepare printed> --threads 8
@@ -340,6 +378,7 @@ $R drop    $C --table-prefix big_ --confirm big_
   - The password can be stored in the file, or left out and read from `RYA_ACCUMULO_PASSWORD` when the loader starts.
   - `--output FILE` writes elsewhere, and `--defaults` takes the `RYA_ACCUMULO_*` variables without asking.
   - Without a file, set `RYA_ACCUMULO_ZOOKEEPERS`, `RYA_ACCUMULO_INSTANCE`, `RYA_ACCUMULO_USER` and `RYA_ACCUMULO_PASSWORD`. `--zookeepers`, `--instance` and `--user` also work, but the password is never accepted as an argument.
+  - **HBase:** `--backend hbase` with `--hbase-site /etc/hbase/conf/hbase-site.xml` (or `--hbase-conf 'hbase.zookeeper.quorum=zk1,zk2'`). Register the dataset's labels first with `labels --labels A,B`, as an HBase superuser: the loading account itself must not be one.
 - **`prepare` first, once per dataset:**
   - creates the tables with the indexes ready and splits each table into 4 tablets per tablet server, at split points sampled from the data;
   - writes the ontology, 200 countries and a description of the dataset;
@@ -356,12 +395,12 @@ $R drop    $C --table-prefix big_ --confirm big_
 
 ```java
 try (AccumuloClient client = Accumulo.newClient().from("accumulo-client.properties").build()) {
-    AccumuloRdfConfiguration conf = new AccumuloRdfConfiguration();
+    StoreRdfConfiguration conf = new StoreRdfConfiguration();
     conf.setTablePrefix("rya_");
     conf.setInfer(true);                       // optional
     conf.setTextIndex(true);                   // optional: text:matches index
     conf.setGeoIndex(true);                    // optional: GeoSPARQL index
-    SailRepository repo = RyaAccumuloSailFactory.createRepository(client, conf);
+    SailRepository repo = RyaSailFactory.createRepository(AccumuloStore.wrap(client), conf);
     repo.init();
     try (RepositoryConnection conn = repo.getConnection()) {
         conn.prepareUpdate("INSERT DATA { <urn:a> <urn:p> <urn:b> }").execute();
@@ -370,10 +409,12 @@ try (AccumuloClient client = Accumulo.newClient().from("accumulo-client.properti
 }
 ```
 
+On HBase, wrap a connection the same way: `HBaseStore.wrap(connection, user)` (the caller closes the connection), or open a store of either backend from its settings with `Stores.open("hbase", settings)` (see `HBaseStoreProvider` for the settings).
+
 ## Notes
 
 - Writes are not transactional. Each update is applied immediately, and rollback does not undo it.
 - `xsd:dateTime` values are stored as UTC milliseconds, so the original time-zone offset is not kept.
-- Literals containing the control characters U+0000 or U+0001 are rejected, because those bytes separate the parts of a row key.
+- Literals containing the control characters U+0000 or U+0001 are rejected, because those bytes separate the parts of a row key. Graph IRIs and statement qualifiers containing U+0000 are rejected too: on HBase that byte separates the column names.
 - `size()` and the list of named graphs scan the data. They cost time in proportion to the store or graph size.
 - Statistics are approximate, since re-inserting an existing statement counts it twice. They only affect join order.

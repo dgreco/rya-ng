@@ -28,8 +28,8 @@ import java.util.List;
 import java.util.Map;
 
 import io.github.dgreco.rya.RyaSailITBase;
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreDAO;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.api.domain.RyaType;
@@ -58,8 +58,8 @@ public class BatchLookupIT extends RyaSailITBase {
     private static final IRI G = VF.createIRI("urn:g");
     private static final IRI G1 = VF.createIRI("urn:G1");
 
-    private AccumuloRdfConfiguration conf;
-    private AccumuloRyaDAO dao;
+    private StoreRdfConfiguration conf;
+    private RyaStoreDAO dao;
 
     @BeforeEach
     public void load() throws Exception {
@@ -137,7 +137,7 @@ public class BatchLookupIT extends RyaSailITBase {
 
     /** Each key's batch result equals, as a multiset, what a lookup without any prefetch returns. */
     private void assertMatchesSingleLookups(final Map<LookupKey, List<Statement>> batch) {
-        final StoreTripleSource<AccumuloRdfConfiguration> source = new StoreTripleSource<>(conf, dao);
+        final StoreTripleSource<StoreRdfConfiguration> source = new StoreTripleSource<>(conf, dao);
         for (final Map.Entry<LookupKey, List<Statement>> e : batch.entrySet()) {
             final LookupKey k = e.getKey();
             final Map<Statement, Integer> single = new HashMap<>();

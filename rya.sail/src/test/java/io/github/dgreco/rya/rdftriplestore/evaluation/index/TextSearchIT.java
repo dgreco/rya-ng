@@ -31,7 +31,7 @@ import org.eclipse.rdf4j.query.MalformedQueryException;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.junit.jupiter.api.Test;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
 
 /** Text search returns the same rows with the index as without it, and uses it when it can. */
@@ -62,7 +62,7 @@ class TextSearchIT extends IndexITBase {
         return select("?d rdfs:label ?l FILTER(text:matches(?l, \"" + query.replace("\"", "\\\"") + "\"))");
     }
 
-    private SailRepository loaded(final AccumuloRdfConfiguration conf, final boolean inference) throws Exception {
+    private SailRepository loaded(final StoreRdfConfiguration conf, final boolean inference) throws Exception {
         final SailRepository repo = open(conf, inference);
         update(repo, DATA);
         if (inference) {
@@ -133,7 +133,7 @@ class TextSearchIT extends IndexITBase {
 
     @Test
     void aPredicateListLimitsWhatIsIndexed() throws Exception {
-        final AccumuloRdfConfiguration conf = indexedConf();
+        final StoreRdfConfiguration conf = indexedConf();
         conf.setTextIndexPredicates(List.of(RDFS.LABEL.stringValue()));
         final SailRepository repo = loaded(conf, false);
         assertAgrees(repo, label("fox"), true);

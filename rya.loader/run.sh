@@ -18,9 +18,13 @@
 #
 #   rya.loader/run.sh [--build] <command> [options]      (run.sh --help for the options)
 #
-# Connection: --client-properties FILE, or these environment variables:
+# Connection to Accumulo (the default backend): --client-properties FILE, or these environment variables:
 #   RYA_ACCUMULO_ZOOKEEPERS, RYA_ACCUMULO_INSTANCE, RYA_ACCUMULO_USER, RYA_ACCUMULO_PASSWORD
 # (or --zookeepers, --instance and --user; the password is only read from the environment).
+#
+# Connection to HBase: --backend hbase (or RYA_BACKEND=hbase), plus --hbase-site FILES or
+#   --hbase-conf 'hbase.zookeeper.quorum=zk1,zk2;hbase.zookeeper.property.clientPort=2181'
+#   (or RYA_HBASE_SITE, RYA_HBASE_CONF, RYA_HBASE_USER).
 #
 # Other environment variables:
 #   LOADER_HEAP        Java heap (default 4g)

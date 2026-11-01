@@ -28,11 +28,11 @@ import org.eclipse.rdf4j.model.ValueFactory;
 import org.eclipse.rdf4j.query.QueryEvaluationException;
 import org.eclipse.rdf4j.query.algebra.evaluation.TripleSource;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
-import io.github.dgreco.rya.accumulo.index.IndexCatalog;
-import io.github.dgreco.rya.accumulo.index.IndexQuery;
-import io.github.dgreco.rya.accumulo.index.IndexSearcher;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreDAO;
+import io.github.dgreco.rya.store.index.IndexCatalog;
+import io.github.dgreco.rya.store.index.IndexQuery;
+import io.github.dgreco.rya.store.index.IndexSearcher;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.api.persist.RyaDAOException;
 import io.github.dgreco.rya.api.resolver.RdfToRyaConversions;
@@ -50,21 +50,21 @@ public class IndexTripleSource implements TripleSource {
     private final IndexQuery query;
     private final IndexCatalog catalog;
     private final IndexSearcher searcher;
-    private final AccumuloRdfConfiguration conf;
+    private final StoreRdfConfiguration conf;
 
     public IndexTripleSource(final StoreTripleSource<?> store, final IndexQuery query) {
         this.store = store;
         this.query = query;
-        final AccumuloRyaDAO dao = (AccumuloRyaDAO) store.getRyaDAO();
+        final RyaStoreDAO dao = (RyaStoreDAO) store.getRyaDAO();
         this.catalog = dao.getIndexCatalog();
         this.searcher = new IndexSearcher(dao);
-        this.conf = (AccumuloRdfConfiguration) store.getConf();
+        this.conf = (StoreRdfConfiguration) store.getConf();
     }
 
     /** Whether this store supports index lookups. */
     public static boolean supports(final TripleSource source) {
-        return source instanceof StoreTripleSource<?> s && s.getRyaDAO() instanceof AccumuloRyaDAO
-                && s.getConf() instanceof AccumuloRdfConfiguration;
+        return source instanceof StoreTripleSource<?> s && s.getRyaDAO() instanceof RyaStoreDAO
+                && s.getConf() instanceof StoreRdfConfiguration;
     }
 
     @Override

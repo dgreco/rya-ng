@@ -36,12 +36,16 @@ import org.apache.accumulo.core.client.IteratorSetting;
 import org.apache.accumulo.core.client.MultiTableBatchWriter;
 import org.apache.accumulo.core.client.Scanner;
 import org.apache.accumulo.core.client.ScannerBase;
+import org.apache.accumulo.core.data.ColumnUpdate;
 import org.apache.accumulo.core.data.Key;
 import org.apache.accumulo.core.data.Mutation;
 import org.apache.accumulo.core.data.Range;
 import org.apache.accumulo.core.data.Value;
 import org.apache.accumulo.core.security.Authorizations;
 import org.apache.hadoop.io.Text;
+
+import io.github.dgreco.rya.store.trace.StoreTrace;
+import io.github.dgreco.rya.store.trace.Trace;
 
 /** Dynamic proxies that report Accumulo client operations to the current {@link Trace}. */
 final class TracingProxies {
@@ -103,7 +107,7 @@ final class TracingProxies {
                 default:
                     break;
             }
-            final Trace trace = AccumuloTrace.current();
+            final Trace trace = StoreTrace.current();
             if (trace == null) {
                 return result;
             }
@@ -183,11 +187,11 @@ final class TracingProxies {
                     ranges.clear();
                     ranges.addAll((Collection<Range>) args[0]);
                 }
-                case "fetchColumnFamily" -> columns.add("family " + TraceText.text((Text) args[0]));
+                case "fetchColumnFamily" -> columns.add("family " + AccumuloTraceText.text((Text) args[0]));
                 case "fetchColumn" -> {
                     if (args.length == 2) {
-                        final String cq = TraceText.text((Text) args[1]);
-                        columns.add("column " + TraceText.text((Text) args[0]) + " : " + (cq.isEmpty() ? "(empty qualifier)" : cq));
+                        final String cq = AccumuloTraceText.text((Text) args[1]);
+                        columns.add("column " + AccumuloTraceText.text((Text) args[0]) + " : " + (cq.isEmpty() ? "(empty qualifier)" : cq));
                     } else {
                         columns.add("column " + args[0]);
                     }
@@ -211,11 +215,11 @@ final class TracingProxies {
                 if (shown.size() >= Trace.MAX_RANGES) {
                     break;
                 }
-                shown.add(TraceText.range(r));
+                shown.add(AccumuloTraceText.range(r));
             }
             final List<String> its = new ArrayList<>();
             for (final IteratorSetting s : iterators.values()) {
-                its.add(TraceText.iterator(s));
+                its.add(AccumuloTraceText.iterator(s));
             }
             return trace.scanStarted(op, table, shown, all.size(), List.copyOf(columns), its, auths, reason);
         }
@@ -350,7 +354,7 @@ final class TracingProxies {
         @Override
         public String position() {
             final Key k = lastKey;
-            return k == null ? null : TraceText.text(k.getRow());
+            return k == null ? null : AccumuloTraceText.text(k.getRow());
         }
 
         void end(final String how) {
@@ -386,8 +390,18 @@ final class TracingProxies {
         }
     }
 
+    private static void wrote(final Trace trace, final String table, final Mutation m) {
+        int deletes = 0;
+        for (final ColumnUpdate u : m.getUpdates()) {
+            if (u.isDeleted()) {
+                deletes++;
+            }
+        }
+        trace.wrote(table, m.getUpdates().size(), deletes, m.numBytes());
+    }
+
     private static Object flushing(final Object writer, final Method method, final Object[] args) throws Throwable {
-        final Trace trace = AccumuloTrace.current();
+        final Trace trace = StoreTrace.current();
         final long t0 = System.nanoTime();
         try {
             return call(writer, method, args);
@@ -412,11 +426,11 @@ final class TracingProxies {
 
         @Override
         public Object invoke(final Object proxy, final Method method, final Object[] args) throws Throwable {
-            final Trace trace = AccumuloTrace.current();
+            final Trace trace = StoreTrace.current();
             switch (method.getName()) {
                 case "addMutation":
                     if (trace != null) {
-                        trace.wrote(table, (Mutation) args[0]);
+                        wrote(trace, table, (Mutation) args[0]);
                     }
                     return call(writer, method, args);
                 case "addMutations":
@@ -427,7 +441,7 @@ final class TracingProxies {
                     final List<Mutation> copy = new ArrayList<>();
                     for (final Object m : (Iterable<?>) args[0]) {
                         copy.add((Mutation) m);
-                        trace.wrote(table, (Mutation) m);
+                        wrote(trace, table, (Mutation) m);
                     }
                     return call(writer, method, new Object[] {copy});
                 case "flush":

@@ -42,16 +42,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.apache.accumulo.core.client.AccumuloClient;
-import org.apache.accumulo.core.client.BatchWriter;
-import org.apache.accumulo.core.client.Scanner;
 import org.apache.accumulo.core.client.security.tokens.PasswordToken;
-import org.apache.accumulo.core.data.ColumnUpdate;
-import org.apache.accumulo.core.data.Key;
-import org.apache.accumulo.core.data.Mutation;
-import org.apache.accumulo.core.data.Range;
-import org.apache.accumulo.core.data.Value;
-import org.apache.accumulo.core.security.Authorizations;
-import org.apache.accumulo.core.security.ColumnVisibility;
 import org.apache.accumulo.core.security.TablePermission;
 import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
@@ -64,11 +55,11 @@ import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.EvalStatsMutations;
-import io.github.dgreco.rya.accumulo.index.IndexSearcher;
-import io.github.dgreco.rya.accumulo.index.IndexType;
-import io.github.dgreco.rya.accumulo.index.IndexVerifier;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.EvalStatsMutations;
+import io.github.dgreco.rya.store.index.IndexSearcher;
+import io.github.dgreco.rya.store.index.IndexType;
+import io.github.dgreco.rya.store.index.IndexVerifier;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import io.github.dgreco.rya.api.domain.RyaStatement;
@@ -76,11 +67,25 @@ import io.github.dgreco.rya.api.resolver.RyaTripleContext;
 import io.github.dgreco.rya.api.resolver.triple.TripleRow;
 import io.github.dgreco.rya.loader.gen.EntityGenerator;
 import io.github.dgreco.rya.loader.gen.ReferenceData;
-import io.github.dgreco.rya.rdftriplestore.RyaAccumuloSailFactory;
-import io.github.dgreco.rya.test.accumulo.AccumuloITBase;
+import io.github.dgreco.rya.rdftriplestore.RyaSailFactory;
+import io.github.dgreco.rya.store.spi.Auths;
+import io.github.dgreco.rya.store.spi.Cell;
+import io.github.dgreco.rya.store.spi.CellScanner;
+import io.github.dgreco.rya.store.spi.CellWriter;
+import io.github.dgreco.rya.store.spi.KeyRange;
+import io.github.dgreco.rya.store.spi.RowMutation;
+import io.github.dgreco.rya.store.spi.ScanSpec;
+import io.github.dgreco.rya.store.spi.Store;
+import io.github.dgreco.rya.store.spi.WriterOptions;
+import io.github.dgreco.rya.test.StoreITBase;
+import io.github.dgreco.rya.test.accumulo.AccumuloTestBackend;
+import io.github.dgreco.rya.test.accumulo.MiniAccumuloSingleton;
 
-/** The loader against MiniAccumulo: prepare, parallel parts, stop and resume, failures, verify and drop. */
-class LoaderIT extends AccumuloITBase {
+/**
+ * The loader against the test cluster of {@code -Drya.test.backend}: prepare, parallel parts, stop and
+ * resume, failures, verify and drop.
+ */
+class LoaderIT extends StoreITBase {
     private static final int ENTITIES = 2000;
     private static final String[] AUTHS = {"A", "B"};
 
@@ -93,12 +98,26 @@ class LoaderIT extends AccumuloITBase {
         }
     }
 
+    /** How the loader reaches the test cluster, as the test account. */
     private Map<String, String> env() {
-        return env(getUsername(), getPassword());
+        if (onBackend("accumulo")) {
+            return env(MiniAccumuloSingleton.ROOT_USER, MiniAccumuloSingleton.ROOT_PASSWORD);
+        }
+        final Properties settings = backend().storeSettings();
+        final List<String> conf = new ArrayList<>();
+        for (final String key : settings.stringPropertyNames()) {
+            if (key.startsWith("hbase.conf.")) {
+                conf.add(key.substring("hbase.conf.".length()) + "=" + settings.getProperty(key));
+            }
+        }
+        return Map.of("RYA_BACKEND", "hbase", "RYA_HBASE_CONF", String.join(";", conf),
+                "RYA_HBASE_USER", settings.getProperty("hbase.user"));
     }
 
+    /** Accumulo only: another Accumulo user. */
     private Map<String, String> env(final String user, final String password) {
-        return Map.of("RYA_ACCUMULO_ZOOKEEPERS", getZookeepers(), "RYA_ACCUMULO_INSTANCE", getInstanceName(),
+        final var cluster = MiniAccumuloSingleton.getCluster();
+        return Map.of("RYA_ACCUMULO_ZOOKEEPERS", cluster.getZooKeepers(), "RYA_ACCUMULO_INSTANCE", cluster.getInstanceName(),
                 "RYA_ACCUMULO_USER", user, "RYA_ACCUMULO_PASSWORD", password);
     }
 
@@ -133,7 +152,12 @@ class LoaderIT extends AccumuloITBase {
     }
 
     private void prepare() {
-        final Run r = run(env(), "prepare", dataset("--splits", "7", "--grant-auths"));
+        // On HBase granting labels needs a superuser, which the loader's test account isn't: the test grants them.
+        if (!onBackend("accumulo")) {
+            grantAuthorizations(AUTHS);
+        }
+        final Run r = run(env(), "prepare", onBackend("accumulo") ? dataset("--splits", "7", "--grant-auths")
+                : dataset("--splits", "7"));
         assertEquals(0, r.code(), r.all());
     }
 
@@ -156,12 +180,12 @@ class LoaderIT extends AccumuloITBase {
             pool.shutdownNow();
         }
 
-        final AccumuloRdfConfiguration conf = assertStoreHoldsExactlyTheDataset();
-        assertEquals(7, getClient().tableOperations().listSplits(getTablePrefix() + "spo").size());
-        assertFalse(getClient().tableOperations().listSplits(getTablePrefix() + "text").isEmpty());
-        assertFalse(getClient().tableOperations().listSplits(getTablePrefix() + "geo").isEmpty());
+        final StoreRdfConfiguration conf = assertStoreHoldsExactlyTheDataset();
+        assertEquals(7, getStore().tables().splitCount(getTablePrefix() + "spo"));
+        assertTrue(getStore().tables().splitCount(getTablePrefix() + "text") > 0);
+        assertTrue(getStore().tables().splitCount(getTablePrefix() + "geo") > 0);
         for (final IndexType type : IndexType.values()) {
-            final IndexVerifier.Report report = IndexVerifier.verify(getClient(), conf, type);
+            final IndexVerifier.Report report = IndexVerifier.verify(getStore(), conf, type);
             assertTrue(report.isClean(), type + ": " + report);
         }
         assertQueriesAgreeWithAndWithoutIndexes(conf);
@@ -184,8 +208,8 @@ class LoaderIT extends AccumuloITBase {
         final LoaderOptions o = LoaderOptions.parse(Stream.concat(Stream.of("load"),
                 load(0, 1, "--max-rate", "4000", "--commit-interval", "300ms").stream()).toArray(String[]::new), env());
         final Loader.Result stopped;
-        try (AccumuloClient client = ClientFactory.create(o)) {
-            final Loader loader = new Loader(client, o, new PrintStream(OutputStream.nullOutputStream()));
+        try (Store store = StoreFactory.open(o)) {
+            final Loader loader = new Loader(store, o, new PrintStream(OutputStream.nullOutputStream()));
             final ExecutorService pool = Executors.newSingleThreadExecutor();
             try {
                 final Future<Loader.Result> result = pool.submit(loader::run);
@@ -214,16 +238,24 @@ class LoaderIT extends AccumuloITBase {
         assertStoreHoldsExactlyTheDataset();
     }
 
+    /** Accumulo only: needs a user that may read the tables but not write them. */
     @Test
     void writeFailureStopsTheLoadAndCanBeResumed() throws Exception {
+        assumeBackend("accumulo");
         prepare();
         final String user = "loader" + getTablePrefix().replace("_", "");
         final String password = "loader-it-password";
-        getClient().securityOperations().createLocalUser(user, new PasswordToken(password));
+        try (AccumuloClient root = AccumuloTestBackend.newClient()) {
+            writeFailure(root, user, password);
+        }
+    }
+
+    private void writeFailure(final AccumuloClient root, final String user, final String password) throws Exception {
+        root.securityOperations().createLocalUser(user, new PasswordToken(password));
         try {
             // May read the store (so the checks and the DAOs' init pass), may not write: the data writes fail.
             for (final String suffix : LoaderMain.SUFFIXES) {
-                getClient().securityOperations().grantTablePermission(user, getTablePrefix() + suffix, TablePermission.READ);
+                root.securityOperations().grantTablePermission(user, getTablePrefix() + suffix, TablePermission.READ);
             }
             final Run failed = run(env(user, password), "load", load(0, 1, "--writer-timeout", "30s"));
             assertEquals(1, failed.code(), failed.all());
@@ -232,13 +264,13 @@ class LoaderIT extends AccumuloITBase {
             assertEquals(0, committedBlocks(progressFile(0, 1)));
 
             for (final String suffix : LoaderMain.SUFFIXES) {
-                getClient().securityOperations().grantTablePermission(user, getTablePrefix() + suffix, TablePermission.WRITE);
+                root.securityOperations().grantTablePermission(user, getTablePrefix() + suffix, TablePermission.WRITE);
             }
             final Run resumed = run(env(user, password), "load", load(0, 1, "--resume"));
             assertEquals(0, resumed.code(), resumed.all());
             assertStoreHoldsExactlyTheDataset();
         } finally {
-            getClient().securityOperations().dropLocalUser(user);
+            root.securityOperations().dropLocalUser(user);
         }
     }
 
@@ -275,16 +307,40 @@ class LoaderIT extends AccumuloITBase {
         prepare();
         final Run unconfirmed = run(env(), "drop", List.of("--table-prefix", getTablePrefix()));
         assertEquals(2, unconfirmed.code(), unconfirmed.all());
-        assertTrue(getClient().tableOperations().exists(getTablePrefix() + "spo"));
+        assertTrue(getStore().tables().exists(getTablePrefix() + "spo"));
         final Run dropped = run(env(), "drop", List.of("--table-prefix", getTablePrefix(), "--confirm", getTablePrefix()));
         assertEquals(0, dropped.code(), dropped.all());
-        assertTrue(getClient().tableOperations().list().stream().noneMatch(t -> t.startsWith(getTablePrefix())));
+        assertTrue(getStore().tables().list().stream().noneMatch(t -> t.startsWith(getTablePrefix())));
     }
 
+    /** The labels command gives an account labels; on HBase it runs as a superuser and also writes the canaries. */
+    @Test
+    void labelsCommandGrantsLabels() {
+        final String label = "L" + getTablePrefix().replace("_", "");
+        final Map<String, String> asAdmin = new HashMap<>(env());
+        final List<String> args = new ArrayList<>(List.of("--labels", label));
+        if (onBackend("hbase")) {
+            // The operator's account: the cluster's superuser (the process user), granting to the test account.
+            asAdmin.put("RYA_HBASE_USER", System.getProperty("user.name"));
+            args.addAll(List.of("--grant-to", backend().storeSettings().getProperty("hbase.user")));
+        }
+        final Run r = run(asAdmin, "labels", args);
+        assertEquals(0, r.code(), r.all());
+        assertTrue(getUserAuthorizations().contains(label), getUserAuthorizations().toString());
+        if (onBackend("hbase")) {
+            assertEquals(List.of(), io.github.dgreco.rya.hbase.HBaseLabels.missingCanaries((io.github.dgreco.rya.hbase.HBaseStore) getStore(),
+                    io.github.dgreco.rya.hbase.HBaseLabels.DEFAULT_TABLE, List.of(label)));
+            final Run asLoader = run(env(), "labels", List.of("--labels", label + "x"));
+            assertEquals(2, asLoader.code(), "a normal account can't register labels: " + asLoader.all());
+        }
+    }
+
+    /** Accumulo only: an accumulo-client.properties file. */
     @Test
     void checkConnectsWithAPropertiesFileThatLeavesThePasswordOut() throws Exception {
+        assumeBackend("accumulo");
         final Properties props = new Properties();
-        props.putAll(getClientProperties());
+        props.putAll(MiniAccumuloSingleton.getClientProperties());
         props.remove("auth.token");
         final Path file = dir.resolve("accumulo-client.properties");
         try (java.io.OutputStream out = Files.newOutputStream(file)) {
@@ -294,11 +350,12 @@ class LoaderIT extends AccumuloITBase {
         assertEquals(2, noPassword.code(), noPassword.all());
         assertTrue(noPassword.err().contains("RYA_ACCUMULO_PASSWORD"), noPassword.err());
 
-        final Map<String, String> env = Map.of("RYA_ACCUMULO_PASSWORD", getPassword());
+        final Map<String, String> env = Map.of("RYA_ACCUMULO_PASSWORD", MiniAccumuloSingleton.ROOT_PASSWORD);
         final Run before = run(env, "check", List.of("--client-properties", file.toString(), "--table-prefix", getTablePrefix()));
         assertEquals(0, before.code(), before.all());
-        assertTrue(before.out().contains("Connected to instance " + getInstanceName()), before.out());
-        assertTrue(before.out().contains("Tablet servers: 1"), before.out());
+        assertTrue(before.out().contains("Connected to Accumulo instance " + MiniAccumuloSingleton.getCluster().getInstanceName()),
+                before.out());
+        assertTrue(before.out().contains("Servers: 1"), before.out());
         assertTrue(before.out().contains("May create tables: yes"), before.out());
         assertTrue(before.out().contains("Store " + getTablePrefix() + ": not found"), before.out());
 
@@ -312,9 +369,9 @@ class LoaderIT extends AccumuloITBase {
     // ---- checks ----
 
     /** spo holds exactly the generated statements and the reference data; eval holds exactly their summed counters. */
-    private AccumuloRdfConfiguration assertStoreHoldsExactlyTheDataset() throws Exception {
+    private StoreRdfConfiguration assertStoreHoldsExactlyTheDataset() throws Exception {
         final LoaderOptions o = options();
-        final AccumuloRdfConfiguration conf = o.rdfConf();
+        final StoreRdfConfiguration conf = o.rdfConf();
         conf.setAuths(AUTHS);
         final EntityGenerator generator = new EntityGenerator(o.genConfig());
         final List<RyaStatement> statements = new ArrayList<>(ReferenceData.statements(generator));
@@ -325,12 +382,11 @@ class LoaderIT extends AccumuloITBase {
         final Set<String> expected = statements.stream().map(Verify::key).collect(Collectors.toSet());
         final Set<String> actual = new HashSet<>();
         final RyaTripleContext context = RyaTripleContext.getInstance(conf);
-        try (Scanner spo = getClient().createScanner(getTablePrefix() + "spo", new Authorizations(AUTHS))) {
-            for (final Map.Entry<Key, Value> e : spo) {
-                final Key k = e.getKey();
-                actual.add(Verify.key(context.deserializeTriple(TABLE_LAYOUT.SPO, new TripleRow(k.getRowData().toArray(),
-                        k.getColumnFamilyData().toArray(), k.getColumnQualifierData().toArray(), k.getTimestamp(),
-                        k.getColumnVisibilityData().toArray(), e.getValue().get()))));
+        try (CellScanner spo = getStore().scan(getTablePrefix() + "spo", KeyRange.all(), ScanSpec.of(Auths.of(AUTHS)))) {
+            while (spo.hasNext()) {
+                final Cell k = spo.next();
+                actual.add(Verify.key(context.deserializeTriple(TABLE_LAYOUT.SPO,
+                        new TripleRow(k.row(), k.family(), k.qualifier(), k.timestamp(), k.visibility(), k.value()))));
             }
         }
         assertSame("spo", expected, actual);
@@ -338,19 +394,17 @@ class LoaderIT extends AccumuloITBase {
         final EvalStatsMutations.CounterBatch batch = new EvalStatsMutations.CounterBatch();
         statements.forEach(st -> batch.add(st, 1));
         final Map<String, Long> expectedCounts = new HashMap<>();
-        for (final Mutation m : batch.drain()) {
-            for (final ColumnUpdate u : m.getUpdates()) {
-                expectedCounts.merge(cell(m.getRow(), u.getColumnFamily(), u.getColumnQualifier(), u.getColumnVisibility()),
-                        Long.parseLong(new String(u.getValue(), StandardCharsets.UTF_8)), Long::sum);
+        for (final RowMutation m : batch.drain()) {
+            for (final RowMutation.Update u : m.updates()) {
+                expectedCounts.merge(cell(m.row(), u.family(), u.qualifier(), u.visibility()), u.delta(), Long::sum);
             }
         }
         final Map<String, Long> actualCounts = new HashMap<>();
-        try (Scanner eval = getClient().createScanner(getTablePrefix() + "eval", new Authorizations(AUTHS))) {
-            for (final Map.Entry<Key, Value> e : eval) {
-                final Key k = e.getKey();
-                actualCounts.merge(cell(k.getRowData().toArray(), k.getColumnFamilyData().toArray(),
-                        k.getColumnQualifierData().toArray(), k.getColumnVisibilityData().toArray()),
-                        Long.parseLong(e.getValue().toString()), Long::sum);
+        try (CellScanner eval = getStore().scan(getTablePrefix() + "eval", KeyRange.all(), ScanSpec.of(Auths.of(AUTHS)))) {
+            while (eval.hasNext()) {
+                final Cell k = eval.next();
+                actualCounts.merge(cell(k.row(), k.family(), k.qualifier(), k.visibility()), getStore().counterValue(k.value()),
+                        Long::sum);
             }
         }
         assertSame("eval", expectedCounts.entrySet().stream().map(Object::toString).collect(Collectors.toSet()),
@@ -376,7 +430,7 @@ class LoaderIT extends AccumuloITBase {
     }
 
     /** Text and geo searches over the generated data return the same rows with and without the indexes. */
-    private void assertQueriesAgreeWithAndWithoutIndexes(final AccumuloRdfConfiguration conf) throws Exception {
+    private void assertQueriesAgreeWithAndWithoutIndexes(final StoreRdfConfiguration conf) throws Exception {
         final EntityGenerator generator = new EntityGenerator(options().genConfig());
         String word = null;
         String point = null;
@@ -399,9 +453,9 @@ class LoaderIT extends AccumuloITBase {
         final String box = String.format(java.util.Locale.ROOT, "POLYGON((%f %f, %f %f, %f %f, %f %f, %f %f))", lon - 2,
                 lat - 2, lon + 2, lat - 2, lon + 2, lat + 2, lon - 2, lat + 2, lon - 2, lat - 2);
 
-        final AccumuloRdfConfiguration queryConf = conf.clone();
+        final StoreRdfConfiguration queryConf = conf.clone();
         queryConf.setInfer(false);
-        final SailRepository repo = RyaAccumuloSailFactory.createRepository(getClient(), queryConf);
+        final SailRepository repo = RyaSailFactory.createRepository(getStore(), queryConf);
         repo.init();
         try {
             final Set<String> found = assertAgrees(repo, "SELECT ?d ?l WHERE { ?d ?p ?l FILTER(text:matches(?l, \"" + word
@@ -458,17 +512,14 @@ class LoaderIT extends AccumuloITBase {
         return rows;
     }
 
-    private void deleteOneEntityStatement(final AccumuloRdfConfiguration conf) throws Exception {
+    private void deleteOneEntityStatement(final StoreRdfConfiguration conf) throws Exception {
         final String subject = options().genConfig().entity(0);
-        try (Scanner spo = getClient().createScanner(getTablePrefix() + "spo", new Authorizations(AUTHS))) {
-            spo.setRange(Range.prefix(subject + "\u0000"));
-            final Map.Entry<Key, Value> first = spo.iterator().next();
-            final Key k = first.getKey();
-            try (BatchWriter writer = getClient().createBatchWriter(getTablePrefix() + "spo")) {
-                final Mutation m = new Mutation(k.getRow());
-                m.putDelete(k.getColumnFamily(), k.getColumnQualifier(), new ColumnVisibility(k.getColumnVisibility()),
-                        k.getTimestamp());
-                writer.addMutation(m);
+        try (CellScanner spo = getStore().scan(getTablePrefix() + "spo",
+                KeyRange.prefix((subject + "\u0000").getBytes(StandardCharsets.UTF_8)), ScanSpec.of(Auths.of(AUTHS)))) {
+            final Cell k = spo.next();
+            try (CellWriter writer = getStore().newWriter(WriterOptions.DEFAULT)) {
+                writer.table(getTablePrefix() + "spo")
+                        .write(new RowMutation(k.row()).delete(k.family(), k.qualifier(), k.visibility(), k.timestamp()));
             }
         }
     }

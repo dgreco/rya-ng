@@ -120,7 +120,7 @@
     const timeoutInput = rememberedInput("rya-timeout", "rya-ng.timeout");
 
     // The Trace switch: when on, the trace panel (or its tab) is shown on the right, and each
-    // query streams its Accumulo operations to it.
+    // query streams its storage operations to it.
     const traceInput = document.getElementById("rya-trace-on");
     try {
         traceInput.checked = window.localStorage.getItem("rya-ng.trace") === "on";

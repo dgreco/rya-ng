@@ -24,8 +24,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreDAO;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConfiguration;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.api.domain.RyaType;
@@ -56,8 +56,8 @@ import org.junit.jupiter.api.Test;
 public class StatementPatternEvalIT extends RyaSailITBase {
     private static final ValueFactory VF = SimpleValueFactory.getInstance();
 
-    private AccumuloRyaDAO dao;
-    private AccumuloRdfConfiguration conf;
+    private RyaStoreDAO dao;
+    private StoreRdfConfiguration conf;
     private RyaEvaluationStrategy eval;
 
     @BeforeEach

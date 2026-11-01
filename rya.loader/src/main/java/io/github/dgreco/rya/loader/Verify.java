@@ -25,16 +25,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.accumulo.core.client.AccumuloClient;
-import org.apache.accumulo.core.security.Authorizations;
-import org.apache.accumulo.core.security.ColumnVisibility;
-import org.apache.accumulo.core.security.VisibilityEvaluator;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRdfEvalStatsDAO;
-import io.github.dgreco.rya.accumulo.query.AccumuloRyaQueryEngine;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.spi.Store;
+import io.github.dgreco.rya.store.visibility.VisibilityExpression;
+import io.github.dgreco.rya.store.RyaStoreEvalStatsDAO;
+import io.github.dgreco.rya.store.query.RyaStoreQueryEngine;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.api.persist.RdfEvalStatsDAO.CARDINALITY_OF;
@@ -51,13 +49,13 @@ public final class Verify {
     }
 
     /** @return true when the sample matches the store exactly */
-    public static boolean run(final AccumuloClient client, final LoaderOptions o, final PrintStream out) throws Exception {
-        StoreCheck.forLoad(client, o);
+    public static boolean run(final Store store, final LoaderOptions o, final PrintStream out) throws Exception {
+        StoreCheck.forLoad(store, o);
         final EntityGenerator generator = new EntityGenerator(o.genConfig());
-        final AccumuloRdfConfiguration conf = o.rdfConf();
-        final VisibilityEvaluator visible = new VisibilityEvaluator(new Authorizations(o.auths().toArray(new String[0])));
-        final AccumuloRyaQueryEngine engine = new AccumuloRyaQueryEngine(client, conf);
-        final AccumuloRdfEvalStatsDAO stats = o.stats() ? new AccumuloRdfEvalStatsDAO(client, conf) : null;
+        final StoreRdfConfiguration conf = o.rdfConf();
+        final List<String> readerLabels = o.auths();
+        final RyaStoreQueryEngine engine = new RyaStoreQueryEngine(store, conf);
+        final RyaStoreEvalStatsDAO stats = o.stats() ? new RyaStoreEvalStatsDAO(store, conf) : null;
         if (stats != null) {
             stats.init();
         }
@@ -79,7 +77,7 @@ public final class Verify {
                 final Map<String, Set<String>> expected = new LinkedHashMap<>();
                 for (final RyaStatement st : generator.generate(e)) {
                     final byte[] cv = st.getColumnVisibility();
-                    if (cv == null || visible.evaluate(new ColumnVisibility(cv))) {
+                    if (VisibilityExpression.parse(cv).isVisibleTo(readerLabels)) {
                         expected.computeIfAbsent(st.getSubject().getData(), k -> new HashSet<>()).add(key(st));
                     }
                 }

@@ -28,7 +28,7 @@ import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.api.domain.RyaType;
@@ -47,7 +47,7 @@ class IndexVisibilityIT extends IndexITBase {
     }
 
     private SailRepository store(final String... auths) {
-        final AccumuloRdfConfiguration conf = indexedConf();
+        final StoreRdfConfiguration conf = indexedConf();
         conf.setAuths(auths);
         final SailRepository repo = open(conf, false);
         final RyaDAO<?> dao = ((RdfCloudTripleStore<?>) repo.getSail()).getRyaDAO();

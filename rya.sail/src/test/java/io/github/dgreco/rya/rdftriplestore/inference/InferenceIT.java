@@ -32,8 +32,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import io.github.dgreco.rya.accumulo.AccumuloRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloRyaDAO;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.RyaStoreDAO;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
 import org.eclipse.rdf4j.model.IRI;
@@ -55,9 +55,9 @@ import org.junit.jupiter.api.Assertions;
 
 public class InferenceIT extends RyaSailITBase {
     private final static String LUBM = "http://swat.cse.lehigh.edu/onto/univ-bench.owl#";
-    private AccumuloRyaDAO dao;
+    private RyaStoreDAO dao;
     private static final ValueFactory VF = SimpleValueFactory.getInstance();
-    private AccumuloRdfConfiguration conf;
+    private StoreRdfConfiguration conf;
     private RdfCloudTripleStore store;
     private InferenceEngine inferenceEngine;
     private SailRepository repository;
@@ -67,7 +67,7 @@ public class InferenceIT extends RyaSailITBase {
 
     @BeforeEach
     public void setUp() throws Exception {
-        dao = new AccumuloRyaDAO(getClient(), null);
+        dao = new RyaStoreDAO(getStore(), null);
         conf = newConf();
         conf.setInfer(true);
         dao.setConf(conf);
