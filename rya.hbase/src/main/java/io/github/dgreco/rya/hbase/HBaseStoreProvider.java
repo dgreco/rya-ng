@@ -21,6 +21,7 @@ import java.util.Properties;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseConfiguration;
+import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.security.UserGroupInformation;
@@ -104,7 +105,11 @@ public final class HBaseStoreProvider implements StoreProvider {
             final String name = settings.getProperty(USER);
             final User user = name == null || name.isBlank() ? null
                     : User.create(UserGroupInformation.createRemoteUser(name.trim()));
-            return HBaseStore.owning(ConnectionFactory.createConnection(conf, user), user, options);
+            // HBase 3's createConnection(conf, user) needs a user; without one, the one-argument form logs
+            // the client in (the process user, or Kerberos from kinit or hbase.client.keytab.*).
+            final Connection connection = user == null ? ConnectionFactory.createConnection(conf)
+                    : ConnectionFactory.createConnection(conf, user);
+            return HBaseStore.owning(connection, user, options);
         } catch (final IOException e) {
             throw new RyaDAOException(e);
         }

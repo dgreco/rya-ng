@@ -20,11 +20,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Properties;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import io.github.dgreco.rya.api.persist.RyaDAOException;
+import io.github.dgreco.rya.store.spi.Store;
 import io.github.dgreco.rya.test.StoreITBase;
 import io.github.dgreco.rya.test.hbase.MiniHBaseSingleton;
 
@@ -42,6 +44,23 @@ class HBaseLabelsIT extends StoreITBase {
         final RyaDAOException e = assertThrows(RyaDAOException.class,
                 () -> HBaseStore.wrap(MiniHBaseSingleton.adminConnection(), null));
         assertTrue(e.getMessage().contains("doesn't enforce labels"), e.getMessage());
+    }
+
+    /**
+     * Without {@code hbase.user} the provider connects as the process user (here an HBase superuser),
+     * so the store opens only with the label check off.
+     */
+    @Test
+    void withoutAUserTheProviderConnectsAsTheProcessUser() {
+        final Properties settings = backend().storeSettings();
+        settings.remove(HBaseStoreProvider.USER);
+        final RyaDAOException e = assertThrows(RyaDAOException.class, () -> new HBaseStoreProvider().open(settings));
+        assertTrue(e.getMessage().contains("doesn't enforce labels"), e.getMessage());
+
+        settings.setProperty(HBaseStoreProvider.CHECK_LABELS, "false");
+        try (Store store = new HBaseStoreProvider().open(settings)) {
+            assertEquals(System.getProperty("user.name"), store.access().whoami());
+        }
     }
 
     /** HBase drops labels a reader doesn't hold; the canaries tell which configured labels are missing. */
