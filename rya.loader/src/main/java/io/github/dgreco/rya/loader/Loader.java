@@ -23,11 +23,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.apache.accumulo.core.client.AccumuloClient;
 
 import io.github.dgreco.rya.store.StoreRdfConfiguration;
-import io.github.dgreco.rya.accumulo.AccumuloStore;
 import io.github.dgreco.rya.store.RyaStoreDAO;
+import io.github.dgreco.rya.store.spi.Store;
 import io.github.dgreco.rya.store.spi.WriterOptions;
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.loader.gen.EntityGenerator;
@@ -47,7 +46,7 @@ public final class Loader {
         }
     }
 
-    private final AccumuloClient client;
+    private final Store store;
     private final LoaderOptions options;
     private final PrintStream out;
     private final AtomicBoolean stop = new AtomicBoolean();
@@ -56,8 +55,8 @@ public final class Loader {
     private final AtomicLong generatedEntities = new AtomicLong();
     private RateLimiter limiter;
 
-    public Loader(final AccumuloClient client, final LoaderOptions options, final PrintStream out) {
-        this.client = client;
+    public Loader(final Store store, final LoaderOptions options, final PrintStream out) {
+        this.store = store;
         this.options = options;
         this.out = out;
     }
@@ -68,7 +67,7 @@ public final class Loader {
     }
 
     public Result run() throws Exception {
-        StoreCheck.forLoad(client, options);
+        StoreCheck.forLoad(store, options);
         final EntityGenerator generator = new EntityGenerator(options.genConfig());
         final long[] range = options.partRange();
         final int blockSize = options.blockSize();
@@ -117,7 +116,7 @@ public final class Loader {
             final long blocks, final AtomicLong cursor, final Progress progress) {
         final StoreRdfConfiguration conf = options.rdfConf();
         conf.setFlush(false);
-        final RyaStoreDAO dao = new RyaStoreDAO(AccumuloStore.wrap(client), conf);
+        final RyaStoreDAO dao = new RyaStoreDAO(store, conf);
         dao.setWriterOptions(new WriterOptions(options.batchMemoryBytes(), options.maxLatencyMs(), options.writerTimeoutMs(),
                 options.writerThreads(), options.durability()));
         final List<Long> pending = new ArrayList<>();

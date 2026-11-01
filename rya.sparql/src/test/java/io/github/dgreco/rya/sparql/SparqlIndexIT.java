@@ -33,7 +33,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 import io.github.dgreco.rya.store.index.IndexSearcher;
-import io.github.dgreco.rya.test.accumulo.MiniAccumuloSingleton;
+import io.github.dgreco.rya.test.TestBackends;
 
 /** Text and geo search through the endpoint, with both indexes on. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -53,12 +53,9 @@ class SparqlIndexIT {
     private final HttpClient http = HttpClient.newHttpClient();
 
     @DynamicPropertySource
-    static void accumulo(final DynamicPropertyRegistry registry) {
-        final var cluster = MiniAccumuloSingleton.getCluster();
-        registry.add("rya.accumulo.instance", cluster::getInstanceName);
-        registry.add("rya.accumulo.zookeepers", cluster::getZooKeepers);
-        registry.add("rya.accumulo.user", () -> MiniAccumuloSingleton.ROOT_USER);
-        registry.add("rya.accumulo.password", () -> MiniAccumuloSingleton.ROOT_PASSWORD);
+    static void store(final DynamicPropertyRegistry registry) {
+        // The backend of -Drya.test.backend, reached as the test account.
+        TestBackends.current().endpointProperties().forEach((key, value) -> registry.add(key, () -> value));
         registry.add("rya.table-prefix", () -> PREFIX);
         registry.add("rya.text-index", () -> "true");
         registry.add("rya.geo-index", () -> "true");

@@ -217,6 +217,35 @@ elif [ "${java_version%%.*}" -lt 25 ] 2>/dev/null; then
 fi
 ask heap "Maximum Java heap" "2g" heap_size
 
+# ---- storage backend ------------------------------------------------------------------------------------
+
+section "Storage backend"
+
+backend_default=1
+[ "${RYA_BACKEND:-}" != hbase ] || backend_default=2
+choose backend_choice "Which store does the endpoint use?" "$backend_default" \
+  "Accumulo" \
+  "HBase (with VisibilityController and hbase.security.authorization=true)"
+
+zk="" instance="" user="" client_properties="" password_mode=0 password_file=""
+hbase_site="" hbase_zk="" hbase_zk_port="" hbase_user="" counters_choice=1
+if [ "$backend_choice" = 2 ]; then
+
+section "HBase connection"
+
+ask hbase_site "hbase-site.xml files, and core-site.xml for Kerberos, separated by commas (empty: give the ZooKeeper quorum)" "${RYA_HBASE_SITE:-}"
+if [ -z "$hbase_site" ]; then
+  ask hbase_zk "ZooKeeper quorum (host,host,...)" "localhost" not_empty
+  ask hbase_zk_port "ZooKeeper port" "2181" port_number
+fi
+ask hbase_user "Account to connect as, with simple authentication only (empty: the process user, or the Kerberos principal)" "${RYA_HBASE_USER:-}"
+choose counters_choice "How are the statistics counters stored?" 1 \
+  "Summed by rya-ng's coprocessor (put the rya.hbase.coprocessor jar on the region servers): fast writes" \
+  "HBase increments (no coprocessor; every counter write locks its row)"
+$defaults || note "The account must not be an HBase superuser, which would see every label. Register the labels it reads with the loader's labels command."
+
+else
+
 # ---- Accumulo connection ------------------------------------------------------------------------------
 
 section "Accumulo connection"
@@ -227,7 +256,6 @@ choose connection "How does the endpoint connect to Accumulo?" "$connection_defa
   "ZooKeeper servers, instance name and user" \
   "An accumulo-client.properties file (written by rya.loader/configure.sh)"
 
-zk="" instance="" user="" client_properties="" password_mode=0 password_file=""
 if [ "$connection" = 1 ]; then
   ask zk "ZooKeeper servers (host:port,...)" "${RYA_ACCUMULO_ZOOKEEPERS:-localhost:2181}" zookeepers
   ask instance "Accumulo instance name" "${RYA_ACCUMULO_INSTANCE:-accumulo}" not_empty
@@ -257,9 +285,11 @@ else
   [ -r "$client_properties" ] || note "Note: $client_properties is not readable yet."
 fi
 
+fi
+
 ipv4_default=n
 if [ "$(uname -s)" = Darwin ]; then
-  case "$zk" in *.local*) ipv4_default=y ;; esac
+  case "$zk$hbase_zk" in *.local*) ipv4_default=y ;; esac
 fi
 yesno ipv4 "Prefer IPv4 (recommended on macOS with *.local names, which can take seconds to resolve over IPv6)" "$ipv4_default"
 
@@ -285,7 +315,7 @@ yesno stats "Keep statistics for join ordering" y
 
 section "Visibility labels"
 
-ask auths "Labels a request may read with, separated by commas (the Accumulo user must hold them; empty: unlabeled data only)" "" label_list
+ask auths "Labels a request may read with, separated by commas (the store account must hold them; empty: unlabeled data only)" "" label_list
 ask default_visibility "Visibility label written on inserted statements (empty: none)" "" visibility_expression
 yesno request_visibility "Let an update choose its own label with visibility=" n
 
@@ -297,7 +327,7 @@ ask server_port "HTTP port" "8080" port_number
 ask server_address "Listen address (empty: every interface; 127.0.0.1: this machine only)" "" host_address
 ask query_timeout "Maximum query or update time" "120s" duration
 ask max_query_timeout "Longest time a request may ask for with timeout= (0s: no limit)" "30m" duration
-yesno allow_trace "Let requests be traced (shows their Accumulo scans and writes)" y
+yesno allow_trace "Let requests be traced (shows their storage scans and writes)" y
 
 # ---- the launch script ----------------------------------------------------------------------------------
 
@@ -314,7 +344,15 @@ java_opts="-Xmx$heap"
 $ipv4 && java_opts="$java_opts -Djava.net.preferIPv4Stack=true"
 
 args=()
-if [ "$connection" = 1 ]; then
+if [ "$backend_choice" = 2 ]; then
+  args+=("--rya.backend=hbase")
+  [ -z "$hbase_site" ] || args+=("--rya.hbase.site=$hbase_site")
+  if [ -n "$hbase_zk" ]; then
+    args+=("--rya.hbase.conf[hbase.zookeeper.quorum]=$hbase_zk" "--rya.hbase.conf[hbase.zookeeper.property.clientPort]=$hbase_zk_port")
+  fi
+  [ -z "$hbase_user" ] || args+=("--rya.hbase.user=$hbase_user")
+  [ "$counters_choice" = 1 ] || args+=("--rya.hbase.counters=increment")
+elif [ "$connection" = 1 ]; then
   args+=("--rya.accumulo.zookeepers=$zk" "--rya.accumulo.instance=$instance" "--rya.accumulo.user=$user")
 else
   args+=("--rya.accumulo.client-properties=$client_properties")
@@ -385,7 +423,11 @@ trap 'rm -f "$tmp"' EXIT
       echo 'export RYA_ACCUMULO_PASSWORD'
       ;;
     *)
-      echo '# The credentials are in the accumulo-client.properties file.'
+      if [ "$backend_choice" = 2 ]; then
+        echo '# HBase: no password (simple authentication, or the Kerberos login of core-site.xml).'
+      else
+        echo '# The credentials are in the accumulo-client.properties file.'
+      fi
       echo 'unset RYA_ACCUMULO_PASSWORD'
       ;;
   esac

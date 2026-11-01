@@ -47,7 +47,7 @@
             <span>Timeout (s)</span>
             <input id="rya-timeout" class="rya-number" type="number" min="1" step="1" inputmode="numeric" placeholder="default" autocomplete="off">
         </label>
-        <label class="rya-field rya-check" title="Show what each query does in Accumulo, live: its plan, every scan and every write.">
+        <label class="rya-field rya-check" title="Show what each query does in the store, live: its plan, every scan and every write.">
             <input id="rya-trace-on" type="checkbox">
             <span>Trace</span>
         </label>
@@ -59,8 +59,8 @@
     <div id="rya-trace-resizer" class="rya-trace-resizer" role="separator" aria-orientation="vertical"
          aria-label="Resize the trace panel" aria-valuemin="300" tabindex="0"
          title="Drag, or use the arrow keys, to resize the trace panel. Double-click for the default width." hidden></div>
-    <aside id="rya-trace" class="rya-trace" aria-label="Accumulo trace" hidden></aside>
-    <button id="rya-trace-tab" class="rya-trace-tab" type="button" aria-label="Open the Accumulo trace panel" hidden></button>
+    <aside id="rya-trace" class="rya-trace" aria-label="Storage trace" hidden></aside>
+    <button id="rya-trace-tab" class="rya-trace-tab" type="button" aria-label="Open the storage trace panel" hidden></button>
 </div>
 <script src="vendor/yasgui/yasgui.min.js"></script>
 <script src="vendor/leaflet/leaflet.js"></script>

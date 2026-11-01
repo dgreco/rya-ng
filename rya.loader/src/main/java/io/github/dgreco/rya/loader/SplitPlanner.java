@@ -24,7 +24,6 @@ import java.util.Map;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
-import org.apache.accumulo.core.client.AccumuloClient;
 import org.apache.hadoop.io.Text;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +31,7 @@ import org.slf4j.LoggerFactory;
 import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import io.github.dgreco.rya.store.EvalStatsMutations;
 import io.github.dgreco.rya.store.RyaTableMutationsFactory;
+import io.github.dgreco.rya.store.spi.Store;
 import io.github.dgreco.rya.store.spi.RowMutation;
 import io.github.dgreco.rya.store.index.GeoIndex;
 import io.github.dgreco.rya.store.index.SecondaryIndex;
@@ -144,18 +144,22 @@ public final class SplitPlanner {
     }
 
     /** Adds the planned splits to tables that have fewer than planned. */
-    public static void apply(final AccumuloClient client, final Map<String, SortedSet<Text>> plan) throws Exception {
+    public static void apply(final Store store, final Map<String, SortedSet<Text>> plan) throws Exception {
         for (final Map.Entry<String, SortedSet<Text>> e : plan.entrySet()) {
             final String table = e.getKey();
-            if (!client.tableOperations().exists(table)) {
+            if (!store.tables().exists(table)) {
                 continue;
             }
-            final int existing = client.tableOperations().listSplits(table).size();
+            final int existing = store.tables().splitCount(table);
             if (existing >= e.getValue().size()) {
                 log.info("{}: already has {} splits", table, existing);
                 continue;
             }
-            client.tableOperations().addSplits(table, e.getValue());
+            final SortedSet<byte[]> points = new java.util.TreeSet<>(Arrays::compareUnsigned);
+            for (final Text t : e.getValue()) {
+                points.add(Arrays.copyOf(t.getBytes(), t.getLength()));
+            }
+            store.tables().addSplits(table, points);
             log.info("{}: added {} splits", table, e.getValue().size());
         }
     }

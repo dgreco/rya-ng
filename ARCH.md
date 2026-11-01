@@ -79,10 +79,10 @@ flowchart TB
         inf["InferenceEngine<br/>(ontology held in memory)"]
     end
     subgraph acc["rya.accumulo: storage"]
-        dao["AccumuloRyaDAO<br/>(writes, deletes)"]
-        qe["AccumuloRyaQueryEngine<br/>(range scans)"]
+        dao["RyaStoreDAO<br/>(writes, deletes)"]
+        qe["RyaStoreQueryEngine<br/>(range scans)"]
         idx["IndexManager / IndexSearcher<br/>(text and geo indexes)"]
-        stats["AccumuloRdfEvalStatsDAO<br/>(cardinality counters)"]
+        stats["RyaStoreEvalStatsDAO<br/>(cardinality counters)"]
     end
     api["rya.api<br/>RyaStatement, row and value encoding"]
     loader["rya.loader<br/>(parallel synthetic-data loader)"]
@@ -116,9 +116,9 @@ flowchart TB
 
 Two ways in:
 - **The SPARQL endpoint** (`rya.sparql`): a Spring Boot server that speaks the SPARQL 1.1 Protocol over HTTP.
-- **The embedded Sail** (`rya.sail`): a Java application builds the same RDF4J repository itself with `RyaAccumuloSailFactory` and calls it directly.
+- **The embedded Sail** (`rya.sail`): a Java application builds the same RDF4J repository itself with `RyaSailFactory` and calls it directly.
 
-Both paths end in the same objects: an `RdfCloudTripleStoreConnection` on top of an `AccumuloRyaDAO`.
+Both paths end in the same objects: an `RdfCloudTripleStoreConnection` on top of an `RyaStoreDAO`.
 
 ---
 
@@ -338,28 +338,36 @@ A statement-pattern step reads data only through a **TripleSource**: `getStateme
 
 ```mermaid
 flowchart LR
-    api["rya.api"] --> accumulo["rya.accumulo"]
-    accumulo --> sail["rya.sail"]
+    api["rya.api"] --> store["rya.store"]
+    store --> accumulo["rya.accumulo"]
+    store --> hbase["rya.hbase"]
+    store --> sail["rya.sail"]
     sail --> sparql["rya.sparql"]
+    accumulo --> sparql
+    hbase --> sparql
     accumulo --> loader["rya.loader"]
-    testacc["rya.test.accumulo<br/>(test scope only)"] -.-> accumulo
-    testacc -.-> sail
-    testacc -.-> sparql
-    testacc -.-> loader
+    hbase --> loader
+    test["rya.test<br/>(test scope only)"] -.-> sail
+    test -.-> sparql
+    test -.-> loader
 ```
 
-An arrow `A → B` means *B depends on A*. `rya.coverage` only exists under `-Pcoverage` and merges the coverage reports.
+An arrow `A → B` means *B depends on A*. `rya.coverage` only exists under `-Pcoverage` and merges the coverage reports. `rya.hbase.coprocessor` is installed on HBase region servers; nothing depends on it but the test cluster.
 
 | Module | Role | Main classes |
 |---|---|---|
 | `rya.api` | Storage-independent model, DAO interfaces, how statements and values become bytes, which table answers which pattern | `RyaStatement`, `RyaType`, `RyaIRI`, `RyaContext`, `WholeRowTripleResolver`, `*TriplePatternStrategy`, `RdfCloudTripleStoreConfiguration` |
-| `rya.accumulo` | Everything that talks to Accumulo: writes, scans, statistics, graph markers, namespaces, the text and geo indexes | `AccumuloRyaDAO`, `AccumuloRyaQueryEngine`, `EvalStatsMutations`, `AccumuloRdfEvalStatsDAO`, `IndexManager`, `IndexSearcher` |
-| `rya.sail` | The RDF4J Sail: connection, optimizer pipeline, evaluation strategy, batched joins, inference, index-search rewrite | `RdfCloudTripleStore`, `RdfCloudTripleStoreConnection`, `RyaEvaluationStrategy`, `BatchedJoinStep`, `InferenceEngine`, `IndexSearchOptimizer` |
+| `rya.store` | The storage SPI (labelled cells, ranges, batched reads, writers, counters), and everything written once on top of it: writes, scans, statistics, graph markers, namespaces, the text and geo indexes, the trace | `Store`, `RyaStoreDAO`, `RyaStoreQueryEngine`, `EvalStatsMutations`, `RyaStoreEvalStatsDAO`, `IndexManager`, `IndexSearcher`, `StoreTrace` |
+| `rya.accumulo` | The Accumulo backend: each SPI call is one Accumulo call | `AccumuloStore`, `AccumuloCellWriter`, `TracingProxies` |
+| `rya.hbase` | The HBase backend: the cell mapping, labels, batched reads, counters | `HBaseStore`, `HBaseCodec`, `HBaseBatchScan`, `HBaseLabels` |
+| `rya.sail` | The RDF4J Sail: connection, optimizer pipeline, evaluation strategy, batched joins, inference, index-search rewrite | `RdfCloudTripleStore`, `RdfCloudTripleStoreConnection`, `RyaEvaluationStrategy`, `BatchedJoinStep`, `InferenceEngine`, `IndexSearchOptimizer`, `RyaSailFactory` |
 | `rya.sparql` | Spring Boot SPARQL 1.1 Protocol endpoint and query page | `SparqlController`, `RyaStoreConfiguration`, `RyaProperties`, `BlankNodeOutput` |
 | `rya.loader` | Command-line generator and parallel loader of synthetic data | `LoaderMain`, `Prepare`, `Loader`, `Verify`, `EntityGenerator` |
-| `rya.test.accumulo` | One in-process MiniAccumuloCluster per test JVM | `MiniAccumuloSingleton`, `AccumuloITBase` |
+| `rya.test` | One in-process cluster per backend per test JVM, and the store-level integration tests | `StoreITBase`, `TestBackends`, `MiniAccumuloSingleton`, `MiniHBaseSingleton` |
 
-`rya.loader` writes through `rya.accumulo` only. It uses `rya.sail` in its tests.
+`rya.loader` writes through `rya.store` only. It uses `rya.sail` in its tests.
+
+This document describes rya-ng on Accumulo, the backend it was built for. [BACKENDS-STUDY.md](BACKENDS-STUDY.md) describes how the same cells, ranges, labels and counters map onto HBase.
 
 ---
 
@@ -412,7 +420,7 @@ All tables are named `<prefix><suffix>`. The default prefix is `rya_`.
 | `text` | word `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | full-text index (optional, [section 15](#15-text-and-geo-search)) |
 | `geo` | geohash cell `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | geospatial index (optional) |
 
-`AccumuloRyaDAO.init()` creates the first six tables if they are missing and attaches the summing combiner to `eval`. `IndexManager` creates `text` and `geo` when their index is enabled.
+`RyaStoreDAO.init()` creates the first six tables if they are missing and attaches the summing combiner to `eval`. `IndexManager` creates `text` and `geo` when their index is enabled.
 
 ### 7.2 Row keys of the statement tables
 
@@ -532,7 +540,7 @@ flowchart TD
 
 ### 8.2 What the scan adds on top of the range
 
-`AccumuloRyaQueryEngine.query(pattern, conf)` builds one `Scanner` over the chosen table, with the reader's authorizations, and adds:
+`RyaStoreQueryEngine.query(pattern, conf)` builds one `Scanner` over the chosen table, with the reader's authorizations, and adds:
 
 | Addition | When | How |
 |---|---|---|
@@ -542,7 +550,7 @@ flowchart TD
 | time to live | `query.ttl` is set | a `TimestampFilter` (priority 9) keeping cells newer than now minus the TTL |
 | result cap | `query.limit` is set | the iterator stops after that many statements |
 
-`RyaStatementKeyValueIterator` turns each returned Accumulo key back into a `RyaStatement`, including its graph, visibility and timestamp.
+`RyaStatementCellIterator` turns each returned Accumulo key back into a `RyaStatement`, including its graph, visibility and timestamp.
 
 ### 8.3 The running example, scan by scan
 
@@ -554,7 +562,7 @@ flowchart TD
 
 ### 8.4 Many patterns at once: `batchQuery`
 
-`AccumuloRyaQueryEngine.batchQuery(patterns, conf)` returns the union of the matches of many patterns. They must all resolve to the same table and share one context.
+`RyaStoreQueryEngine.batchQuery(patterns, conf)` returns the union of the matches of many patterns. They must all resolve to the same table and share one context.
 - **Readers:** with more than `getMaxRangesForScanner()` ranges (default 2) it uses one `BatchScanner` over all the ranges. Otherwise it uses one `Scanner` per range, read one after the other.
 - **No type check:** it adds no object-type regex, because the patterns have different objects. Callers must match results to patterns exactly. `BatchLookup` does ([section 13](#13-batched-joins)), and so does `IndexSearcher` ([section 15](#15-text-and-geo-search)).
 
@@ -571,7 +579,7 @@ sequenceDiagram
     participant SC as SparqlController
     participant U as RDF4J update executor
     participant CN as RdfCloudTripleStoreConnection
-    participant DAO as AccumuloRyaDAO
+    participant DAO as RyaStoreDAO
     participant MF as RyaTableMutationsFactory
     participant IM as IndexManager
     participant W as MultiTableBatchWriter
@@ -628,7 +636,7 @@ The batch is written early once it holds 50,000 keys (`MAX_PENDING_COUNTERS`), s
 
 ### 9.5 Opening a store
 
-`AccumuloRyaDAO.init()`:
+`RyaStoreDAO.init()`:
 1. creates any missing tables;
 2. checks that the summing combiner is attached to `eval`, and attaches it if not. Listing a table's iterators needs `ALTER_TABLE`, so for a user without it the check is skipped;
 3. writes the storage version (`ns` row `rya`, family `version`) only if it is missing;
@@ -648,8 +656,8 @@ Deleting cannot just write delete markers for a pattern: a marker needs the exac
 ```mermaid
 sequenceDiagram
     participant CN as Connection
-    participant DAO as AccumuloRyaDAO
-    participant QE as AccumuloRyaQueryEngine
+    participant DAO as RyaStoreDAO
+    participant QE as RyaStoreQueryEngine
     participant W as BatchWriters
     CN->>DAO: delete(pattern, filter, conf)
     DAO->>QE: query(pattern, conf), with the caller's auths
@@ -716,7 +724,7 @@ Accumulo sums the cells when they are read and when files are compacted, so the 
 
 ### 11.2 How a pattern's cardinality is estimated
 
-`AccumuloRdfEvalStatsDAO.getCardinality` builds the row from the values' string forms joined by `00`. It reads the cell of the requested family, and qualifier (graph or empty), and adds up every visible cell (one per label). It returns `-1` if there is none.
+`RyaStoreEvalStatsDAO.getCardinality` builds the row from the values' string forms joined by `00`. It reads the cell of the requested family, and qualifier (graph or empty), and adds up every visible cell (one per label). It returns `-1` if there is none.
 
 `RdfCloudTripleStoreEvaluationStatistics` turns that into a cardinality for each pattern:
 
@@ -779,7 +787,7 @@ SELECT ?graph ?statements WHERE { ?graph stats:approxSize ?statements }
 
 **Where the number comes from.** Every statement in a named graph adds 1 to the counter of its predicate *for that graph*: family `p`, qualifier = the graph IRI ([section 11.1](#111-what-is-counted)). A graph's size is therefore the sum of its `p` counters over all predicates. There are few predicates (55 in the loader's dataset), so that is a few dozen small rows.
 
-`GraphSizes` (`rya.accumulo`, used through `AccumuloRdfEvalStatsDAO.graphSizes(conf)`) computes it in three steps, all with the reader's authorizations:
+`GraphSizes` (`rya.store`, used through `RyaStoreEvalStatsDAO.graphSizes(conf)`) computes it in three steps, all with the reader's authorizations:
 
 ```mermaid
 flowchart TD
@@ -818,7 +826,7 @@ sequenceDiagram
     participant P as RyaQueryOptimizerPipeline
     participant ES as RyaEvaluationStrategy
     participant TS as StoreTripleSource
-    participant QE as AccumuloRyaQueryEngine
+    participant QE as RyaStoreQueryEngine
     participant A as Accumulo
     C->>SC: GET /sparql?query=SELECT ...
     SC->>CN: getConnection() (configuration cloned)<br/>auths= narrows the authorizations
@@ -902,7 +910,7 @@ flowchart TD
 
 `StoreTripleSource` (an inner class of the connection) is the only way the evaluation reads statements. `getStatements(s, p, o, contexts)`:
 1. **Prefetched batches first.** It looks the lookup up in the batches a batched join prefetched. If the lookup is there, it is answered from memory.
-2. **Otherwise one scan per graph.** It converts the lookup to a `RyaStatement` pattern and calls `AccumuloRyaQueryEngine.query`, applying RDF4J's context semantics:
+2. **Otherwise one scan per graph.** It converts the lookup to a `RyaStatement` pattern and calls `RyaStoreQueryEngine.query`, applying RDF4J's context semantics:
    - no contexts: one lookup over every graph;
    - one graph: a lookup restricted to its column family;
    - `null`: an "any graph" lookup, keeping only results without a context (the default graph);
@@ -941,7 +949,7 @@ sequenceDiagram
     participant L as Left step
     participant TS as StoreTripleSource
     participant BL as BatchLookup
-    participant QE as AccumuloRyaQueryEngine
+    participant QE as RyaStoreQueryEngine
     participant R as Right step (RDF4J's own)
     loop until the left side is exhausted
         BJ->>L: read up to 1000 left rows
@@ -1307,10 +1315,10 @@ flowchart LR
 
 `RyaSparqlApplication` is a Spring Boot application. `RyaStoreConfiguration` builds three beans:
 
-1. **`AccumuloClient`**, either:
-   - from `rya.accumulo.client-properties` (an `accumulo-client.properties` file, read with `AccumuloClients.fromFile`; if the file uses password authentication without a stored password, it comes from `rya.accumulo.password`, i.e. the `RYA_ACCUMULO_PASSWORD` environment variable);
-   - or from `rya.accumulo.instance`, `zookeepers`, `user` and `password`.
-2. **`AccumuloRdfConfiguration`**, from `RyaProperties` (`rya.*` in `application.yaml` or on the command line):
+1. **`Store`**, for `rya.backend`:
+   - **Accumulo:** an `AccumuloStore` on a client built from `rya.accumulo.client-properties` (an `accumulo-client.properties` file, read with `AccumuloClients.fromFile`; if the file uses password authentication without a stored password, it comes from `rya.accumulo.password`, i.e. the `RYA_ACCUMULO_PASSWORD` environment variable), or from `rya.accumulo.instance`, `zookeepers`, `user` and `password`;
+   - **HBase:** an `HBaseStore` from `rya.hbase.*`. It refuses to start when the account can't read a label of `rya.sparql.authorizations` (their canaries; see BACKENDS-STUDY.md 4.2).
+2. **`StoreRdfConfiguration`**, from `RyaProperties` (`rya.*` in `application.yaml` or on the command line):
 
    | Setting | Configuration call |
    |---|---|
@@ -1322,14 +1330,14 @@ flowchart LR
    | `rya.sparql.authorizations` | `setAuths` (the most any request may read with) |
    | `rya.sparql.default-visibility` | `setCv` (the label written on inserts) |
    | `rya.inference-refresh` | the inference engine's refresh period |
-3. **`SailRepository`**, built by `RyaAccumuloSailFactory.createSail` and initialized at startup. Initialization:
+3. **`SailRepository`**, built by `RyaSailFactory.createSail` and initialized at startup. Initialization:
    - opens the DAO: tables, combiner, version, index states, and an optional index rebuild;
    - opens the statistics reader;
    - loads the ontology when inference is on.
 
    It shuts down with the application.
 
-The Accumulo client belongs to Spring, which closes it after the repository.
+The store belongs to Spring, which closes it (and its client) after the repository.
 
 ### 17.2 Handling a request
 
@@ -1387,17 +1395,17 @@ The third-party files (YASGUI, the map library, …) are not in the repository. 
 
 ### 17.5 Tracing a query
 
-A trace answers *what does this query do in Accumulo?* while it runs. It covers the plan RDF4J builds, every scan with its ranges, columns, iterators, entries and time, every flush of writes, and the reason rya-ng had for each.
+A trace answers *what does this query do in the store?* while it runs. It covers the plan RDF4J builds, every scan with its ranges, columns, iterators, entries and time, every flush of writes, and the reason rya-ng had for each.
 
-**Recording (`rya.accumulo`, package `trace`).**
-- **One wrapper sees everything.** `AccumuloTrace.wrap(client)` returns a dynamic proxy of the `AccumuloClient`; `RyaAccumuloSailFactory` wraps the client it is given.
+**Recording (`rya.store`, package `trace`; on Accumulo, `rya.accumulo`'s `TracingProxies`).**
+- **One wrapper sees everything.** `AccumuloTrace.wrap(client)` returns a dynamic proxy of the `AccumuloClient`; `AccumuloStore` wraps the client it is given. (The HBase backend reports its scans through `TracedScans` and its flushes from its writer, with the same events.)
   - While a trace runs on the current thread, the scanners, batch scanners and batch deleters it creates are proxies too. They record `setRange(s)`, `fetchColumn…` and `addScanIterator`, then count the entries and the time spent inside `hasNext()` and `next()`.
   - Writers are always wrapped, because the DAO creates them once at startup. They count each mutation for the trace of the thread that adds it, and report a `flush` event when the writes are sent.
   - Without a trace, everything is passed straight through.
-- **Reasons come from the call sites.** Code that is about to scan opens `AccumuloTrace.reason(() -> "…")` around creating the scanner. Reasons nest, so a scan can read `batched join: 5 right-hand lookups fetched together › batched lookup of 5 patterns on SPO`. Reasons are recorded by: the query engine (lookups, batched lookups), the statistics reader, graph sizes, the index searcher, the DAO (deletes, graph drops, graph list, size, namespaces), the batched join, inference (transitive closures, `owl:sameAs`), and query planning.
+- **Reasons come from the call sites.** Code that is about to scan opens `StoreTrace.reason(() -> "…")` around creating the scanner. Reasons nest, so a scan can read `batched join: 5 right-hand lookups fetched together › batched lookup of 5 patterns on SPO`. Reasons are recorded by: the query engine (lookups, batched lookups), the statistics reader, graph sizes, the index searcher, the DAO (deletes, graph drops, graph list, size, namespaces), the batched join, inference (transitive closures, `owl:sameAs`), and query planning.
 - **Plans.** `RdfCloudTripleStoreConnection.evaluateInternal` reports the tree as parsed and as optimized. When traced, it prepares the optimized tree exactly as `evaluate` would and then reports it, so the plan shows which joins became `RyaBatchedJoin`. Tracing doesn't turn on RDF4J's own result-size or time tracking, which would turn batched joins off.
 - **Progress of long scans.** A scan's counters live in its iterator: entries, time inside Accumulo calls, the call in progress (if any) and the last key read. A daemon thread (`rya-trace-progress`) asks every running trace once a second for a `progress` event. The event lists each scan that has run for at least a second: its entries so far, the time spent, how long the current call has been waiting for the tablet servers, and the last row it read. A long scan therefore shows where it is in the table instead of looking stuck. Progress is only read, never written, by that thread.
-- **One trace per thread.** A trace lives in a `ThreadLocal` from `AccumuloTrace.start(listener)` until its `Scope` is closed, which reports the `summary`. Scans capture their trace when they are created, so closing one from another thread still reports to the right trace.
+- **One trace per thread.** A trace lives in a `ThreadLocal` from `StoreTrace.start(listener)` until its `Scope` is closed, which reports the `summary`. Scans capture their trace when they are created, so closing one from another thread still reports to the right trace.
 - **Caps.** Up to 1,000 scans and flushes are reported one by one, with at most 10 ranges each. Past that, only the totals grow, and the summary says how many were left out.
 
 **Streaming (`rya.sparql`).**
@@ -1413,7 +1421,7 @@ sequenceDiagram
     T->>H: subscribe(ID, SseEmitter)
     B->>S: query or update with trace=ID
     S->>H: forRequest(ID): 409 if already used
-    S->>R: AccumuloTrace.start(channel) and run the request
+    S->>R: StoreTrace.start(channel) and run the request
     R-->>H: note, plan, scan, progress, scan-end, flush events
     H-->>B: the same events, as Server-Sent Events
     S->>H: summary, then end (ok, error or timeout)
@@ -1474,7 +1482,7 @@ sequenceDiagram
     participant M as Loader
     participant Wk as Worker thread (one DAO each)
     participant G as EntityGenerator
-    participant D as AccumuloRyaDAO (flush off)
+    participant D as RyaStoreDAO (flush off)
     participant P as Progress file
     M->>M: StoreCheck.forLoad (same dataset, same index settings)
     M->>Wk: start --threads workers
@@ -1506,12 +1514,13 @@ sequenceDiagram
 
 ## 19. Test infrastructure
 
-- **Naming:** `*Test` classes are pure unit tests (surefire, `mvn test`). `*IT` classes need Accumulo (failsafe, `mvn verify`).
-- **`MiniAccumuloSingleton`** starts one in-process MiniAccumuloCluster per test JVM, on first use, and stops it with a shutdown hook.
-- **`AccumuloITBase`** gives each test:
-  - a root `AccumuloClient`;
+- **Naming:** `*Test` classes are pure unit tests (surefire, `mvn test`). `*IT` classes need a cluster (failsafe, `mvn verify`).
+- **`MiniAccumuloSingleton`** and **`MiniHBaseSingleton`** start one in-process cluster per test JVM, on first use, and stop it with a shutdown hook. The HBase one runs `VisibilityController` with authorization on, and tests use it as a normal account, since the process user is a superuser who sees every cell.
+- **`StoreITBase`** gives each test, on the backend of `-Drya.test.backend` (`accumulo` by default, or `hbase`):
+  - a `Store`;
   - a unique table prefix, whose tables are deleted afterwards;
-  - `grantAuthorizations(...)`. A real cluster rejects scans with labels the user doesn't hold, so visibility tests must call it.
+  - `grantAuthorizations(...)`. Accumulo rejects scans with labels the user doesn't hold and HBase ignores them, so visibility tests must call it.
+- **`AccumuloITBase`** gives Accumulo-only tests a root `AccumuloClient`.
 - **`RyaSailITBase`** (`rya.sail`) adds `newConf()`, `newDao(conf)` and `newStore(conf, inference)`.
 - **System properties that widen coverage:**
 
@@ -1520,6 +1529,8 @@ sequenceDiagram
   | `-Drya.test.joinBatchSize=2` | every batched join crosses chunk boundaries |
   | `-Drya.join-batch-size=2` | the same, for the endpoint tests |
   | `-Drya.test.indexes=true` | every test maintains both indexes, then `IndexVerifier` checks that each index table holds exactly the entries its statements call for |
+  | `-Drya.test.backend=hbase` | the ITs run on the HBase mini cluster |
+  | `-Drya.test.hbaseCounters=increment` | HBase counter tables use increments instead of the coprocessor |
 
 - **Coverage:** `-Pcoverage` adds JaCoCo to both test phases and merges the reports in `rya.coverage`.
 
@@ -1557,7 +1568,7 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 | **Column family / qualifier** | Second and third parts of an Accumulo key. rya-ng puts the graph IRI in the family. |
 | **Combiner** | Accumulo iterator that merges all cells of a key into one, for example by adding them up. |
 | **Context** | RDF4J's name for a named graph. |
-| **DAO** | Data access object: `AccumuloRyaDAO`, the class that reads and writes the tables. |
+| **DAO** | Data access object: `RyaStoreDAO`, the class that reads and writes the tables. |
 | **Default graph** | The statements without a named graph. Their column family is empty. |
 | **Geohash** | Base-32 name of a rectangle on Earth. A longer name is a smaller cell inside the shorter one. |
 | **Index (secondary)** | The optional `text` and `geo` tables that list candidate statements for search filters. |

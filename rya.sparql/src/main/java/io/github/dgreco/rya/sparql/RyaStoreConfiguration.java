@@ -20,26 +20,42 @@ package io.github.dgreco.rya.sparql;
  */
 
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 
 import org.apache.accumulo.core.client.Accumulo;
 import org.apache.accumulo.core.client.AccumuloClient;
-import io.github.dgreco.rya.accumulo.AccumuloClients;
-import io.github.dgreco.rya.accumulo.AccumuloStore;
-import io.github.dgreco.rya.store.StoreRdfConfiguration;
-import io.github.dgreco.rya.store.spi.Store;
-import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
-import io.github.dgreco.rya.rdftriplestore.RyaSailFactory;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.StringUtils;
 
-/** Wires the Accumulo client, the store on it and the Rya repository. */
+import io.github.dgreco.rya.accumulo.AccumuloClients;
+import io.github.dgreco.rya.accumulo.AccumuloStore;
+import io.github.dgreco.rya.hbase.HBaseLabels;
+import io.github.dgreco.rya.hbase.HBaseStore;
+import io.github.dgreco.rya.hbase.HBaseStoreProvider;
+import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
+import io.github.dgreco.rya.rdftriplestore.RyaSailFactory;
+import io.github.dgreco.rya.store.StoreRdfConfiguration;
+import io.github.dgreco.rya.store.spi.Store;
+
+/** Wires the store of the configured backend ({@code rya.backend}) and the Rya repository on it. */
 @Configuration(proxyBeanMethods = false)
 public class RyaStoreConfiguration {
 
+    /** The store; its operations report to the request's trace, if any. */
     @Bean(destroyMethod = "close")
-    AccumuloClient accumuloClient(final RyaProperties props) {
+    Store ryaStore(final RyaProperties props) {
+        return switch (props.backend().trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "accumulo" -> AccumuloStore.owning(accumuloClient(props));
+            case "hbase" -> hbaseStore(props);
+            default -> throw new IllegalStateException("rya.backend must be accumulo or hbase, not " + props.backend());
+        };
+    }
+
+    private static AccumuloClient accumuloClient(final RyaProperties props) {
         final RyaProperties.Accumulo acc = props.accumulo();
         if (acc == null) {
             throw new IllegalStateException("Set rya.accumulo.client-properties, or rya.accumulo.instance/zookeepers/user/password");
@@ -54,10 +70,37 @@ public class RyaStoreConfiguration {
                 .build();
     }
 
-    /** The store on the client; its operations report to the request's trace, if any. */
-    @Bean(destroyMethod = "close")
-    Store ryaStore(final AccumuloClient client) {
-        return AccumuloStore.wrap(client);
+    /**
+     * An HBase store, refused at startup when its account can't read every configured label: HBase
+     * would silently return fewer rows, where Accumulo rejects the request.
+     */
+    private static Store hbaseStore(final RyaProperties props) {
+        final RyaProperties.HBase hb = props.hbase();
+        final Properties settings = new Properties();
+        settings.setProperty(HBaseStoreProvider.SITE, String.join(",", hb.site()));
+        for (final Map.Entry<String, String> e : hb.conf().entrySet()) {
+            settings.setProperty(HBaseStoreProvider.CONF_PREFIX + e.getKey(), e.getValue());
+        }
+        settings.setProperty(HBaseStoreProvider.LABELS_TABLE, hb.labelsTable());
+        settings.setProperty(HBaseStoreProvider.COUNTERS, hb.counters());
+        if (StringUtils.hasText(hb.countersJar())) {
+            settings.setProperty(HBaseStoreProvider.COUNTERS_JAR, hb.countersJar());
+        }
+        if (StringUtils.hasText(hb.user())) {
+            settings.setProperty(HBaseStoreProvider.USER, hb.user());
+        }
+        final HBaseStore store = (HBaseStore) new HBaseStoreProvider().open(settings);
+        final List<String> configured = props.sparql().authorizations();
+        if (!configured.isEmpty()) {
+            final List<String> missing = HBaseLabels.missingCanaries(store, hb.labelsTable(), configured);
+            if (!missing.isEmpty()) {
+                store.close();
+                throw new IllegalStateException("rya.sparql.authorizations names labels that " + store.access().whoami()
+                        + " can't read on HBase: " + missing + ". Register and grant them with the loader's labels command "
+                        + "(it also writes the canaries this check reads).");
+            }
+        }
+        return store;
     }
 
     @Bean
@@ -80,8 +123,7 @@ public class RyaStoreConfiguration {
     }
 
     @Bean(initMethod = "init", destroyMethod = "shutDown")
-    SailRepository ryaRepository(final Store store, final StoreRdfConfiguration conf,
-            final RyaProperties props) {
+    SailRepository ryaRepository(final Store store, final StoreRdfConfiguration conf, final RyaProperties props) {
         final RdfCloudTripleStore<StoreRdfConfiguration> sail = RyaSailFactory.createSail(store, conf);
         if (sail.getInferenceEngine() != null) {
             sail.getInferenceEngine().setRefreshGraphSchedule(props.inferenceRefresh().toMillis());

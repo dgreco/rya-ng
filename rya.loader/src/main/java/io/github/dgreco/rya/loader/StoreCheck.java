@@ -15,12 +15,11 @@
  */
 package io.github.dgreco.rya.loader;
 
-import org.apache.accumulo.core.client.AccumuloClient;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 
 import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import io.github.dgreco.rya.store.index.GeoIndex;
-import io.github.dgreco.rya.accumulo.AccumuloStore;
+import io.github.dgreco.rya.store.spi.Store;
 import io.github.dgreco.rya.store.index.IndexManager;
 import io.github.dgreco.rya.store.index.IndexState;
 import io.github.dgreco.rya.store.index.IndexType;
@@ -47,14 +46,14 @@ public final class StoreCheck {
     }
 
     /** Before prepare: an existing store must already have the requested indexes (they can't be added on top). */
-    public static void forPrepare(final AccumuloClient client, final LoaderOptions o) {
+    public static void forPrepare(final Store store, final LoaderOptions o) {
         final TableLayoutStrategy tables = o.rdfConf().getTableLayoutStrategy();
-        if (!client.tableOperations().exists(tables.getSpo())) {
+        if (!store.tables().exists(tables.getSpo())) {
             return;
         }
         for (final IndexType type : IndexType.values()) {
             final boolean wanted = type == IndexType.TEXT ? o.textIndex() : o.geoIndex();
-            final boolean present = client.tableOperations().exists(type.table(tables));
+            final boolean present = store.tables().exists(type.table(tables));
             if (wanted && !present) {
                 throw new Mismatch("store " + o.tablePrefix() + " already exists without the " + type.id()
                         + " index; drop it first, or prepare without --" + type.id() + "-index");
@@ -66,15 +65,15 @@ public final class StoreCheck {
     }
 
     /** Before load or verify: prepared, same index settings, same dataset. */
-    public static void forLoad(final AccumuloClient client, final LoaderOptions o) throws Exception {
+    public static void forLoad(final Store store, final LoaderOptions o) throws Exception {
         final StoreRdfConfiguration conf = o.rdfConf();
         final TableLayoutStrategy tables = conf.getTableLayoutStrategy();
-        if (!client.tableOperations().exists(tables.getSpo())) {
+        if (!store.tables().exists(tables.getSpo())) {
             throw new Mismatch("store " + o.tablePrefix() + " does not exist: run prepare first");
         }
         for (final IndexType type : IndexType.values()) {
             final boolean wanted = type == IndexType.TEXT ? o.textIndex() : o.geoIndex();
-            final boolean present = client.tableOperations().exists(type.table(tables));
+            final boolean present = store.tables().exists(type.table(tables));
             if (!wanted) {
                 if (present) {
                     throw new Mismatch("store " + o.tablePrefix() + " has a " + type.id() + " index: add --" + type.id() + "-index");
@@ -84,7 +83,7 @@ public final class StoreCheck {
             if (!present) {
                 throw new Mismatch("store " + o.tablePrefix() + " has no " + type.id() + " index: drop --" + type.id() + "-index");
             }
-            final IndexState state = IndexManager.readState(AccumuloStore.wrap(client), tables, type);
+            final IndexState state = IndexManager.readState(store, tables, type);
             final String definition = type == IndexType.TEXT ? new TextIndex(o.textPredicates()).definition()
                     : new GeoIndex().definition();
             if (state == null || state.status() != IndexState.Status.READY) {
@@ -95,7 +94,7 @@ public final class StoreCheck {
                         + state.definition() + "); use the same --text-predicates as prepare");
             }
         }
-        final String stored = storedFingerprint(client, conf, o.genConfig());
+        final String stored = storedFingerprint(store, conf, o.genConfig());
         if (stored == null) {
             throw new Mismatch("store " + o.tablePrefix() + " was not prepared by the loader: run prepare first");
         }
@@ -106,9 +105,9 @@ public final class StoreCheck {
     }
 
     /** The fingerprint recorded by prepare, or null if the dataset description is missing. */
-    public static String storedFingerprint(final AccumuloClient client, final StoreRdfConfiguration conf, final GenConfig g)
+    public static String storedFingerprint(final Store store, final StoreRdfConfiguration conf, final GenConfig g)
             throws Exception {
-        final RyaStoreQueryEngine engine = new RyaStoreQueryEngine(AccumuloStore.wrap(client), conf);
+        final RyaStoreQueryEngine engine = new RyaStoreQueryEngine(store, conf);
         try (CloseableIteration<RyaStatement> it = engine.query(new RyaStatement(new RyaIRI(g.datasetIri()),
                 new RyaIRI(g.ontology(ReferenceData.FINGERPRINT)), null), conf)) {
             return it.hasNext() ? it.next().getObject().getData() : null;

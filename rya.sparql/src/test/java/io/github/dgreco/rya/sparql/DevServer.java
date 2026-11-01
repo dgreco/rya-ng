@@ -19,28 +19,26 @@ package io.github.dgreco.rya.sparql;
  * under the License.
  */
 
-import org.apache.accumulo.minicluster.MiniAccumuloCluster;
-import io.github.dgreco.rya.test.accumulo.MiniAccumuloSingleton;
 import org.springframework.boot.SpringApplication;
 
+import io.github.dgreco.rya.test.TestBackends;
+
 /**
- * Runs the endpoint on a throwaway MiniAccumuloCluster, for trying it out locally:
+ * Runs the endpoint on a throwaway in-process cluster, for trying it out locally:
  * <pre>
  * mvn -pl rya.sparql -am install -DskipTests
  * mvn -pl rya.sparql spring-boot:test-run -Dspring-boot.run.main-class=io.github.dgreco.rya.sparql.DevServer
  * </pre>
- * Data is lost when the process exits.
+ * The cluster is a MiniAccumuloCluster, or an HBase mini cluster with
+ * {@code -Dspring-boot.run.jvmArguments=-Drya.test.backend=hbase}. Data is lost when the process exits.
  */
 public final class DevServer {
     private DevServer() {
     }
 
     public static void main(final String[] args) {
-        final MiniAccumuloCluster cluster = MiniAccumuloSingleton.getCluster();
-        System.setProperty("rya.accumulo.instance", cluster.getInstanceName());
-        System.setProperty("rya.accumulo.zookeepers", cluster.getZooKeepers());
-        System.setProperty("rya.accumulo.user", MiniAccumuloSingleton.ROOT_USER);
-        System.setProperty("rya.accumulo.password", MiniAccumuloSingleton.ROOT_PASSWORD);
+        // Starts the backend's in-process cluster and points the endpoint at it, as the test account.
+        TestBackends.current().endpointProperties().forEach(System::setProperty);
         System.setProperty("rya.inference", "true");
         SpringApplication.run(RyaSparqlApplication.class, args);
     }

@@ -21,6 +21,7 @@ package io.github.dgreco.rya.sparql;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
@@ -28,7 +29,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 /**
  * Settings under {@code rya.*}.
  *
- * @param accumulo how to reach Accumulo.
+ * @param backend the storage backend: {@code accumulo} or {@code hbase}.
+ * @param accumulo how to reach Accumulo, when the backend is Accumulo.
+ * @param hbase how to reach HBase, when the backend is HBase.
  * @param tablePrefix prefix of the Rya tables, e.g. {@code rya_}.
  * @param inference whether queries use OWL/RDFS inference.
  * @param inferenceRefresh how often the ontology is reloaded; changes to subClassOf,
@@ -45,7 +48,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties("rya")
 public record RyaProperties(
+        @DefaultValue("accumulo") String backend,
         Accumulo accumulo,
+        @DefaultValue HBase hbase,
         @DefaultValue("rya_") String tablePrefix,
         @DefaultValue("false") boolean inference,
         @DefaultValue("5m") Duration inferenceRefresh,
@@ -70,8 +75,32 @@ public record RyaProperties(
     }
 
     /**
+     * How to reach HBase.
+     *
+     * @param site {@code hbase-site.xml} files (and {@code core-site.xml} for Kerberos); empty to use
+     *        the ones on the classpath
+     * @param conf HBase client settings, such as {@code rya.hbase.conf[hbase.zookeeper.quorum]}
+     * @param labelsTable the table of label canaries (see the {@code labels} command of the loader)
+     * @param counters {@code coprocessor} (rya-ng's coprocessor, installed on the region servers) or
+     *        {@code increment}: how new counter tables store their deltas
+     * @param countersJar the hdfs path the region servers load the coprocessor from, when it isn't on
+     *        their classpath
+     * @param user with simple authentication only, the account to connect as; with Kerberos, the
+     *        logged-in principal is used
+     */
+    public record HBase(
+            @DefaultValue List<String> site,
+            @DefaultValue Map<String, String> conf,
+            @DefaultValue("rya_labels") String labelsTable,
+            @DefaultValue("coprocessor") String counters,
+            String countersJar,
+            String user) {
+    }
+
+    /**
      * @param authorizations the most a request may read with; requests may narrow this with
-     *        the {@code auths} parameter. The Accumulo user must hold all of them.
+     *        the {@code auths} parameter. The storage account must hold all of them; on HBase the
+     *        endpoint checks this at startup.
      * @param defaultVisibility visibility label for written statements; empty for none.
      * @param allowRequestVisibility whether an update may set its own label with the
      *        {@code visibility} parameter.
@@ -79,7 +108,7 @@ public record RyaProperties(
      *        {@code timeout} parameter.
      * @param maxQueryTimeout the longest a request may ask for with {@code timeout}; zero for no limit.
      * @param allowTrace whether a request may be traced ({@code trace} parameter and the
-     *        {@code /sparql/trace} stream), showing the Accumulo operations it causes.
+     *        {@code /sparql/trace} stream), showing the storage operations it causes.
      */
     public record Sparql(
             @DefaultValue List<String> authorizations,

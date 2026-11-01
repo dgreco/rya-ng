@@ -16,7 +16,46 @@ limitations under the License.
 
 # HBase as a second storage backend: study and plan
 
-Status: study only, nothing implemented. Written 2026-10-31 against `main` at `860fa66`.
+Status: written 2026-10-31 against `main` at `860fa66`; implemented on the `hbase-backend` branch on 2026-11-01. The study below is kept as written, with the phase 0 results added to section 8. The next section says what was built and where it differs from the plan.
+
+## 0. Implementation status
+
+**Built, phases 0 to 4:**
+- **The SPI and the Accumulo provider** (phase 1): `rya.store`, `rya.accumulo`, `rya.test`. The 409 tests of `main` pass unchanged.
+- **The HBase provider** (phase 2): `rya.hbase`, with the cell mapping of 3.2, the label rules of 4.2 and region-grouped batched reads.
+- **Counters** (phase 3): `rya.hbase.coprocessor`, in both counter modes.
+- **The endpoint and the loader** (phase 4): `rya.backend` and `rya.hbase.*`, `--backend` and `--hbase-*`, the loader's `labels` command, the wizard, and `DevServer`.
+- **Tests:** the store, Sail, loader and endpoint ITs run on either backend (`-Drya.test.backend=hbase`). New tests: `QualifierOrderTest`, `RangeParityIT`, `LabelParityIT`, `CounterIT`, `HBaseLabelsIT`, `StoreProviderIT`, and a parity test of the neutral visibility parser against Accumulo's.
+
+**Different from the plan:**
+- **Tracing.** The Accumulo trace proxies were kept, so traces on Accumulo are unchanged. HBase reports through `TracedScans` and its writer, with the same events. A `Store` decorator would have changed the events on Accumulo.
+- **`AccumuloRdfConfiguration`** stays, as a subclass of `StoreRdfConfiguration` with the Accumulo-only settings.
+- **Counters in increment mode** are set back to zero on a drop, not deleted. An increment is stamped `max(now, previous + 1)`, so a busy counter's timestamp runs ahead of the clock, and a delete marker there would hide the next increments until the clock caught up. `CounterIT` found this.
+- **The coprocessor's timestamps.** Each delta's timestamp is taken atomically, with a monotonic per-region clock read inside the update. Puts take shared row locks, so two batches can stamp the same cell at once, which section 3.8 didn't foresee. `CounterIT` found this too.
+- **Label checks.**
+  - **Startup probe:** a store refuses to open when, asking for no labels, it sees a label canary. That means its account is a superuser, or the cluster doesn't enforce labels. Phase 0 showed both cases.
+  - **Endpoint canaries:** on HBase the endpoint refuses to start when a label of `rya.sparql.authorizations` has no canary visible to it.
+  - **Label administration** opens the store with `hbase.check-labels=false`, because it needs a superuser.
+- **Read-only HBase accounts.** There is no test that one can open a store, because the test cluster runs without `AccessController`. Accumulo has one.
+- **Accumulo rejects some empty reads.** It rejects a cell range outside the fetched columns instead of returning nothing, so the Accumulo provider drops such ranges before reading. `RangeParityIT` found this; rya-ng itself never asks for one.
+- **Finding an HBase 3 cluster.** The HBase 3 client looks for the masters (`hbase.client.bootstrap.servers`, by default `localhost:16000`) rather than ZooKeeper. Given only a ZooKeeper quorum and no site file, the provider switches to ZooKeeper discovery itself.
+- **Long lookups on HBase.** A lookup of a literal too long to have been stored (a row over 32,767 bytes) reads nothing, as on Accumulo, instead of failing.
+- **Test cluster fixes:**
+  - The HBase test cluster binds to the loopback address. With two interfaces on one network, the host name resolved to the wrong address and the cluster vanished mid-run.
+  - Its JSP engine (`tomcat-jasper`, javax) is excluded, because it broke Spring Boot's Tomcat in the endpoint tests.
+- **Purge in increment mode** leaves counters at zero rather than deleting them, for the same reason as drops.
+
+**Checked outside the tests:** the endpoint's executable jar ran against an HBase cluster in another JVM, with Hadoop's client API only (no `hadoop-common`). It was given just a ZooKeeper quorum and the normal account, and its startup check of labels A,B passed. Over HTTP:
+- labelled and unlabelled inserts worked;
+- a read with A,B saw both, and one with B didn't see the A-labelled value;
+- an unconfigured label got 403;
+- the text index answered.
+
+**Still to do:**
+- **Benchmarks B0, B1, B2** (section 7) at the planned scale, on a real cluster. One machine shared with other load can't measure within 3 %; a small A/B on the mini clusters is all that was run.
+- **Kerberos and TLS** against a real HBase cluster. The client settings pass through (`hbase.site`, `hbase.conf.*`), but they are untested.
+- **The loader's `dry-run`** still sizes cells as Accumulo sends them.
+- **Data copy between backends** (section 5.4) is not built.
 
 ## 1. Summary
 

@@ -15,7 +15,7 @@
  */
 
 /*
- * The "Accumulo trace" side panel: what a query does in Accumulo, live. Before each traced
+ * The "Storage trace" side panel: what a query does in the store (Accumulo or HBase), live. Before each traced
  * query, rya-ui.js calls RyaTrace.begin(tabId), sends the id it returns as trace=, and this file
  * reads the server-sent events of sparql/trace/<id>: notes, plans, scans, progress, flushes, a
  * summary and the end. Everything from the server is written as text, never as HTML.
@@ -125,7 +125,7 @@
         const status = el("span", "rya-trace-status", "idle");
         const totals = el("div", "rya-trace-totals");
         const body = el("div", "rya-trace-body");
-        const hint = el("p", "rya-trace-hint", "Run a query: its plan, every Accumulo scan and every write show up here while it runs.");
+        const hint = el("p", "rya-trace-hint", "Run a query: its plan, every storage scan and every write show up here while it runs.");
         const notes = el("div", "rya-trace-notes");
         const plans = el("div", "rya-trace-plans");
         const ops = el("div", "rya-trace-cards");
@@ -158,7 +158,7 @@
         }
 
         function showTotals() {
-            const parts = [plural(live.scans, "scan"), entries(live.entries), fmt(live.ms, 1) + " ms in Accumulo"];
+            const parts = [plural(live.scans, "scan"), entries(live.entries), fmt(live.ms, 1) + " ms in storage"];
             if (live.mutations) {
                 parts.push(plural(live.mutations, "mutation"));
             }
@@ -288,7 +288,7 @@
                 }
                 const parts = [];
                 if (p.waitingMs >= 1000) {
-                    parts.push(el("div", "rya-trace-waiting", "waiting " + fmt(p.waitingMs / 1000, 1) + " s for the tablet servers"));
+                    parts.push(el("div", "rya-trace-waiting", "waiting " + fmt(p.waitingMs / 1000, 1) + " s for the servers"));
                 }
                 if (p.position) {
                     const at = code("div", "rya-trace-position", p.position);
@@ -327,7 +327,7 @@
         function onFlush(event) {
             let mutations = 0;
             const box = el("div", "rya-trace-what");
-            box.appendChild(el("div", "rya-trace-reason", "buffered writes sent to the tablet servers"));
+            box.appendChild(el("div", "rya-trace-reason", "buffered writes sent to the servers"));
             for (const t of event.tables) {
                 mutations += t.mutations;
                 box.appendChild(el("div", "rya-trace-range", t.table + ": " + plural(t.mutations, "mutation") + ", "
@@ -455,14 +455,14 @@
     let shown = idle;
 
     const head = el("div", "rya-trace-head");
-    const title = el("h2", "rya-trace-title", "Accumulo trace");
+    const title = el("h2", "rya-trace-title", "Storage trace");
     const fold = el("button", "rya-trace-fold", "⟩");
     fold.type = "button";
     fold.title = "Fold the panel into a tab";
     fold.setAttribute("aria-label", "Fold the trace panel");
     head.append(title, shown.status, fold, shown.totals);
     panel.append(head, shown.body);
-    tab.replaceChildren(el("span", null, "Accumulo trace"));
+    tab.replaceChildren(el("span", null, "Storage trace"));
 
     /** The folded tab blinks while the trace the panel would show is running. */
     function runningChanged(trace) {

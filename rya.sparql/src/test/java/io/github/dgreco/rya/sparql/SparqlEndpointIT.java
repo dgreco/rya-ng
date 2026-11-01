@@ -32,11 +32,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
-import org.apache.accumulo.core.client.Accumulo;
-import org.apache.accumulo.core.client.AccumuloClient;
-import org.apache.accumulo.core.security.Authorizations;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
-import io.github.dgreco.rya.test.accumulo.MiniAccumuloSingleton;
+import io.github.dgreco.rya.test.TestBackends;
 import org.eclipse.rdf4j.model.Model;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
@@ -52,7 +49,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 /**
- * Drives the endpoint over real HTTP, backed by a MiniAccumuloCluster.
+ * Drives the endpoint over real HTTP, backed by the test cluster of {@code -Drya.test.backend}.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 public class SparqlEndpointIT {
@@ -67,12 +64,9 @@ public class SparqlEndpointIT {
     private final HttpClient http = HttpClient.newHttpClient();
 
     @DynamicPropertySource
-    static void accumulo(final DynamicPropertyRegistry registry) {
-        final var cluster = MiniAccumuloSingleton.getCluster();
-        registry.add("rya.accumulo.instance", cluster::getInstanceName);
-        registry.add("rya.accumulo.zookeepers", cluster::getZooKeepers);
-        registry.add("rya.accumulo.user", () -> MiniAccumuloSingleton.ROOT_USER);
-        registry.add("rya.accumulo.password", () -> MiniAccumuloSingleton.ROOT_PASSWORD);
+    static void store(final DynamicPropertyRegistry registry) {
+        // The backend of -Drya.test.backend, reached as the test account.
+        TestBackends.current().endpointProperties().forEach((key, value) -> registry.add(key, () -> value));
         registry.add("rya.table-prefix", () -> PREFIX);
         registry.add("rya.inference", () -> "true");
         registry.add("rya.sparql.authorizations", () -> "A,B");
@@ -81,10 +75,8 @@ public class SparqlEndpointIT {
     }
 
     @BeforeAll
-    static void grantAuths() throws Exception {
-        try (AccumuloClient client = Accumulo.newClient().from(MiniAccumuloSingleton.getClientProperties()).build()) {
-            client.securityOperations().changeUserAuthorizations(MiniAccumuloSingleton.ROOT_USER, new Authorizations("A", "B"));
-        }
+    static void grantAuths() {
+        TestBackends.current().grantLabels("A", "B");
     }
 
     @BeforeEach
