@@ -70,6 +70,15 @@ public final class HBaseLabels {
     private static final byte[] CANARY = "canary".getBytes(StandardCharsets.UTF_8);
     private static final byte[] EMPTY = new byte[0];
 
+    /** A store refused because labels aren't enforced for its account (see {@link #probe}). */
+    public static final class NotEnforced extends RyaDAOException {
+        private static final long serialVersionUID = 1L;
+
+        NotEnforced(final String message) {
+            super(message);
+        }
+    }
+
     private HBaseLabels() {
     }
 
@@ -179,7 +188,7 @@ public final class HBaseLabels {
             while (cells.hasNext()) {
                 final Cell c = cells.next();
                 if (c.visibility().length > 0) {
-                    throw new RyaDAOException("HBase doesn't enforce labels for " + store.access().whoami()
+                    throw new NotEnforced("HBase doesn't enforce labels for " + store.access().whoami()
                             + ": asking for no labels, it still sees the canary of "
                             + new String(c.visibility(), StandardCharsets.UTF_8)
                             + ". Use an account that isn't an HBase superuser and doesn't hold the 'system' label, "

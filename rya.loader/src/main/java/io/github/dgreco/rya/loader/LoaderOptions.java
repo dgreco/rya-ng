@@ -15,6 +15,9 @@
  */
 package io.github.dgreco.rya.loader;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -23,9 +26,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 
-
+import io.github.dgreco.rya.hbase.HBaseLabels;
+import io.github.dgreco.rya.hbase.HBaseStoreProvider;
 import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import io.github.dgreco.rya.store.spi.Durability;
 import io.github.dgreco.rya.loader.gen.EntityClass;
@@ -62,7 +67,8 @@ public final class LoaderOptions {
     private static final Set<String> FLAGS = Set.of("text-index", "geo-index", "resume", "grant-auths", "help");
     /** Every option with a value. */
     private static final Set<String> VALUED = Set.of("table-prefix", "client-properties", "zookeepers", "instance", "user",
-            "backend", "hbase-site", "hbase-conf", "hbase-user", "hbase-counters", "hbase-labels-table", "grant-to",
+            "backend", "hbase-properties", "hbase-site", "hbase-conf", "hbase-user", "hbase-counters", "hbase-counters-jar",
+            "hbase-labels-table", "grant-to",
             "text-predicates", "stats", "entities", "triples", "start-entity", "end-entity", "seed", "timestamp", "graphs",
             "default-graph-fraction", "labels", "labelled-fraction", "geo-scale", "polygon-fraction", "text-scale",
             "link-skew", "word-skew", "class-weights", "base-iri", "part", "parts", "threads", "block-size",
@@ -72,6 +78,9 @@ public final class LoaderOptions {
     private static final List<String> GENERATION = List.of("seed", "timestamp", "graphs", "default-graph-fraction", "labels",
             "labelled-fraction", "geo-scale", "polygon-fraction", "text-scale", "link-skew", "word-skew", "class-weights",
             "base-iri");
+    /** The settings an --hbase-properties file may hold, besides {@code hbase.conf.<key>}. */
+    private static final List<String> HBASE_FILE_KEYS = List.of(HBaseStoreProvider.SITE, HBaseStoreProvider.USER,
+            HBaseStoreProvider.COUNTERS, HBaseStoreProvider.COUNTERS_JAR, HBaseStoreProvider.LABELS_TABLE);
 
     public final Command command;
     public final boolean help;
@@ -79,6 +88,7 @@ public final class LoaderOptions {
     private final Map<String, String> env;
 
     private GenConfig genConfig;
+    private Properties hbaseSettings;
 
     private LoaderOptions(final Command command, final boolean help, final Map<String, String> values,
             final Map<String, String> env) {
@@ -135,6 +145,16 @@ public final class LoaderOptions {
     }
 
     private void validate() {
+        final String backend = backend();
+        if (!backend.equals("accumulo") && !backend.equals("hbase")) {
+            throw new IllegalArgumentException("--backend must be accumulo or hbase, not " + backend);
+        }
+        if (backend.equals("accumulo") && hbaseProperties() != null) {
+            throw new IllegalArgumentException("--hbase-properties is for HBase, but --backend is accumulo");
+        }
+        if (backend.equals("hbase") && command != Command.DRY_RUN) {
+            hbaseSettings(); // reads the file and checks the values
+        }
         if (command == Command.LABELS && labelList().isEmpty()) {
             throw new IllegalArgumentException("labels needs --labels A,B,...");
         }
@@ -186,42 +206,125 @@ public final class LoaderOptions {
         return env.get("RYA_ACCUMULO_PASSWORD");
     }
 
-    /** {@code accumulo} (the default) or {@code hbase}; also {@code RYA_BACKEND}. */
+    /**
+     * {@code accumulo} (the default) or {@code hbase}: {@code --backend}, else {@code hbase} when
+     * {@code --hbase-properties} is given, else {@code RYA_BACKEND}.
+     */
     public String backend() {
-        return values.getOrDefault("backend", env.getOrDefault("RYA_BACKEND", "accumulo")).trim().toLowerCase(Locale.ROOT);
+        final String explicit = values.get("backend");
+        if (explicit != null) {
+            return explicit.trim().toLowerCase(Locale.ROOT);
+        }
+        if (hbaseProperties() != null) {
+            return "hbase";
+        }
+        final String fromEnv = env.get("RYA_BACKEND");
+        return fromEnv == null || fromEnv.isBlank() ? "accumulo" : fromEnv.trim().toLowerCase(Locale.ROOT);
     }
 
-    /** The settings of the HBase backend, from the {@code --hbase-*} options and {@code RYA_HBASE_*}. */
-    public java.util.Properties hbaseSettings() {
-        final java.util.Properties settings = new java.util.Properties();
-        final String site = values.getOrDefault("hbase-site", env.get("RYA_HBASE_SITE"));
-        if (site != null && !site.isBlank()) {
-            settings.setProperty("hbase.site", site);
+    /** The HBase settings file ({@code rya.loader/configure.sh} writes one); null if not given. */
+    public Path hbaseProperties() {
+        final String p = values.get("hbase-properties");
+        return p == null || p.isBlank() ? null : Path.of(p.trim());
+    }
+
+    /**
+     * The settings of the HBase backend (see {@link HBaseStoreProvider}). The {@code --hbase-*}
+     * options win over the {@code --hbase-properties} file, which wins over {@code RYA_HBASE_*}.
+     * An empty {@code --hbase-user} or {@code --hbase-site} clears the file's value.
+     */
+    public Properties hbaseSettings() {
+        if (hbaseSettings == null) {
+            hbaseSettings = buildHBaseSettings();
         }
-        // key=value pairs separated by ';' (values such as a ZooKeeper quorum hold commas)
-        final String conf = values.getOrDefault("hbase-conf", env.get("RYA_HBASE_CONF"));
-        if (conf != null) {
-            for (final String pair : conf.split(";")) {
-                final int eq = pair.indexOf('=');
-                if (eq > 0) {
-                    settings.setProperty("hbase.conf." + pair.substring(0, eq).trim(), pair.substring(eq + 1).trim());
-                } else if (!pair.isBlank()) {
-                    throw new IllegalArgumentException("--hbase-conf takes key=value pairs separated by ';' (got '" + pair + "')");
+        final Properties copy = new Properties();
+        copy.putAll(hbaseSettings);
+        return copy;
+    }
+
+    private Properties buildHBaseSettings() {
+        final Properties s = new Properties();
+        // The environment.
+        setOrClear(s, HBaseStoreProvider.SITE, env.get("RYA_HBASE_SITE"));
+        putConf(s, env.get("RYA_HBASE_CONF"), "RYA_HBASE_CONF");
+        setOrClear(s, HBaseStoreProvider.USER, env.get("RYA_HBASE_USER"));
+        // The file.
+        final Path file = hbaseProperties();
+        if (file != null) {
+            final Properties f = new Properties();
+            // Read as ISO-8859-1, like every .properties file (configure.sh escapes anything else).
+            try (InputStream in = Files.newInputStream(file)) {
+                f.load(in);
+            } catch (final IOException e) {
+                throw new IllegalArgumentException("can't read --hbase-properties " + file + " (" + e.getMessage() + ")");
+            }
+            for (final String key : f.stringPropertyNames()) {
+                if (!key.startsWith(HBaseStoreProvider.CONF_PREFIX) && !HBASE_FILE_KEYS.contains(key)) {
+                    throw new IllegalArgumentException(file + ": unknown setting " + key + " (HBase client settings are "
+                            + "written hbase.conf.<key>, such as hbase.conf.hbase.zookeeper.quorum; the others are "
+                            + String.join(", ", HBASE_FILE_KEYS) + ")");
                 }
+                s.setProperty(key, f.getProperty(key).trim());
             }
         }
-        final String user = values.getOrDefault("hbase-user", env.get("RYA_HBASE_USER"));
-        if (user != null && !user.isBlank()) {
-            settings.setProperty("hbase.user", user);
+        // The options.
+        if (values.containsKey("hbase-site")) {
+            setOrClear(s, HBaseStoreProvider.SITE, values.get("hbase-site"));
         }
-        settings.setProperty("hbase.counters", values.getOrDefault("hbase-counters", "coprocessor"));
-        settings.setProperty("hbase.labels-table", hbaseLabelsTable());
-        return settings;
+        putConf(s, values.get("hbase-conf"), "--hbase-conf");
+        if (values.containsKey("hbase-user")) {
+            setOrClear(s, HBaseStoreProvider.USER, values.get("hbase-user"));
+        }
+        if (values.containsKey("hbase-counters-jar")) {
+            setOrClear(s, HBaseStoreProvider.COUNTERS_JAR, values.get("hbase-counters-jar"));
+        }
+        if (values.containsKey("hbase-counters")) {
+            s.setProperty(HBaseStoreProvider.COUNTERS, values.get("hbase-counters"));
+        }
+        if (values.containsKey("hbase-labels-table")) {
+            s.setProperty(HBaseStoreProvider.LABELS_TABLE, values.get("hbase-labels-table"));
+        }
+        // The defaults.
+        final String counters = s.getProperty(HBaseStoreProvider.COUNTERS, "coprocessor").trim().toLowerCase(Locale.ROOT);
+        if (!counters.equals("coprocessor") && !counters.equals("increment")) {
+            throw new IllegalArgumentException("the HBase counters are coprocessor or increment, not '" + counters + "'");
+        }
+        s.setProperty(HBaseStoreProvider.COUNTERS, counters);
+        final String labelsTable = s.getProperty(HBaseStoreProvider.LABELS_TABLE, "");
+        s.setProperty(HBaseStoreProvider.LABELS_TABLE, labelsTable.isBlank() ? HBaseLabels.DEFAULT_TABLE : labelsTable.trim());
+        return s;
+    }
+
+    /** Sets the value, or removes the setting when the value is empty (null leaves it as it is). */
+    private static void setOrClear(final Properties s, final String key, final String value) {
+        if (value == null) {
+            return;
+        }
+        if (value.isBlank()) {
+            s.remove(key);
+        } else {
+            s.setProperty(key, value.trim());
+        }
+    }
+
+    /** key=value pairs separated by ';' (values such as a ZooKeeper quorum hold commas). */
+    private static void putConf(final Properties s, final String conf, final String source) {
+        if (conf == null) {
+            return;
+        }
+        for (final String pair : conf.split(";")) {
+            final int eq = pair.indexOf('=');
+            if (eq > 0) {
+                s.setProperty(HBaseStoreProvider.CONF_PREFIX + pair.substring(0, eq).trim(), pair.substring(eq + 1).trim());
+            } else if (!pair.isBlank()) {
+                throw new IllegalArgumentException(source + " takes key=value pairs separated by ';' (got '" + pair + "')");
+            }
+        }
     }
 
     /** The HBase table of label canaries; must match the endpoint's rya.hbase.labels-table. */
     public String hbaseLabelsTable() {
-        return values.getOrDefault("hbase-labels-table", "rya_labels");
+        return backend().equals("hbase") ? hbaseSettings().getProperty(HBaseStoreProvider.LABELS_TABLE) : HBaseLabels.DEFAULT_TABLE;
     }
 
     /** The account the labels command gives labels to; null for the connected one. */
@@ -581,10 +684,13 @@ public final class LoaderOptions {
                   --instance, --user plus the password in the RYA_ACCUMULO_PASSWORD environment variable (also
                   RYA_ACCUMULO_ZOOKEEPERS/_INSTANCE/_USER/_CLIENT_PROPERTIES). A properties file without auth.token
                   takes the password from RYA_ACCUMULO_PASSWORD.
-                HBase: --hbase-site FILES (hbase-site.xml, and core-site.xml for Kerberos; comma-separated),
+                HBase: --hbase-properties FILE (rya.loader/configure.sh writes one; selects HBase), and/or
+                  --hbase-site FILES (hbase-site.xml, and core-site.xml for Kerberos; comma-separated),
                   --hbase-conf 'key=value;key=value' (for example hbase.zookeeper.quorum=zk1,zk2), --hbase-user U
-                  (simple authentication only), --hbase-counters coprocessor|increment, --hbase-labels-table T
-                  (also RYA_HBASE_SITE, RYA_HBASE_CONF, RYA_HBASE_USER).
+                  (simple authentication only; empty: the process user), --hbase-counters coprocessor|increment,
+                  --hbase-counters-jar hdfs:///PATH (for prepare, when the coprocessor isn't on the region servers'
+                  classpath), --hbase-labels-table T. Options win over the file, the file over RYA_HBASE_SITE,
+                  RYA_HBASE_CONF and RYA_HBASE_USER.
 
                 Dataset (repeat on every command; prepare prints the exact arguments):
                   --table-prefix P          required; tables P<spo|po|osp|ns|eval|graphs|text|geo>

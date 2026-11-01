@@ -171,8 +171,10 @@ public final class HBaseStore implements Store {
         }
         this.capabilities = new Capabilities(labels, options.counters() == CounterMode.COPROCESSOR, true, false,
                 HBaseCodec.MAX_ROW_BYTES);
-        if (labels && options.checkLabels()) {
-            HBaseLabels.probe(this, options.labelsTable());
+        if (labels) {
+            if (options.checkLabels()) {
+                HBaseLabels.probe(this, options.labelsTable());
+            }
         } else {
             log.warn("HBase doesn't enforce cell visibility (VisibilityController with hbase.security.authorization=true): "
                     + "rya-ng will refuse to write labelled statements");
@@ -204,7 +206,7 @@ public final class HBaseStore implements Store {
      * puts, an increment table increments), else the configured mode when the account may not read
      * descriptors.
      */
-    CounterMode counterMode(final String table) {
+    public CounterMode counterMode(final String table) {
         return counterModes.computeIfAbsent(table, t -> {
             try (Admin admin = connection.getAdmin()) {
                 return admin.getDescriptor(name(t)).hasCoprocessor(COUNTER_COPROCESSOR) ? CounterMode.COPROCESSOR

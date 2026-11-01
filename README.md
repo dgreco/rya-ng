@@ -361,9 +361,9 @@ Without an index, these filters still work: they check every candidate, so they 
 Each entity depends only on the seed and its number, so any process can generate any part of the dataset, and writing a part again produces the same keys.
 
 ```bash
-rya.loader/configure.sh   # once: asks for the connection, writes ~/.rya-ng/accumulo-client.properties
+rya.loader/configure.sh   # once: asks for the store (Accumulo or HBase) and the connection, writes a file in ~/.rya-ng
 R=rya.loader/run.sh       # builds the jar on first use; --build rebuilds it
-C="--client-properties $HOME/.rya-ng/accumulo-client.properties"
+C="--client-properties $HOME/.rya-ng/accumulo-client.properties"   # HBase: C="--hbase-properties $HOME/.rya-ng/hbase.properties"
 
 $R check $C                                                # connection, servers, the account's rights
 $R dry-run --triples 1B --text-index --geo-index           # no cluster: speed, bytes per triple, network ceiling
@@ -374,11 +374,12 @@ $R verify  $C <same options> --sample 1000
 $R drop    $C --table-prefix big_ --confirm big_
 ```
 
-- **Connection:** `rya.loader/configure.sh` writes an `accumulo-client.properties` file, readable only by you, and can test it right away.
-  - The password can be stored in the file, or left out and read from `RYA_ACCUMULO_PASSWORD` when the loader starts.
-  - `--output FILE` writes elsewhere, and `--defaults` takes the `RYA_ACCUMULO_*` variables without asking.
-  - Without a file, set `RYA_ACCUMULO_ZOOKEEPERS`, `RYA_ACCUMULO_INSTANCE`, `RYA_ACCUMULO_USER` and `RYA_ACCUMULO_PASSWORD`. `--zookeepers`, `--instance` and `--user` also work, but the password is never accepted as an argument.
-  - **HBase:** `--backend hbase` with `--hbase-site /etc/hbase/conf/hbase-site.xml` (or `--hbase-conf 'hbase.zookeeper.quorum=zk1,zk2'`). Register the dataset's labels first with `labels --labels A,B`, as an HBase superuser: the loading account itself must not be one.
+- **Connection:** `rya.loader/configure.sh` asks which store the loader writes to, writes a connection file readable only by you, and can test it right away.
+  - Its first question is the store (1 Accumulo, 2 HBase), which matters when answers are piped in. `--output FILE` writes elsewhere, and `--defaults` answers from the environment without asking (`RYA_BACKEND=hbase` picks HBase).
+  - **Accumulo:** an `accumulo-client.properties` file, for `--client-properties`. The password can be stored in the file, or left out and read from `RYA_ACCUMULO_PASSWORD` when the loader starts. Without a file, set `RYA_ACCUMULO_ZOOKEEPERS`, `RYA_ACCUMULO_INSTANCE`, `RYA_ACCUMULO_USER` and `RYA_ACCUMULO_PASSWORD`. `--zookeepers`, `--instance` and `--user` also work, but the password is never accepted as an argument.
+  - **HBase:** a file of HBase settings, for `--hbase-properties` (which selects HBase): the cluster's `hbase-site.xml` or a ZooKeeper quorum, the account, and the counter mode. Without a file, give `--backend hbase` with `--hbase-site /etc/hbase/conf/hbase-site.xml` (or `--hbase-conf 'hbase.zookeeper.quorum=zk1,zk2'`) and `--hbase-user`. Options win over the file, and the file over `RYA_HBASE_*`.
+    - Every loader and endpoint of a store must use the same counter mode. If the coprocessor isn't on the region servers' classpath, give `prepare` its hdfs path with `--hbase-counters-jar` (the wizard asks for it).
+    - Register the dataset's labels first, as an HBase superuser: `labels --labels A,B --grant-to ACCOUNT`, with `--hbase-user=SUPERUSER` (or `--hbase-user=` for the process user). The loading account itself must not be a superuser: the loader refuses one.
 - **`prepare` first, once per dataset:**
   - creates the tables with the indexes ready and splits each table into 4 tablets per tablet server, at split points sampled from the data;
   - writes the ontology, 200 countries and a description of the dataset;

@@ -14,9 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Configuration wizard for the loader's Accumulo connection: asks for the instance, the user and
-# the password, and writes an accumulo-client.properties file for --client-properties (the SPARQL
-# endpoint accepts the same file). Works with the bash 3.2 that ships with macOS.
+# Configuration wizard for the loader's connection, to Accumulo or HBase.
+#   Accumulo: asks for the instance, the user and the password, and writes an
+#             accumulo-client.properties file for --client-properties (the SPARQL endpoint
+#             accepts the same file).
+#   HBase:    asks how to find the cluster, the account and the counter mode, and writes a file
+#             of HBase settings for --hbase-properties.
+# Works with the bash 3.2 that ships with macOS.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,26 +29,30 @@ usage() {
   cat <<'EOF'
 Usage: rya.loader/configure.sh [--output FILE] [--force] [--defaults] [--check | --no-check]
 
-Asks for the Accumulo connection and writes an accumulo-client.properties file for the loader
-(run.sh <command> --client-properties FILE). The SPARQL endpoint accepts the same file
-(--rya.accumulo.client-properties=FILE).
+Asks which store the loader writes to and how to connect, and writes a connection file:
+  Accumulo  an accumulo-client.properties file (run.sh <command> --client-properties FILE).
+            The SPARQL endpoint accepts the same file (--rya.accumulo.client-properties=FILE).
+            The password can be stored in the file, which only you can read, or left out: the
+            loader and the endpoint then read it from RYA_ACCUMULO_PASSWORD when they start.
+  HBase     a file of HBase settings (run.sh <command> --hbase-properties FILE). HBase has no
+            password: it uses simple authentication or Kerberos.
 
-The password can be stored in the file, which only you can read, or left out: the loader and
-the endpoint then read it from RYA_ACCUMULO_PASSWORD when they start.
-
-  --output FILE   where to write the file (default: ~/.rya-ng/accumulo-client.properties)
+  --output FILE   where to write the file (default: ~/.rya-ng/accumulo-client.properties, or
+                  ~/.rya-ng/hbase.properties for HBase)
   --force         overwrite FILE if it exists
-  --defaults      accept every default without asking. RYA_ACCUMULO_ZOOKEEPERS,
-                  RYA_ACCUMULO_INSTANCE and RYA_ACCUMULO_USER preset the defaults; the
-                  password is stored only if RYA_ACCUMULO_PASSWORD is set.
+  --defaults      accept every default without asking. RYA_BACKEND=hbase picks HBase.
+                  RYA_ACCUMULO_ZOOKEEPERS, RYA_ACCUMULO_INSTANCE and RYA_ACCUMULO_USER, or
+                  RYA_HBASE_SITE and RYA_HBASE_USER, preset the defaults; the Accumulo password
+                  is stored only if RYA_ACCUMULO_PASSWORD is set.
   --check         test the connection afterwards without asking (the loader's check command)
   --no-check      don't test it
 
-Answers can also be piped in, one per line (an empty line keeps the default).
+Answers can also be piped in, one per line (an empty line keeps the default). The first
+question is the store: 1 for Accumulo, 2 for HBase.
 EOF
 }
 
-output="$HOME/.rya-ng/accumulo-client.properties"
+output=""
 force=false
 defaults=false
 check=ask
@@ -105,6 +113,34 @@ yesno() {
   done
 }
 
+# choose VAR "Question" default "option 1" "option 2" ...: sets VAR to the number of the option.
+choose() {
+  local _var="$1" _question="$2" _default="$3" _i _answer _option
+  shift 3
+  if ! $defaults; then
+    echo "$_question" >&2
+    _i=1
+    for _option in "$@"; do
+      echo "  $_i) $_option" >&2
+      _i=$((_i + 1))
+    done
+  fi
+  while true; do
+    if $defaults; then
+      _answer="$_default"
+    else
+      printf 'Choice [%s]: ' "$_default" >&2
+      IFS= read -r _answer || _answer=""
+      [ -n "$_answer" ] || _answer="$_default"
+    fi
+    case "$_answer" in
+      ''|*[!0-9]*) ;;
+      *) if [ "$_answer" -ge 1 ] && [ "$_answer" -le $# ]; then printf -v "$_var" '%s' "$_answer"; return 0; fi ;;
+    esac
+    echo "  Please enter a number from 1 to $#." >&2
+  done
+}
+
 # secret VAR "Question": reads a password without echoing it (twice at a terminal, to confirm).
 secret() {
   local _var="$1" _question="$2" _first _second
@@ -142,6 +178,13 @@ note() {
 }
 
 not_empty() { [ -n "$1" ] || { note "A value is required."; return 1; }; }
+no_spaces() {
+  case "$1" in *[[:space:]]*) note "No spaces, please."; return 1 ;; esac
+}
+hosts() {
+  [ -n "$1" ] || { note "A value is required."; return 1; }
+  case "$1" in *[[:space:]]*) note "No spaces, please: host names separated by commas."; return 1 ;; esac
+}
 zookeepers() {
   local hp
   [ -n "$1" ] || { note "A value is required."; return 1; }
@@ -152,13 +195,45 @@ zookeepers() {
     esac
   done
 }
+port_number() {
+  case "$1" in ''|*[!0-9]*) note "Enter a port number."; return 1 ;; esac
+  [ "$1" -ge 1 ] && [ "$1" -le 65535 ] || { note "Ports go from 1 to 65535."; return 1; }
+}
 duration() {
   case "$1" in [0-9]*ms|[0-9]*s|[0-9]*m) case "${1%%[a-z]*}" in *[!0-9]*) ;; *) return 0 ;; esac ;; esac
   note "Use a duration such as 30s or 1m."
   return 1
 }
 
-# A value as Java properties files store it. Accumulo reads the file as ISO-8859-1, so anything
+# Says whether something answers at host:port (when nc is available).
+reachable() {
+  command -v nc >/dev/null 2>&1 || return 0
+  if nc -z -w 3 "$1" "$2" >/dev/null 2>&1; then
+    $defaults || note "ZooKeeper answers at $1:$2."
+  else
+    note "Note: nothing answers at $1:$2 right now."
+  fi
+}
+
+# Comma-separated paths made absolute (with ~/ expanded), so the file works from any directory.
+absolute_paths() {
+  local p out="" rest="$1"
+  while [ -n "$rest" ]; do
+    p="${rest%%,*}"
+    if [ "$p" = "$rest" ]; then rest=""; else rest="${rest#*,}"; fi
+    [ -n "$p" ] || continue
+    case "$p" in
+      "~/"*) p="$HOME/${p#\~/}" ;;
+      /*) ;;
+      *) p="$PWD/$p" ;;
+    esac
+    [ -r "$p" ] || note "Note: $p is not readable right now."
+    out="${out:+$out,}$p"
+  done
+  printf '%s' "$out"
+}
+
+# A value as Java properties files store it. Java reads the file as ISO-8859-1, so anything
 # outside printable ASCII becomes \uXXXX escapes (UTF-16, as Java expects).
 prop_value() {
   local v="$1" out
@@ -174,8 +249,22 @@ prop_value() {
   printf '%s' "$out"
 }
 
-# ---- questions ------------------------------------------------------------------------------------
+# ---- the store ------------------------------------------------------------------------------------
 
+$defaults || echo "rya-ng loader: connection setup. Press Enter to keep the value in brackets." >&2
+
+section "Store"
+
+backend_default=1
+case "$(printf '%s' "${RYA_BACKEND:-}" | tr '[:upper:]' '[:lower:]')" in hbase) backend_default=2 ;; esac
+choose backend_choice "Which store does the loader write to?" "$backend_default" \
+  "Accumulo" \
+  "HBase (with VisibilityController and hbase.security.authorization=true)"
+if [ "$backend_choice" = 2 ]; then backend=hbase; else backend=accumulo; fi
+
+if [ -z "$output" ]; then
+  if [ "$backend" = hbase ]; then output="$HOME/.rya-ng/hbase.properties"; else output="$HOME/.rya-ng/accumulo-client.properties"; fi
+fi
 if [ -e "$output" ] && ! $force; then
   if $defaults; then
     echo "$output exists: pass --force to overwrite it, or --output to write elsewhere." >&2
@@ -185,19 +274,16 @@ if [ -e "$output" ] && ! $force; then
   $overwrite || exit 1
 fi
 
-$defaults || echo "rya-ng loader: Accumulo connection setup. Press Enter to keep the value in brackets." >&2
+store=false
+if [ "$backend" = accumulo ]; then
+
+# ---- Accumulo -------------------------------------------------------------------------------------
 
 section "Accumulo connection"
 
 ask zk "ZooKeeper servers (host:port,...)" "${RYA_ACCUMULO_ZOOKEEPERS:-localhost:2181}" zookeepers
 first_zk="${zk%%,*}"
-if command -v nc >/dev/null 2>&1; then
-  if nc -z -w 3 "${first_zk%:*}" "${first_zk##*:}" >/dev/null 2>&1; then
-    $defaults || note "ZooKeeper answers at $first_zk."
-  else
-    note "Note: nothing answers at $first_zk right now."
-  fi
-fi
+reachable "${first_zk%:*}" "${first_zk##*:}"
 ask instance "Accumulo instance name" "${RYA_ACCUMULO_INSTANCE:-accumulo}" not_empty
 ask zk_timeout "ZooKeeper session timeout" "30s" duration
 ask user "Accumulo user" "${RYA_ACCUMULO_USER:-root}" not_empty
@@ -209,14 +295,45 @@ if $defaults; then
   if [ -n "${RYA_ACCUMULO_PASSWORD:-}" ]; then
     store=true
     password="$RYA_ACCUMULO_PASSWORD"
-  else
-    store=false
   fi
 else
   yesno store "Store the password in the file? (Only you can read the file. If not, the loader reads RYA_ACCUMULO_PASSWORD when it starts.)" y
   if $store; then
     secret password "Password of $user"
   fi
+fi
+
+else
+
+# ---- HBase ----------------------------------------------------------------------------------------
+
+section "HBase connection"
+
+hbase_zk="" hbase_zk_port=""
+ask hbase_site "hbase-site.xml files, and core-site.xml for Kerberos, separated by commas (empty: give the ZooKeeper quorum)" "${RYA_HBASE_SITE:-}"
+hbase_site="$(absolute_paths "$hbase_site")"
+if [ -z "$hbase_site" ]; then
+  ask hbase_zk "ZooKeeper quorum (host,host,...)" "localhost" hosts
+  ask hbase_zk_port "ZooKeeper port" "2181" port_number
+  first_zk="${hbase_zk%%,*}"
+  reachable "${first_zk%:*}" "$hbase_zk_port"
+fi
+ask hbase_user "Account to connect as, with simple authentication only (empty: the process user, or the Kerberos principal)" "${RYA_HBASE_USER:-}" no_spaces
+$defaults || note "It must not be an HBase superuser, which would see every label (the loader refuses one)."
+
+section "Statistics counters"
+
+choose counters_choice "How are the counters stored? (Every loader and endpoint of a store must use the same.)" 1 \
+  "Summed by rya-ng's coprocessor (the rya.hbase.coprocessor jar on the region servers): fast writes" \
+  "HBase increments (no coprocessor; every counter write locks its row)"
+counters=coprocessor
+counters_jar=""
+if [ "$counters_choice" = 2 ]; then
+  counters=increment
+else
+  ask counters_jar "hdfs path of the rya.hbase.coprocessor jar, for region servers without it on their classpath (empty: they have it)" "" no_spaces
+fi
+
 fi
 
 # ---- the file -------------------------------------------------------------------------------------
@@ -229,7 +346,7 @@ tmp="$output.tmp.$$"
 trap 'rm -f "$tmp"' EXIT
 (
   umask 077
-  {
+  if [ "$backend" = accumulo ]; then
     echo "# Accumulo client properties for rya-ng, written by rya.loader/configure.sh on $(date '+%Y-%m-%d %H:%M')."
     echo "#   Loader:   rya.loader/run.sh <command> --client-properties $output"
     echo "#             (or export RYA_ACCUMULO_CLIENT_PROPERTIES=$output)"
@@ -251,13 +368,41 @@ trap 'rm -f "$tmp"' EXIT
     echo "#ssl.truststore.path=/path/to/truststore.jks"
     echo "#ssl.truststore.type=jks"
     echo "#ssl.truststore.password="
-  } > "$tmp"
+  else
+    echo "# HBase settings for the rya-ng loader, written by rya.loader/configure.sh on $(date '+%Y-%m-%d %H:%M')."
+    echo "#   Loader:   rya.loader/run.sh <command> --hbase-properties $output"
+    echo "#             (the --hbase-* options win over these; an empty --hbase-user= connects as the process user)"
+    echo "#   Endpoint: rya.sparql/configure.sh asks for the same connection. Use the same counter mode."
+    if [ -n "$hbase_site" ]; then
+      echo "hbase.site=$(prop_value "$hbase_site")"
+    else
+      echo "hbase.conf.hbase.zookeeper.quorum=$(prop_value "$hbase_zk")"
+      echo "hbase.conf.hbase.zookeeper.property.clientPort=$hbase_zk_port"
+    fi
+    if [ -n "$hbase_user" ]; then
+      echo "hbase.user=$(prop_value "$hbase_user")"
+    else
+      echo "# hbase.user is not set: the loader connects as the process user, or the Kerberos principal."
+    fi
+    echo "hbase.counters=$counters"
+    [ -z "$counters_jar" ] || echo "hbase.counters.jar=$(prop_value "$counters_jar")"
+    echo "#hbase.labels-table=rya_labels"
+    echo
+    echo "# Any other HBase client setting, as hbase.conf.<key>=<value>. For example:"
+    echo "#hbase.conf.hbase.client.retries.number=15"
+  fi > "$tmp"
 )
 chmod 600 "$tmp"
 mv "$tmp" "$output"
 trap - EXIT
 
 $defaults || { echo >&2; echo "Wrote $output (readable only by you)." >&2; }
+
+if [ "$backend" = accumulo ]; then
+  connect=(--client-properties "$output")
+else
+  connect=(--hbase-properties "$output")
+fi
 
 # ---- connection test -------------------------------------------------------------------------------
 
@@ -266,11 +411,11 @@ if [ "$check" = ask ]; then
   $test_now && check=yes || check=no
 fi
 if [ "$check" = yes ]; then
-  if ! $store && [ -z "${RYA_ACCUMULO_PASSWORD:-}" ]; then
-    note "Skipping the test: set RYA_ACCUMULO_PASSWORD, then run: $HERE/run.sh check --client-properties $output"
+  if [ "$backend" = accumulo ] && ! $store && [ -z "${RYA_ACCUMULO_PASSWORD:-}" ]; then
+    note "Skipping the test: set RYA_ACCUMULO_PASSWORD, then run: $HERE/run.sh check ${connect[*]}"
   else
     echo >&2
-    "$HERE/run.sh" check --client-properties "$output" || {
+    "$HERE/run.sh" check "${connect[@]}" || {
       echo "The connection test failed; fix the settings and run the wizard again (--force)." >&2
       exit 1
     }
@@ -280,5 +425,10 @@ fi
 if ! $defaults; then
   echo >&2
   echo "Use it with:" >&2
-  echo "  $HERE/run.sh <command> --client-properties $output ..." >&2
+  echo "  $HERE/run.sh <command> ${connect[*]} ..." >&2
+  if [ "$backend" = hbase ]; then
+    echo "Before loading labelled data, an HBase superuser registers the labels and grants them to the loader's account:" >&2
+    echo "  $HERE/run.sh labels ${connect[*]} --hbase-user=SUPERUSER --labels A,B --grant-to ${hbase_user:-ACCOUNT}" >&2
+    echo "(--hbase-user= with no name connects as this process's user; with Kerberos, kinit as the superuser instead.)" >&2
+  fi
 fi

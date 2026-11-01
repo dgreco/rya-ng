@@ -24,7 +24,7 @@ Status: written 2026-10-31 against `main` at `860fa66`; implemented on the `hbas
 - **The SPI and the Accumulo provider** (phase 1): `rya.store`, `rya.accumulo`, `rya.test`. The 409 tests of `main` pass unchanged.
 - **The HBase provider** (phase 2): `rya.hbase`, with the cell mapping of 3.2, the label rules of 4.2 and region-grouped batched reads.
 - **Counters** (phase 3): `rya.hbase.coprocessor`, in both counter modes.
-- **The endpoint and the loader** (phase 4): `rya.backend` and `rya.hbase.*`, `--backend` and `--hbase-*`, the loader's `labels` command, the wizard, and `DevServer`.
+- **The endpoint and the loader** (phase 4): `rya.backend` and `rya.hbase.*`, `--backend` and `--hbase-*`, the loader's `labels` command, both wizards (the loader's writes a file for `--hbase-properties`), and `DevServer`.
 - **Tests:** the store, Sail, loader and endpoint ITs run on either backend (`-Drya.test.backend=hbase`). New tests: `QualifierOrderTest`, `RangeParityIT`, `LabelParityIT`, `CounterIT`, `HBaseLabelsIT`, `StoreProviderIT`, and a parity test of the neutral visibility parser against Accumulo's.
 
 **Different from the plan:**
@@ -44,12 +44,18 @@ Status: written 2026-10-31 against `main` at `860fa66`; implemented on the `hbas
   - The HBase test cluster binds to the loopback address. With two interfaces on one network, the host name resolved to the wrong address and the cluster vanished mid-run.
   - Its JSP engine (`tomcat-jasper`, javax) is excluded, because it broke Spring Boot's Tomcat in the endpoint tests.
 - **Purge in increment mode** leaves counters at zero rather than deleting them, for the same reason as drops.
+- **The wizards** ask for site files (`core-site.xml` for Kerberos) rather than a principal, a keytab and TLS stores.
 
 **Checked outside the tests:** the endpoint's executable jar ran against an HBase cluster in another JVM, with Hadoop's client API only (no `hadoop-common`). It was given just a ZooKeeper quorum and the normal account, and its startup check of labels A,B passed. Over HTTP:
 - labelled and unlabelled inserts worked;
 - a read with A,B saw both, and one with B didn't see the A-labelled value;
 - an unconfigured label got 403;
 - the text index answered.
+
+The loader's executable jar ran the same way, from its own process against an HBase mini cluster, with the file its wizard wrote (a ZooKeeper quorum and the normal account):
+- `labels` registered A,B as the process user (a superuser, with an empty `--hbase-user=`); every other command refused that account;
+- `prepare`, `load` and `verify` (both labels, and A alone) found no difference, with coprocessor and with increment counters;
+- `drop` removed the tables.
 
 **Still to do:**
 - **Benchmarks B0, B1, B2** (section 7) at the planned scale, on a real cluster. One machine shared with other load can't measure within 3 %; a small A/B on the mini clusters is all that was run.
@@ -59,7 +65,6 @@ Status: written 2026-10-31 against `main` at `860fa66`; implemented on the `hbas
 - **Gaps in the superuser check.** The startup probe needs label canaries, which exist only after a label was registered through rya-ng (the loader's `labels` command). Until then a store opens with a warning. A superuser with labels registered outside rya-ng would then read labelled cells while asking for none.
 - **The counter mode isn't recorded in `ns`,** as 3.8 planned. Writers read it from the table descriptor, and an account that may not read descriptors uses its configured mode, so every writer of a store must be configured alike.
 - **Unheld labels in embedded use.** Through the embedded Sail or DAO, labels the account doesn't hold make HBase return fewer rows instead of failing. Only the endpoint checks its labels at startup.
-- **The loader's executable jar** has not been run out of process on HBase, unlike the endpoint's.
 
 ## 1. Summary
 

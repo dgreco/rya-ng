@@ -22,6 +22,8 @@ import java.util.SortedSet;
 
 import org.apache.hadoop.io.Text;
 
+import io.github.dgreco.rya.hbase.HBaseLabels;
+import io.github.dgreco.rya.hbase.HBaseStore;
 import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import io.github.dgreco.rya.store.spi.Store;
 import io.github.dgreco.rya.store.RyaStoreDAO;
@@ -83,10 +85,10 @@ public final class Prepare {
         } finally {
             dao.destroy();
         }
-        printNextSteps(o, out);
+        printNextSteps(store, o, out);
     }
 
-    private static void printNextSteps(final LoaderOptions o, final PrintStream out) {
+    private static void printNextSteps(final Store store, final LoaderOptions o, final PrintStream out) {
         out.println();
         out.println("Dataset: " + o.genConfig().entities() + " entities (about "
                 + Math.round(o.genConfig().entities() * LoaderOptions.triplesPerEntity(o.genConfig()) / 1e6) + "M triples), fingerprint "
@@ -96,7 +98,18 @@ public final class Prepare {
         out.println("  run.sh load " + o.datasetArgs() + " --threads 8");
         out.println("  run.sh load " + o.datasetArgs() + " --part 0 --parts 2 --threads 8   # and --part 1 --parts 2");
         out.println();
-        final StringBuilder flags = new StringBuilder("--rya.table-prefix=" + o.tablePrefix());
+        final StringBuilder flags = new StringBuilder();
+        if (store instanceof HBaseStore hbase) {
+            flags.append("--rya.backend=hbase ");
+            // Every writer must use the counter table's mode; the endpoint's default is coprocessor.
+            if (hbase.counterMode(o.tablePrefix() + "eval") == HBaseStore.CounterMode.INCREMENT) {
+                flags.append("--rya.hbase.counters=increment ");
+            }
+            if (!o.hbaseLabelsTable().equals(HBaseLabels.DEFAULT_TABLE)) {
+                flags.append("--rya.hbase.labels-table=").append(o.hbaseLabelsTable()).append(' ');
+            }
+        }
+        flags.append("--rya.table-prefix=").append(o.tablePrefix());
         flags.append(" --rya.text-index=").append(o.textIndex()).append(" --rya.geo-index=").append(o.geoIndex());
         if (!o.textPredicates().isEmpty()) {
             flags.append(" --rya.text-index-predicates=").append(String.join(",", o.textPredicates()));

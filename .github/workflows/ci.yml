@@ -41,6 +41,10 @@ jobs:
           RYA_ACCUMULO_PASSWORD='p\ä ss' rya.loader/configure.sh --defaults --output "$RUNNER_TEMP/client.properties"
           grep -qx 'auth.token=\\u0070\\u005c\\u00e4\\u0020\\u0073\\u0073' "$RUNNER_TEMP/client.properties"
           [ "$(stat -c %a "$RUNNER_TEMP/client.properties")" = 600 ]
+          RYA_BACKEND=hbase RYA_HBASE_USER=rya rya.loader/configure.sh --defaults --output "$RUNNER_TEMP/hbase.properties"
+          grep -qx 'hbase.conf.hbase.zookeeper.quorum=localhost' "$RUNNER_TEMP/hbase.properties"
+          grep -qx 'hbase.user=rya' "$RUNNER_TEMP/hbase.properties"
+          [ "$(stat -c %a "$RUNNER_TEMP/hbase.properties")" = 600 ]
 
       - name: Build and test
         run: mvn -B -ntp clean verify -Pcoverage

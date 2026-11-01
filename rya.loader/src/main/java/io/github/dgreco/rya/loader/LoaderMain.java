@@ -24,6 +24,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import io.github.dgreco.rya.accumulo.AccumuloStore;
+import io.github.dgreco.rya.hbase.HBaseLabels;
 import io.github.dgreco.rya.hbase.HBaseStore;
 import io.github.dgreco.rya.store.spi.Store;
 
@@ -49,6 +50,14 @@ public final class LoaderMain {
                 "org.apache.hbase")) {
             if (System.getProperty("org.slf4j.simpleLogger.log." + noisy) == null) {
                 System.setProperty("org.slf4j.simpleLogger.log." + noisy, "warn");
+            }
+        }
+        // Expected on every HBase run: no native Hadoop library, and the ZooKeeper registry rya-ng picks on purpose
+        // when given only a quorum.
+        for (final String expected : List.of("org.apache.hadoop.util.NativeCodeLoader",
+                "org.apache.hadoop.hbase.client.ZKConnectionRegistry")) {
+            if (System.getProperty("org.slf4j.simpleLogger.log." + expected) == null) {
+                System.setProperty("org.slf4j.simpleLogger.log." + expected, "error");
             }
         }
         if (System.getProperty("org.slf4j.simpleLogger.showDateTime") == null) {
@@ -100,6 +109,11 @@ public final class LoaderMain {
             }
         } catch (final IllegalArgumentException | StoreCheck.Mismatch e) {
             err.println("Error: " + e.getMessage());
+            return 2;
+        } catch (final HBaseLabels.NotEnforced e) {
+            err.println("Error: " + e.getMessage());
+            err.println("Only the labels command runs as a superuser; give the other commands a normal account "
+                    + "(--hbase-user, or the account of --hbase-properties).");
             return 2;
         } catch (final Exception e) {
             err.print("Failed: ");

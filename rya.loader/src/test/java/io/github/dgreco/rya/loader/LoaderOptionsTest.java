@@ -22,14 +22,19 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 
 import io.github.dgreco.rya.store.spi.Durability;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class LoaderOptionsTest {
 
@@ -114,6 +119,99 @@ class LoaderOptionsTest {
     void checkNeedsNoStore() {
         assertEquals(LoaderOptions.Command.CHECK, parse("check").command);
         assertEquals("t_", parse("check", "--table-prefix", "t_").tablePrefix());
+    }
+
+    @Test
+    void hbaseDefaults() {
+        final LoaderOptions o = parse("check", "--backend", "HBase");
+        assertEquals("hbase", o.backend());
+        final Properties s = o.hbaseSettings();
+        assertEquals("coprocessor", s.getProperty("hbase.counters"));
+        assertEquals("rya_labels", s.getProperty("hbase.labels-table"));
+        assertEquals("rya_labels", o.hbaseLabelsTable());
+        assertNull(s.getProperty("hbase.user"));
+        assertNull(s.getProperty("hbase.site"));
+        assertEquals("accumulo", parse("check").backend());
+        assertEquals("hbase", LoaderOptions.parse(new String[] {"check"}, Map.of("RYA_BACKEND", "hbase")).backend());
+        assertEquals("accumulo", LoaderOptions.parse(new String[] {"check", "--backend", "accumulo"},
+                Map.of("RYA_BACKEND", "hbase")).backend());
+        assertEquals("accumulo", LoaderOptions.parse(new String[] {"check"}, Map.of("RYA_BACKEND", " ")).backend());
+        // Accumulo never reads the HBase settings, even broken ones.
+        assertEquals("rya_labels", LoaderOptions.parse(new String[] {"labels", "--labels", "A"},
+                Map.of("RYA_HBASE_CONF", "not a pair")).hbaseLabelsTable());
+    }
+
+    @Test
+    void hbasePropertiesSelectHBaseAndOptionsWin(@TempDir final Path dir) throws IOException {
+        final Path file = dir.resolve("hbase.properties");
+        Files.writeString(file, """
+                # written by configure.sh
+                hbase.conf.hbase.zookeeper.quorum=zk1,zk2
+                hbase.conf.hbase.zookeeper.property.clientPort=2181
+                hbase.user=rya
+                hbase.counters=increment
+                hbase.counters.jar=hdfs:///rya/coprocessor.jar
+                hbase.labels-table=my_labels
+                """, StandardCharsets.ISO_8859_1);
+        final LoaderOptions o = LoaderOptions.parse(new String[] {"check", "--hbase-properties", file.toString()},
+                Map.of("RYA_BACKEND", "accumulo", "RYA_HBASE_USER", "from-env", "RYA_HBASE_SITE", "/etc/hbase/conf/hbase-site.xml"));
+        assertEquals("hbase", o.backend());
+        final Properties s = o.hbaseSettings();
+        assertEquals("zk1,zk2", s.getProperty("hbase.conf.hbase.zookeeper.quorum"));
+        assertEquals("rya", s.getProperty("hbase.user"));
+        assertEquals("increment", s.getProperty("hbase.counters"));
+        assertEquals("hdfs:///rya/coprocessor.jar", s.getProperty("hbase.counters.jar"));
+        assertEquals("my_labels", o.hbaseLabelsTable());
+        // What the file doesn't set still comes from the environment.
+        assertEquals("/etc/hbase/conf/hbase-site.xml", s.getProperty("hbase.site"));
+
+        final Properties over = parse("check", "--hbase-properties", file.toString(), "--hbase-user", "other",
+                "--hbase-counters", "coprocessor", "--hbase-conf", "hbase.zookeeper.quorum=zk3", "--hbase-labels-table", "l2",
+                "--hbase-counters-jar=").hbaseSettings();
+        assertEquals("other", over.getProperty("hbase.user"));
+        assertEquals("coprocessor", over.getProperty("hbase.counters"));
+        assertEquals("zk3", over.getProperty("hbase.conf.hbase.zookeeper.quorum"));
+        assertEquals("2181", over.getProperty("hbase.conf.hbase.zookeeper.property.clientPort"));
+        assertEquals("l2", over.getProperty("hbase.labels-table"));
+        assertNull(over.getProperty("hbase.counters.jar"));
+
+        // An empty --hbase-user connects as the process user, for the labels command run as a superuser.
+        assertNull(parse("labels", "--labels", "A", "--hbase-properties", file.toString(), "--hbase-user=")
+                .hbaseSettings().getProperty("hbase.user"));
+        // The settings are a copy: the store factory may change its own.
+        o.hbaseSettings().setProperty("hbase.check-labels", "false");
+        assertNull(o.hbaseSettings().getProperty("hbase.check-labels"));
+
+        // configure.sh writes anything outside printable ASCII as \\uXXXX escapes.
+        final Path escaped = dir.resolve("escaped.properties");
+        Files.writeString(escaped, "hbase.user=\\u004a\\u006f\\u0073\\u00e9\n", StandardCharsets.ISO_8859_1);
+        assertEquals("José", parse("check", "--hbase-properties", escaped.toString()).hbaseSettings().getProperty("hbase.user"));
+    }
+
+    @Test
+    void rejectsBadHBaseSettings(@TempDir final Path dir) throws IOException {
+        final Path file = dir.resolve("hbase.properties");
+        Files.writeString(file, "hbase.conf.hbase.zookeeper.quorum=zk1\n");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> parse("check", "--backend", "accumulo", "--hbase-properties", file.toString()));
+        assertTrue(e.getMessage().contains("--hbase-properties"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--backend", "cassandra"));
+        assertTrue(e.getMessage().contains("accumulo or hbase"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--hbase-properties", dir.resolve("none").toString()));
+        assertTrue(e.getMessage().contains("can't read"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class,
+                () -> parse("check", "--hbase-properties", file.toString(), "--hbase-counters", "sometimes"));
+        assertTrue(e.getMessage().contains("coprocessor or increment"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--backend", "hbase", "--hbase-conf", "quorum"));
+        assertTrue(e.getMessage().contains("key=value"), e.getMessage());
+
+        // A client setting without its hbase.conf. prefix would be ignored, so it is refused.
+        final Path typo = dir.resolve("typo.properties");
+        Files.writeString(typo, "hbase.zookeeper.quorum=zk1\n");
+        e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--hbase-properties", typo.toString()));
+        assertTrue(e.getMessage().contains("hbase.conf.hbase.zookeeper.quorum"), e.getMessage());
+        // dry-run never connects, so it doesn't read the file.
+        assertEquals("hbase", parse("dry-run", "--entities", "10", "--hbase-properties", typo.toString()).backend());
     }
 
     @Test
