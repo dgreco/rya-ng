@@ -38,9 +38,9 @@ jobs:
           bash -n rya.loader/run.sh rya.loader/configure.sh rya.sparql/configure.sh
           rya.sparql/configure.sh --defaults --output "$RUNNER_TEMP/rya-sparql.sh"
           bash -n "$RUNNER_TEMP/rya-sparql.sh"
-          RYA_ACCUMULO_PASSWORD='p\ä ss' rya.loader/configure.sh --defaults --output "$RUNNER_TEMP/client.properties"
-          grep -qx 'auth.token=\\u0070\\u005c\\u00e4\\u0020\\u0073\\u0073' "$RUNNER_TEMP/client.properties"
-          [ "$(stat -c %a "$RUNNER_TEMP/client.properties")" = 600 ]
+          RYA_ACCUMULO_PASSWORD='p\ä ss' rya.loader/configure.sh --defaults --output "$RUNNER_TEMP/accumulo-client.properties"
+          grep -qx 'auth.token=\\u0070\\u005c\\u00e4\\u0020\\u0073\\u0073' "$RUNNER_TEMP/accumulo-client.properties"
+          [ "$(stat -c %a "$RUNNER_TEMP/accumulo-client.properties")" = 600 ]
           RYA_BACKEND=hbase RYA_HBASE_USER=rya rya.loader/configure.sh --defaults --output "$RUNNER_TEMP/hbase.properties"
           grep -qx 'hbase.conf.hbase.zookeeper.quorum=localhost' "$RUNNER_TEMP/hbase.properties"
           grep -qx 'hbase.user=rya' "$RUNNER_TEMP/hbase.properties"

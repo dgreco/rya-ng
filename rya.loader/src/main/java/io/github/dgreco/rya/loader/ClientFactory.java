@@ -32,11 +32,11 @@ public final class ClientFactory {
     }
 
     public static AccumuloClient create(final LoaderOptions o) {
-        if (o.clientProperties() != null) {
-            return AccumuloClients.fromFile(o.clientProperties(), o.password());
+        if (o.accumuloProperties() != null) {
+            return AccumuloClients.fromFile(o.accumuloProperties(), o.password());
         }
         if (o.zookeepers() == null || o.instance() == null) {
-            throw new IllegalArgumentException("give --client-properties, or --zookeepers and --instance "
+            throw new IllegalArgumentException("give --accumulo-properties, or --zookeepers and --instance "
                     + "(or RYA_ACCUMULO_ZOOKEEPERS and RYA_ACCUMULO_INSTANCE)");
         }
         if (o.password() == null || o.password().isEmpty()) {

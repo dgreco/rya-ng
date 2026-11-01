@@ -34,7 +34,7 @@ only you can read.
   --output FILE   where to write the launch script (default: ./rya-sparql.sh)
   --force         overwrite FILE if it exists
   --defaults      accept every default without asking. RYA_ACCUMULO_ZOOKEEPERS,
-                  RYA_ACCUMULO_INSTANCE, RYA_ACCUMULO_USER and RYA_ACCUMULO_CLIENT_PROPERTIES
+                  RYA_ACCUMULO_INSTANCE, RYA_ACCUMULO_USER and RYA_ACCUMULO_PROPERTIES
                   preset the connection defaults.
 
 Answers can also be piped in, one per line (an empty line keeps the default).
@@ -251,7 +251,7 @@ else
 section "Accumulo connection"
 
 connection_default=1
-[ -z "${RYA_ACCUMULO_CLIENT_PROPERTIES:-}" ] || connection_default=2
+[ -z "${RYA_ACCUMULO_PROPERTIES:-}" ] || connection_default=2
 choose connection "How does the endpoint connect to Accumulo?" "$connection_default" \
   "ZooKeeper servers, instance name and user" \
   "An accumulo-client.properties file (written by rya.loader/configure.sh)"
@@ -281,7 +281,7 @@ if [ "$connection" = 1 ]; then
     fi
   fi
 else
-  ask client_properties "accumulo-client.properties file (rya.loader/configure.sh writes one)" "${RYA_ACCUMULO_CLIENT_PROPERTIES:-$HOME/.rya-ng/accumulo-client.properties}" not_empty
+  ask client_properties "accumulo-client.properties file (rya.loader/configure.sh writes one)" "${RYA_ACCUMULO_PROPERTIES:-$HOME/.rya-ng/accumulo-client.properties}" not_empty
   [ -r "$client_properties" ] || note "Note: $client_properties is not readable yet."
 fi
 

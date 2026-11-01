@@ -16,7 +16,7 @@
 #
 # Configuration wizard for the loader's connection, to Accumulo or HBase.
 #   Accumulo: asks for the instance, the user and the password, and writes an
-#             accumulo-client.properties file for --client-properties (the SPARQL endpoint
+#             accumulo-client.properties file for --accumulo-properties (the SPARQL endpoint
 #             accepts the same file).
 #   HBase:    asks how to find the cluster, the account and the counter mode, and writes a file
 #             of HBase settings for --hbase-properties.
@@ -30,7 +30,7 @@ usage() {
 Usage: rya.loader/configure.sh [--output FILE] [--force] [--defaults] [--check | --no-check]
 
 Asks which store the loader writes to and how to connect, and writes a connection file:
-  Accumulo  an accumulo-client.properties file (run.sh <command> --client-properties FILE).
+  Accumulo  an accumulo-client.properties file (run.sh <command> --accumulo-properties FILE).
             The SPARQL endpoint accepts the same file (--rya.accumulo.client-properties=FILE).
             The password can be stored in the file, which only you can read, or left out: the
             loader and the endpoint then read it from RYA_ACCUMULO_PASSWORD when they start.
@@ -348,8 +348,8 @@ trap 'rm -f "$tmp"' EXIT
   umask 077
   if [ "$backend" = accumulo ]; then
     echo "# Accumulo client properties for rya-ng, written by rya.loader/configure.sh on $(date '+%Y-%m-%d %H:%M')."
-    echo "#   Loader:   rya.loader/run.sh <command> --client-properties $output"
-    echo "#             (or export RYA_ACCUMULO_CLIENT_PROPERTIES=$output)"
+    echo "#   Loader:   rya.loader/run.sh <command> --accumulo-properties $output"
+    echo "#             (or export RYA_ACCUMULO_PROPERTIES=$output)"
     echo "#   Endpoint: --rya.accumulo.client-properties=$output"
     echo "# Every setting: https://accumulo.apache.org/docs/2.x/configuration/client-properties"
     echo "instance.name=$(prop_value "$instance")"
@@ -399,7 +399,7 @@ trap - EXIT
 $defaults || { echo >&2; echo "Wrote $output (readable only by you)." >&2; }
 
 if [ "$backend" = accumulo ]; then
-  connect=(--client-properties "$output")
+  connect=(--accumulo-properties "$output")
 else
   connect=(--hbase-properties "$output")
 fi

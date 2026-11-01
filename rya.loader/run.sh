@@ -18,7 +18,7 @@
 #
 #   rya.loader/run.sh [--build] <command> [options]      (run.sh --help for the options)
 #
-# Connection to Accumulo (the default backend): --client-properties FILE (rya.loader/configure.sh writes one),
+# Connection to Accumulo (the default backend): --accumulo-properties FILE (rya.loader/configure.sh writes one),
 # or these environment variables:
 #   RYA_ACCUMULO_ZOOKEEPERS, RYA_ACCUMULO_INSTANCE, RYA_ACCUMULO_USER, RYA_ACCUMULO_PASSWORD
 # (or --zookeepers, --instance and --user; the password is only read from the environment).
@@ -29,7 +29,7 @@
 #   (or RYA_HBASE_SITE, RYA_HBASE_CONF, RYA_HBASE_USER). Options win over the file.
 #
 # Other environment variables:
-#   LOADER_HEAP        Java heap (default 4g)
+#   LOADER_HEAP        Java heap (default 6g)
 #   LOADER_JAVA_OPTS   extra JVM options
 set -euo pipefail
 
@@ -63,7 +63,7 @@ if [ "$(uname -s)" = Darwin ]; then
   fi
 fi
 # These two silence JDK warnings about Hadoop's use of Unsafe and native code.
-java_opts+=(--sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED "-Xmx${LOADER_HEAP:-4g}")
+java_opts+=(--sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED "-Xmx${LOADER_HEAP:-6g}")
 
 # shellcheck disable=SC2086 # LOADER_JAVA_OPTS is a list of options
 exec "$java_bin" "${java_opts[@]}" ${LOADER_JAVA_OPTS:-} -jar "$JAR" "$@"

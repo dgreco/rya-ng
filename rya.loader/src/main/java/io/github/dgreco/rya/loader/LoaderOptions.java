@@ -66,7 +66,7 @@ public final class LoaderOptions {
     /** Options without a value. */
     private static final Set<String> FLAGS = Set.of("text-index", "geo-index", "resume", "grant-auths", "help");
     /** Every option with a value. */
-    private static final Set<String> VALUED = Set.of("table-prefix", "client-properties", "zookeepers", "instance", "user",
+    private static final Set<String> VALUED = Set.of("table-prefix", "accumulo-properties", "zookeepers", "instance", "user",
             "backend", "hbase-properties", "hbase-site", "hbase-conf", "hbase-user", "hbase-counters", "hbase-counters-jar",
             "hbase-labels-table", "grant-to",
             "text-predicates", "stats", "entities", "triples", "start-entity", "end-entity", "seed", "timestamp", "graphs",
@@ -184,8 +184,8 @@ public final class LoaderOptions {
         return values.get("table-prefix");
     }
 
-    public Path clientProperties() {
-        final String p = values.getOrDefault("client-properties", env.get("RYA_ACCUMULO_CLIENT_PROPERTIES"));
+    public Path accumuloProperties() {
+        final String p = values.getOrDefault("accumulo-properties", env.get("RYA_ACCUMULO_PROPERTIES"));
         return p == null || p.isBlank() ? null : Path.of(p);
     }
 
@@ -680,9 +680,9 @@ public final class LoaderOptions {
                             and writes the canaries the endpoint checks at startup (needs an HBase superuser)
 
                 Backend: --backend accumulo|hbase (default accumulo; also RYA_BACKEND).
-                Accumulo: --client-properties FILE (rya.loader/configure.sh writes one), or --zookeepers,
+                Accumulo: --accumulo-properties FILE (rya.loader/configure.sh writes one), or --zookeepers,
                   --instance, --user plus the password in the RYA_ACCUMULO_PASSWORD environment variable (also
-                  RYA_ACCUMULO_ZOOKEEPERS/_INSTANCE/_USER/_CLIENT_PROPERTIES). A properties file without auth.token
+                  RYA_ACCUMULO_ZOOKEEPERS/_INSTANCE/_USER/_PROPERTIES). A properties file without auth.token
                   takes the password from RYA_ACCUMULO_PASSWORD.
                 HBase: --hbase-properties FILE (rya.loader/configure.sh writes one; selects HBase), and/or
                   --hbase-site FILES (hbase-site.xml, and core-site.xml for Kerberos; comma-separated),

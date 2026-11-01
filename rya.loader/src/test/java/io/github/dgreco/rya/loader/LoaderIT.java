@@ -346,12 +346,12 @@ class LoaderIT extends StoreITBase {
         try (java.io.OutputStream out = Files.newOutputStream(file)) {
             props.store(out, null);
         }
-        final Run noPassword = run(Map.of(), "check", List.of("--client-properties", file.toString()));
+        final Run noPassword = run(Map.of(), "check", List.of("--accumulo-properties", file.toString()));
         assertEquals(2, noPassword.code(), noPassword.all());
         assertTrue(noPassword.err().contains("RYA_ACCUMULO_PASSWORD"), noPassword.err());
 
         final Map<String, String> env = Map.of("RYA_ACCUMULO_PASSWORD", MiniAccumuloSingleton.ROOT_PASSWORD);
-        final Run before = run(env, "check", List.of("--client-properties", file.toString(), "--table-prefix", getTablePrefix()));
+        final Run before = run(env, "check", List.of("--accumulo-properties", file.toString(), "--table-prefix", getTablePrefix()));
         assertEquals(0, before.code(), before.all());
         assertTrue(before.out().contains("Connected to Accumulo instance " + MiniAccumuloSingleton.getCluster().getInstanceName()),
                 before.out());
@@ -360,9 +360,9 @@ class LoaderIT extends StoreITBase {
         assertTrue(before.out().contains("Store " + getTablePrefix() + ": not found"), before.out());
 
         final List<String> args = new ArrayList<>(dataset("--splits", "0"));
-        args.addAll(List.of("--client-properties", file.toString()));
+        args.addAll(List.of("--accumulo-properties", file.toString()));
         assertEquals(0, run(env, "prepare", args).code());
-        final Run after = run(env, "check", List.of("--client-properties", file.toString(), "--table-prefix", getTablePrefix()));
+        final Run after = run(env, "check", List.of("--accumulo-properties", file.toString(), "--table-prefix", getTablePrefix()));
         assertTrue(after.out().contains("Store " + getTablePrefix() + ": tables [" + getTablePrefix() + "spo"), after.out());
     }
 
