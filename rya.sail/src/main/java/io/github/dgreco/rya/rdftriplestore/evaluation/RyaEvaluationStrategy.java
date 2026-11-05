@@ -40,19 +40,25 @@ import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.query.BindingSet;
 import org.eclipse.rdf4j.query.Dataset;
 import org.eclipse.rdf4j.query.QueryEvaluationException;
+import org.eclipse.rdf4j.query.algebra.BinaryTupleOperator;
 import org.eclipse.rdf4j.query.algebra.Filter;
 import org.eclipse.rdf4j.query.algebra.Join;
+import org.eclipse.rdf4j.query.algebra.LeftJoin;
 import org.eclipse.rdf4j.query.algebra.StatementPattern;
 import org.eclipse.rdf4j.query.algebra.TupleExpr;
 import org.eclipse.rdf4j.query.algebra.Var;
 import org.eclipse.rdf4j.query.algebra.helpers.TupleExprs;
+import org.eclipse.rdf4j.query.algebra.helpers.collectors.VarNameCollector;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryBindingSet;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryEvaluationStep;
+import org.eclipse.rdf4j.query.algebra.evaluation.QueryValueEvaluationStep;
 import org.eclipse.rdf4j.query.algebra.evaluation.TripleSource;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.DefaultEvaluationStrategy;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.EvaluationStatistics;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.QueryEvaluationContext;
+import org.eclipse.rdf4j.query.algebra.evaluation.impl.evaluationsteps.LeftJoinQueryEvaluationStep;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.evaluationsteps.StatementPatternQueryEvaluationStep;
+import org.eclipse.rdf4j.query.algebra.evaluation.iterator.JoinIterator;
 
 /**
  * RDF4J's stock evaluation, plus the two statement-pattern kinds produced by Rya's inference
@@ -74,12 +80,17 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
     }
 
     /**
-     * Uses a {@link BatchedJoinStep} when the right side is a plain store lookup, optionally under
+     * Uses an entity chain when this join tops one ({@link EntityChain}); otherwise a
+     * {@link BatchedJoinStep} when the right side is a plain store lookup, optionally under
      * filters, and nothing calls for one of RDF4J's other join algorithms; otherwise RDF4J's own.
      */
     @Override
     protected QueryEvaluationStep prepare(final Join node, final QueryEvaluationContext context)
             throws QueryEvaluationException {
+        final QueryEvaluationStep chain = entityChain(node, context);
+        if (chain != null) {
+            return chain;
+        }
         final StatementPattern rightPattern = batchableRightPattern(node);
         if (rightPattern == null) {
             return super.prepare(node, context);
@@ -91,14 +102,71 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
         return new BatchedJoinStep(left, right, rightPattern, source, source.getConf().getJoinBatchSize());
     }
 
+    /** Uses an entity chain when this OPTIONAL tops one ({@link EntityChain}); otherwise RDF4J's own. */
+    @Override
+    protected QueryEvaluationStep prepare(final LeftJoin node, final QueryEvaluationContext context)
+            throws QueryEvaluationException {
+        final QueryEvaluationStep chain = entityChain(node, context);
+        return chain != null ? chain : super.prepare(node, context);
+    }
+
+    /**
+     * Builds the entity chain topped by this node: the driver's rows go through an
+     * {@link EntityPrefetchStep}, and each link above is RDF4J's own nested loop, evaluated per
+     * row, so results and their order are those of the plain plan.
+     *
+     * @return the chain's step, or {@code null} if this node tops no chain.
+     */
+    private QueryEvaluationStep entityChain(final BinaryTupleOperator top, final QueryEvaluationContext context) {
+        if (!batchingAllowed() || !((StoreTripleSource<?>) tripleSource).getConf().isJoinEntityPrefetch()) {
+            return null;
+        }
+        final EntityChain chain = EntityChain.find(top);
+        if (chain == null) {
+            return null;
+        }
+        final StoreTripleSource<?> source = (StoreTripleSource<?>) tripleSource;
+        QueryEvaluationStep step = new EntityPrefetchStep(precompile(chain.driver(), context), chain.patterns(),
+                source, source.getConf().getJoinBatchSize());
+        for (final BinaryTupleOperator link : chain.links()) {
+            final QueryEvaluationStep left = step;
+            final QueryEvaluationStep right = precompile(link.getRightArg(), context);
+            if (link instanceof LeftJoin leftJoin) {
+                step = leftJoin(leftJoin, left, right, context);
+            } else {
+                // Not super.prepare(Join): RDF4J may pick a join there that doesn't look up per row.
+                step = bindings -> JoinIterator.getInstance(left, right, bindings);
+                link.setAlgorithm("RyaEntityPrefetch");
+            }
+        }
+        return step;
+    }
+
+    /** RDF4J's left join over these steps: what {@code LeftJoinQueryEvaluationStep.supply} builds when the right side has no subquery. */
+    private QueryEvaluationStep leftJoin(final LeftJoin node, final QueryEvaluationStep left,
+            final QueryEvaluationStep right, final QueryEvaluationContext context) {
+        final VarNameCollector optionalVars = new VarNameCollector();
+        node.getRightArg().visit(optionalVars);
+        QueryValueEvaluationStep condition = null;
+        if (node.hasCondition()) {
+            node.getCondition().visit(optionalVars);
+            condition = precompile(node.getCondition(), context);
+        }
+        return new LeftJoinQueryEvaluationStep(right, condition, left, node, optionalVars.getVarNames());
+    }
+
+    /** Whether lookups may be batched at all for this query. */
+    private boolean batchingAllowed() {
+        return tripleSource instanceof StoreTripleSource<?> source
+                && source.getConf().getJoinBatchSize() > 1
+                && source.getConf().getLimit() == null
+                && dataset == null
+                && !isTrackResultSize() && !isTrackTime();
+    }
+
     /** @return the statement pattern under the join's right side if the join can be batched, else null. */
     private StatementPattern batchableRightPattern(final Join node) {
-        if (!(tripleSource instanceof StoreTripleSource<?> source)
-                || source.getConf().getJoinBatchSize() <= 1
-                || source.getConf().getLimit() != null
-                || dataset != null
-                || node.isMergeJoin()
-                || isTrackResultSize() || isTrackTime()) {
+        if (!batchingAllowed() || node.isMergeJoin()) {
             return null;
         }
         // Same rule as RDF4J's own join: such a right side is evaluated without the left bindings.

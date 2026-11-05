@@ -51,6 +51,11 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
     public static final String CONF_JOIN_BATCH_SIZE = "query.join.batchsize";
     /** Most statements one join batch may prefetch; beyond it the batch falls back to per-row lookups. */
     public static final String CONF_JOIN_PREFETCH_LIMIT = "query.join.prefetchlimit";
+    /**
+     * Fetch the lookups of a whole chain of joins and OPTIONALs on the entities a driver binds
+     * (their attributes) in one batch per window of driver rows, instead of one per join.
+     */
+    public static final String CONF_JOIN_ENTITY_PREFETCH = "query.join.entityprefetch";
     /** Maintain the full-text index (table {@code <prefix>text}). */
     public static final String CONF_INDEX_TEXT = "index.text";
     /** Predicates whose text literals are indexed; empty means every text literal. */
@@ -714,5 +719,14 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setJoinPrefetchLimit(final int limit) {
         setInt(CONF_JOIN_PREFETCH_LIMIT, limit);
+    }
+
+    /** @return whether entity chains are prefetched (default true); needs join batching on too. */
+    public boolean isJoinEntityPrefetch() {
+        return getBoolean(CONF_JOIN_ENTITY_PREFETCH, true);
+    }
+
+    public void setJoinEntityPrefetch(final boolean enabled) {
+        setBoolean(CONF_JOIN_ENTITY_PREFETCH, enabled);
     }
 }

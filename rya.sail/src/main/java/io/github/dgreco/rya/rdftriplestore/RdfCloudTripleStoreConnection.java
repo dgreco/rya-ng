@@ -31,6 +31,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryEvaluationStep;
 import io.github.dgreco.rya.store.trace.StoreTrace;
@@ -433,6 +434,7 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
         /** Statements fetched ahead of time by batched joins; consulted before the store. */
         private final Deque<Map<LookupKey, List<Statement>>> prefetched = new ArrayDeque<>();
         private long prefetches;
+        private long overflows;
         private long cacheHits;
         private long storeLookups;
 
@@ -457,22 +459,44 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
          *         cached and lookups go to the store).
          */
         public AutoCloseable prefetch(final Collection<LookupKey> keys) {
+            final Prefetch fetched = prefetch(keys, () -> "batched join: " + keys.size()
+                    + " right-hand lookup" + (keys.size() == 1 ? "" : "s") + " fetched together");
+            return fetched.isHeld() ? fetched : null;
+        }
+
+        /**
+         * Fetches the statements for many lookups at once and serves them from memory until the
+         * returned handle is closed.
+         *
+         * @param reason why the batch is read, for the trace.
+         * @return the handle, never {@code null}: it holds nothing when there was nothing to
+         *         fetch, or when the batch was too large to hold ({@link Prefetch#isOverflow()}).
+         */
+        public Prefetch prefetch(final Collection<LookupKey> keys, final Supplier<String> reason) {
             final Map<LookupKey, List<Statement>> fetched;
-            try (StoreTrace.Reason why = StoreTrace.reason(() -> "batched join: " + keys.size()
-                    + " right-hand lookup" + (keys.size() == 1 ? "" : "s") + " fetched together")) {
+            try (StoreTrace.Reason why = StoreTrace.reason(reason)) {
                 fetched = BatchLookup.fetch(ryaDAO, conf, keys, conf.getJoinPrefetchLimit());
             }
-            if (fetched == null || fetched.isEmpty()) {
-                return null;
+            if (fetched == null) {
+                overflows++;
+                return new Prefetch(null, true);
+            }
+            if (fetched.isEmpty()) {
+                return new Prefetch(null, false);
             }
             prefetches++;
             prefetched.push(fetched);
-            return () -> prefetched.removeIf(m -> m == fetched);
+            return new Prefetch(fetched, false);
         }
 
         /** @return how many batches were prefetched. */
         public long getPrefetchCount() {
             return prefetches;
+        }
+
+        /** @return how many batches were too large to hold, so their lookups went to the store. */
+        public long getPrefetchOverflowCount() {
+            return overflows;
         }
 
         /** @return how many lookups were answered from a prefetched batch. */
@@ -539,6 +563,34 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
         @Override
         public ValueFactory getValueFactory() {
             return io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.VALUE_FACTORY;
+        }
+
+        /** Statements fetched ahead for a batch of lookups; closing it sends those lookups to the store again. */
+        public final class Prefetch implements AutoCloseable {
+            private final Map<LookupKey, List<Statement>> batch;
+            private final boolean overflow;
+
+            private Prefetch(final Map<LookupKey, List<Statement>> batch, final boolean overflow) {
+                this.batch = batch;
+                this.overflow = overflow;
+            }
+
+            /** @return whether statements are held (and lookups served from memory) until closed. */
+            public boolean isHeld() {
+                return batch != null;
+            }
+
+            /** @return whether the batch held more than {@code query.join.prefetchlimit} statements. */
+            public boolean isOverflow() {
+                return overflow;
+            }
+
+            @Override
+            public void close() {
+                if (batch != null) {
+                    prefetched.removeIf(m -> m == batch);
+                }
+            }
         }
 
         /** Looks up each graph in turn. */

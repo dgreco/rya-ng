@@ -32,7 +32,7 @@ It supports:
 - cell-level visibility labels and scan authorizations, with the same meaning on both backends;
 - optional query-time OWL/RDFS inference;
 - join ordering driven by statistics that are kept up to date on every write;
-- batched join lookups: the matches for many left-hand rows are fetched in one batched read;
+- batched join lookups: the matches for many left-hand rows are fetched in one batched read, and so are all the attributes a query reads for many entities, `OPTIONAL` ones included;
 - full-text search and GeoSPARQL filters, sped up by optional text and geo indexes that honour visibility labels.
 
 rya-ng is derived from [Apache Rya](https://github.com/apache/rya). It keeps Rya's storage model and query-time inference, rebuilt for Accumulo 2.1, RDF4J 6 and Java 25, with everything else removed. It is an independent project, not part of the Apache Software Foundation. See `NOTICE`.
@@ -156,6 +156,7 @@ Instead of the connection arguments, `--rya.accumulo.client-properties` can poin
 | `rya.inference-refresh` | `5m` | How often the ontology is reloaded. Ontology changes take effect after the next reload. |
 | `rya.stats` | `true` | Keep cardinality statistics on write and use them for join ordering |
 | `rya.join-batch-size` | `1000` | Left-hand join rows whose lookups are fetched together in one batch scan; `1` turns batching off |
+| `rya.entity-prefetch` | `true` | Fetch the attributes a query reads for a batch of entities (its joins and `OPTIONAL`s on them) in one batch scan, instead of one per join or per row |
 | `rya.text-index` | `false` | Keep the full-text index (see [Search](#search)) |
 | `rya.text-index-predicates` | `[]` | Predicates whose literals are text-indexed; empty means all |
 | `rya.geo-index` | `false` | Keep the geospatial index |
@@ -232,7 +233,7 @@ The endpoint has no HTTP authentication. Run it behind a proxy that authenticate
 ## Tracing a query
 
 A trace shows how a query or an update maps onto the store, live:
-- **the plan:** RDF4J's query tree as parsed, then after Rya's rewrites, with the join order, the cardinality estimates and which joins are batched (`RyaBatchedJoin`);
+- **the plan:** RDF4J's query tree as parsed, then after Rya's rewrites, with the join order, the cardinality estimates and which joins are batched (`RyaBatchedJoin`, or `RyaEntityPrefetch` for a chain of attribute lookups);
 - **every scan:** the table, the operation (Accumulo's `Scanner`, `BatchScanner`, `BatchDeleter`; HBase's `Scan`, `Get`, `BatchScan`), the ranges (with the separator bytes shown as `⟨00⟩`, `⟨01⟩`, `⟨ff⟩`), the column families and server-side filters, the authorizations, how many entries came back and the time spent in the store;
 - **why each scan happened:** for example `query planning › statistics: PREDICATE count of …`, `lookup <urn:alice> <urn:knows> ? on SPO`, or `batched join: 5 right-hand lookups fetched together`;
 - **every flush of writes:** the mutations, cells, deletes and bytes sent to each table;
