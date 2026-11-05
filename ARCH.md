@@ -896,10 +896,11 @@ flowchart TD
 
 ### 12.4 The evaluation strategy
 
-`RyaEvaluationStrategy` extends RDF4J's `DefaultEvaluationStrategy` and changes two `prepare` methods:
+`RyaEvaluationStrategy` extends RDF4J's `DefaultEvaluationStrategy` and changes three `prepare` methods (`Join`, `LeftJoin`, `StatementPattern`):
 
 | Node | Step used |
 |---|---|
+| `Join` or `LeftJoin` topping a chain of attribute lookups | the chain's own steps over an `EntityPrefetchStep` ([section 13.5](#135-entity-prefetch-a-chain-of-joins-at-once)) |
 | `Join` whose right side is a plain statement pattern (optionally under filters) | `BatchedJoinStep` ([section 13](#13-batched-joins)); otherwise RDF4J's own join |
 | `IndexedStatementPattern` | RDF4J's `StatementPatternQueryEvaluationStep`, reading through an `IndexTripleSource` ([section 15](#15-text-and-geo-search)) |
 | `FixedStatementPattern` | matched against its in-memory list of ontology statements ([section 14](#14-inference)) |
@@ -909,7 +910,7 @@ flowchart TD
 ### 12.5 `StoreTripleSource`: RDF4J lookups on top of Rya
 
 `StoreTripleSource` (an inner class of the connection) is the only way the evaluation reads statements. `getStatements(s, p, o, contexts)`:
-1. **Prefetched batches first.** It looks the lookup up in the batches a batched join prefetched. If the lookup is there, it is answered from memory.
+1. **Prefetched batches first.** It looks the lookup up in the batches a batched join or an entity prefetch fetched ahead. If the lookup is there, it is answered from memory.
 2. **Otherwise one scan per graph.** It converts the lookup to a `RyaStatement` pattern and calls `RyaStoreQueryEngine.query`, applying RDF4J's context semantics:
    - no contexts: one lookup over every graph;
    - one graph: a lookup restricted to its column family;
@@ -1004,6 +1005,37 @@ The join then shows `algorithm: RyaBatchedJoin` in the plan. A chunk with a sing
 Batches form a stack in `StoreTripleSource`, so nested batched joins each keep their own until they release it.
 
 **Testing:** the ITs can push every join through chunk boundaries with `-Drya.test.joinBatchSize=2`, and the endpoint tests with `-Drya.join-batch-size=2`.
+
+### 13.5 Entity prefetch: a chain of joins at once
+
+A query that reads several attributes of each entity has one join, or one `OPTIONAL`, per attribute. A batched join only covers its own join:
+- each required attribute is a batched join of its own: one batch scan per attribute for every 1000 rows;
+- an `OPTIONAL` is RDF4J's left join, which isn't batched at all: one lookup per row.
+
+`EntityChain` finds such runs, and `EntityPrefetchStep` fetches all their lookups together:
+
+```
+LeftJoin                    OPTIONAL { ?s ex:email ?e }     link
+└── Join                    ?s ex:name ?n                   link
+    └── StatementPattern    ?s a ex:Person                  driver: binds ?s on every row
+```
+
+1. **Finding the chain.** `RyaEvaluationStrategy.prepare(Join)` (before trying a batched join) and `prepare(LeftJoin)` call `EntityChain.find`. It walks down left arguments while each node is a join or `OPTIONAL` whose right side is one statement pattern (a *link*). Where it stops is the *driver*.
+2. **Which links qualify:**
+   - the pattern's subject or object is bound on every driver row (`getAssuredBindingNames`), so each lookup is a range on one subject or object;
+   - the pattern uses no variable that a link below it binds, unless the driver binds it on every row; otherwise the lookup would depend on that link's results. When the lowest links fail this, they become part of the driver (an inferred type, for example);
+   - a join whose pattern is under a filter is not a link: it stays in the driver, so the links above it are fetched only for the rows that pass;
+   - a chain needs two links, or one `OPTIONAL`. A single join is left to `BatchedJoinStep`.
+3. **The fetch.** `EntityPrefetchStep` reads the driver's rows in windows. For each row it works out every link's lookup (`BatchedJoinStep.lookupFor`), then fetches them all with one `StoreTripleSource.prefetch`. `BatchLookup` groups them by table and graph, so a window usually costs one `batchQuery`.
+4. **The links** are RDF4J's own nested loops over those rows: `JoinIterator` for joins, `LeftJoinQueryEvaluationStep` for `OPTIONAL`s. Their pattern steps call `getStatements`, which finds the answers in memory. Results, and their order, are those of the plan without the prefetch.
+5. **Release.** The loops ask for the next driver row only after the current row's lookups are done, so a window's statements are released when the next window is read. A lookup that misses goes to the store: it costs time, never a wrong answer.
+6. **Window sizes.** The first window is 64 rows, so `LIMIT` and `ASK` queries fetch little; each next one doubles, up to `query.join.batchsize`. A window that would hold more than `query.join.prefetchlimit` statements is halved and fetched again; a single row still over it is left to the store.
+
+It is on by default: `query.join.entityprefetch`, or `rya.entity-prefetch` on the endpoint. Joins in a chain show `algorithm: RyaEntityPrefetch` in the plan, and the trace reason is `entity prefetch: N lookups for M rows fetched together`.
+
+**Limits.** Patterns rewritten by inference (subPropertyOf, inverseOf, symmetric and so on) are not single statement patterns any more, so they end the chain. Lookups are shared only within a window: an entity met in two windows is fetched twice.
+
+**Testing:** `EntityChainTest` covers which nodes form a chain; `EntityPrefetchIT` checks results and order against the plan without it, the store lookups it saves, halved windows, labels and inference.
 
 ---
 

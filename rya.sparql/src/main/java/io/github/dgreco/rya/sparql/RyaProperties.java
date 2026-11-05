@@ -39,6 +39,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param stats whether writes keep cardinality statistics and queries use them for join ordering.
  * @param joinBatchSize how many left-hand rows of a join are looked up together in one batch
  *        scan; 1 turns batching off.
+ * @param entityPrefetch whether the attributes a query reads for a batch of entities (its joins
+ *        and OPTIONALs on them) are fetched together in one batch scan.
  * @param textIndex whether to keep the full-text index that speeds up {@code text:matches}.
  * @param textIndexPredicates the predicates whose text literals are indexed; empty for all.
  * @param geoIndex whether to keep the geospatial index that speeds up GeoSPARQL filters.
@@ -56,6 +58,7 @@ public record RyaProperties(
         @DefaultValue("5m") Duration inferenceRefresh,
         @DefaultValue("true") boolean stats,
         @DefaultValue("1000") int joinBatchSize,
+        @DefaultValue("true") boolean entityPrefetch,
         @DefaultValue("false") boolean textIndex,
         @DefaultValue List<String> textIndexPredicates,
         @DefaultValue("false") boolean geoIndex,

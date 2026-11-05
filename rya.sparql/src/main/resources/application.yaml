@@ -37,6 +37,8 @@ rya:
   stats: true
   # Left-hand join rows looked up together in one batch scan; 1 turns batching off.
   join-batch-size: 1000
+  # Fetch the attributes a query reads for a batch of entities (joins and OPTIONALs on them) together.
+  entity-prefetch: true
   # Full-text index behind text:matches (string and language-tagged literals).
   text-index: false
   # Predicates whose literals are text-indexed. Empty: all of them.
