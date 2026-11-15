@@ -1,0 +1,25 @@
+# Try rya-ng out: the SPARQL endpoint and its query page on a throwaway in-process cluster.
+#
+#   docker compose up --build          # then open http://localhost:8080/
+#   RYA_BACKEND=hbase docker compose up --build
+#
+# The first build downloads the dependencies and takes several minutes. The data lives inside
+# the container and is lost when it stops. The page's Examples menu loads sample data.
+services:
+  rya:
+    build: .
+    image: rya-ng-dev
+    ports:
+      - "${RYA_PORT:-8080}:8080"
+    environment:
+      # accumulo (default) or hbase
+      RYA_BACKEND: ${RYA_BACKEND:-accumulo}
+      # Both search indexes, so the text and geo examples use them.
+      RYA_TEXTINDEX: "true"
+      RYA_GEOINDEX: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:8080/sparql?query=ASK%20%7B%7D' > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
