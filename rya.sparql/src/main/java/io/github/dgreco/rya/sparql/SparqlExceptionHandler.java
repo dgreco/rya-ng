@@ -19,6 +19,7 @@ package io.github.dgreco.rya.sparql;
  * under the License.
  */
 
+import io.github.dgreco.rya.api.resolver.UnsupportedValueException;
 import org.eclipse.rdf4j.query.MalformedQueryException;
 import org.eclipse.rdf4j.query.QueryInterruptedException;
 import org.slf4j.Logger;
@@ -51,6 +52,12 @@ public class SparqlExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     ResponseEntity<String> failed(final Exception e) {
+        // RDF4J wraps what the store throws, so look through the causes.
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            if (cause instanceof UnsupportedValueException) {
+                return text(HttpStatus.BAD_REQUEST, cause.getMessage());
+            }
+        }
         log.error("SPARQL request failed", e);
         return text(HttpStatus.INTERNAL_SERVER_ERROR, "Request failed: " + e.getMessage());
     }

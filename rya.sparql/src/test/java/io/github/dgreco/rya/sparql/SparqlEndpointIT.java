@@ -120,6 +120,22 @@ public class SparqlEndpointIT {
     }
 
     @Test
+    void valuesTheStoreCannotEncodeAreRefused() throws Exception {
+        update("INSERT DATA { <urn:s> <urn:p> \"a\", \"b\" }");
+
+        // A triple term must not turn into "any object" and delete both statements.
+        final HttpResponse<String> delete = update("DELETE DATA { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>> }");
+        assertEquals(400, delete.statusCode(), delete.body());
+        assertTrue(delete.body().contains("Triple terms"), delete.body());
+        assertTrue(ask("ASK { <urn:s> <urn:p> \"a\", \"b\" }"));
+
+        assertEquals(400, update("INSERT DATA { <urn:s> <urn:q> <<( <urn:a> <urn:b> <urn:c> )>> }").statusCode());
+        final HttpResponse<String> directional = update("INSERT DATA { <urn:s> <urn:q> \"x\"@ar--rtl }");
+        assertEquals(400, directional.statusCode(), directional.body());
+        assertFalse(ask("ASK { <urn:s> <urn:q> ?o }"));
+    }
+
+    @Test
     void blankNodesComeBackAsBlankNodes() throws Exception {
         update("INSERT DATA { _:b <urn:p> \"x\" }");
         final HttpResponse<String> r = get("SELECT ?s WHERE { ?s <urn:p> \"x\" }", "application/sparql-results+json");

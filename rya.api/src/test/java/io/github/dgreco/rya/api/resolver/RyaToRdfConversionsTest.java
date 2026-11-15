@@ -128,4 +128,12 @@ public class RyaToRdfConversionsTest {
         final Literal expectedLiteral = VF.createLiteral(expectedData);
         assertEquals(expectedLiteral, literal);
     }
+
+    @Test
+    public void testConvertLiteral_directionalRowWrittenWithoutTag() {
+        // What older versions stored for "Hello"@en--ltr: the datatype, but no tag or direction.
+        final RyaType ryaType = new RyaType(RDF.DIRLANGSTRING, "Hello");
+        assertEquals(VF.createLiteral("Hello"), RyaToRdfConversions.convertLiteral(ryaType));
+        assertEquals(VF.createLiteral("Hello"), RyaToRdfConversions.convertValue(ryaType));
+    }
 }

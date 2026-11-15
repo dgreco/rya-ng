@@ -21,6 +21,7 @@ package io.github.dgreco.rya.api.resolver;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -31,6 +32,7 @@ import java.util.Set;
 import io.github.dgreco.rya.api.domain.RyaType;
 import io.github.dgreco.rya.api.utils.LiteralLanguageUtils;
 import org.eclipse.rdf4j.model.Literal;
+import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.model.ValueFactory;
 import org.eclipse.rdf4j.model.impl.SimpleLiteral;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
@@ -129,5 +131,23 @@ public class RdfToRyaConversionsTest {
         final RyaType expectedRyaType = new RyaType(XMLSchema.STRING, expectedData);
         assertEquals(expectedRyaType, ryaType);
         assertNull(ryaType.getLanguage());
+    }
+
+    @Test
+    public void testConvertValue_tripleTermIsRefused() {
+        // Converting it to null would make it a wildcard in lookups and deletes.
+        final Value tripleTerm = VF.createTripleTerm(VF.createIRI("urn:a"), VF.createIRI("urn:b"), VF.createIRI("urn:c"));
+        final UnsupportedValueException e = assertThrows(UnsupportedValueException.class,
+                () -> RdfToRyaConversions.convertValue(tripleTerm));
+        assertTrue(e.getMessage().contains("Triple terms"), e.getMessage());
+        assertThrows(UnsupportedValueException.class, () -> RdfToRyaConversions.convertStatement(
+                VF.createStatement(VF.createIRI("urn:s"), VF.createIRI("urn:p"), tripleTerm)));
+    }
+
+    @Test
+    public void testConvertLiteral_baseDirectionIsRefused() {
+        final Literal literal = VF.createLiteral("مرحبا", "ar", Literal.BaseDirection.RTL);
+        assertThrows(UnsupportedValueException.class, () -> RdfToRyaConversions.convertLiteral(literal));
+        assertThrows(UnsupportedValueException.class, () -> RdfToRyaConversions.convertValue(literal));
     }
 }
