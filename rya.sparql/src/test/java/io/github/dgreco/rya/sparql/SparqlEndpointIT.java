@@ -120,17 +120,22 @@ public class SparqlEndpointIT {
     }
 
     @Test
-    void valuesTheStoreCannotEncodeAreRefused() throws Exception {
+    void tripleTermsAreExactValues() throws Exception {
         update("INSERT DATA { <urn:s> <urn:p> \"a\", \"b\" }");
 
-        // A triple term must not turn into "any object" and delete both statements.
-        final HttpResponse<String> delete = update("DELETE DATA { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>> }");
-        assertEquals(400, delete.statusCode(), delete.body());
-        assertTrue(delete.body().contains("Triple terms"), delete.body());
+        // A triple term is a value like any other: one that isn't there deletes nothing.
+        assertEquals(204, update("DELETE DATA { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>> }").statusCode());
         assertTrue(ask("ASK { <urn:s> <urn:p> \"a\", \"b\" }"));
 
-        assertEquals(400, update("INSERT DATA { <urn:s> <urn:q> <<( <urn:a> <urn:b> <urn:c> )>> }").statusCode());
-        assertFalse(ask("ASK { <urn:s> <urn:q> ?o }"));
+        assertEquals(204, update("INSERT DATA { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>>, <<( <urn:a> <urn:b> \"c\" )>> }").statusCode());
+        final String count = "ASK { { SELECT (COUNT(?o) AS ?n) WHERE { <urn:s> <urn:p> ?o FILTER(isTRIPLE(?o)) } } FILTER(?n = %d) }";
+        assertTrue(ask(count.formatted(2)));
+        assertTrue(ask("ASK { <urn:s> <urn:p> ?o FILTER(isTRIPLE(?o) && SUBJECT(?o) = <urn:a> && OBJECT(?o) = <urn:c>) }"));
+
+        assertEquals(204, update("DELETE DATA { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>> }").statusCode());
+        assertTrue(ask(count.formatted(1)));
+        assertTrue(ask("ASK { <urn:s> <urn:p> ?o FILTER(isTRIPLE(?o) && OBJECT(?o) = \"c\") }"));
+        assertTrue(ask("ASK { <urn:s> <urn:p> \"a\", \"b\" }"));
     }
 
     @Test

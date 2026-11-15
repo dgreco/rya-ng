@@ -21,6 +21,7 @@ package io.github.dgreco.rya.api.resolver;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaSchema;
 import io.github.dgreco.rya.api.domain.RyaStatement;
+import io.github.dgreco.rya.api.domain.RyaTripleTerm;
 import io.github.dgreco.rya.api.domain.RyaType;
 import io.github.dgreco.rya.api.utils.LiteralLanguageUtils;
 import org.eclipse.rdf4j.model.IRI;
@@ -111,7 +112,11 @@ public class RyaToRdfConversions {
     }
 
     public static Value convertValue(final RyaType ryaType) {
-        //assuming either IRI or Literal here
+        if (ryaType instanceof RyaTripleTerm) {
+            final RyaTripleTerm term = (RyaTripleTerm) ryaType;
+            return VF.createTripleTerm(convertResource(term.getSubject()), convertIRI(term.getPredicate()),
+                    convertValue(term.getObject()));
+        }
         return (ryaType instanceof RyaIRI || ryaType.getDataType().equals(XMLSchema.ANYURI)) ? toResource(ryaType.getData()) : convertLiteral(ryaType);
     }
 

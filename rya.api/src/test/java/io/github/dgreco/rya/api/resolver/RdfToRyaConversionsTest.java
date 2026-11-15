@@ -30,6 +30,9 @@ import java.util.List;
 import java.util.Set;
 
 import io.github.dgreco.rya.api.domain.RyaType;
+import io.github.dgreco.rya.api.domain.RyaIRI;
+import io.github.dgreco.rya.api.domain.RyaSchema;
+import io.github.dgreco.rya.api.domain.RyaTripleTerm;
 import io.github.dgreco.rya.api.utils.LiteralLanguageUtils;
 import org.eclipse.rdf4j.model.Literal;
 import org.eclipse.rdf4j.model.Value;
@@ -134,14 +137,26 @@ public class RdfToRyaConversionsTest {
     }
 
     @Test
-    public void testConvertValue_tripleTermIsRefused() {
-        // Converting it to null would make it a wildcard in lookups and deletes.
-        final Value tripleTerm = VF.createTripleTerm(VF.createIRI("urn:a"), VF.createIRI("urn:b"), VF.createIRI("urn:c"));
-        final UnsupportedValueException e = assertThrows(UnsupportedValueException.class,
-                () -> RdfToRyaConversions.convertValue(tripleTerm));
-        assertTrue(e.getMessage().contains("Triple terms"), e.getMessage());
-        assertThrows(UnsupportedValueException.class, () -> RdfToRyaConversions.convertStatement(
-                VF.createStatement(VF.createIRI("urn:s"), VF.createIRI("urn:p"), tripleTerm)));
+    public void testConvertValue_tripleTerm() {
+        final Value inner = VF.createTripleTerm(VF.createBNode("b1"), VF.createIRI("urn:b"), VF.createLiteral("c", "en"));
+        final Value tripleTerm = VF.createTripleTerm(VF.createIRI("urn:a"), VF.createIRI("urn:b"), inner);
+        final RyaType ryaType = RdfToRyaConversions.convertValue(tripleTerm);
+        final RyaTripleTerm outer = (RyaTripleTerm) ryaType;
+        assertEquals(new RyaIRI("urn:a"), outer.getSubject());
+        assertEquals(new RyaIRI(RyaSchema.BNODE_NAMESPACE + "b1"), ((RyaTripleTerm) outer.getObject()).getSubject());
+        // Blank nodes come back as the IRIs they are stored as, like everywhere else.
+        assertEquals(VF.createTripleTerm(VF.createIRI("urn:a"), VF.createIRI("urn:b"),
+                VF.createTripleTerm(VF.createIRI(RyaSchema.BNODE_NAMESPACE + "b1"), VF.createIRI("urn:b"), VF.createLiteral("c", "en"))),
+                RyaToRdfConversions.convertValue(ryaType));
+        assertEquals(ryaType, RdfToRyaConversions.convertStatement(
+                VF.createStatement(VF.createIRI("urn:s"), VF.createIRI("urn:p"), tripleTerm)).getObject());
+    }
+
+    @Test
+    public void testConvertLiteral_reservedDatatypeIsRefused() {
+        // Its resolver is the triple term's: such a literal would be written as a malformed one.
+        assertThrows(UnsupportedValueException.class,
+                () -> RdfToRyaConversions.convertValue(VF.createLiteral("\u0002a\u0002b\u0002c", RyaSchema.TRIPLE_TERM)));
     }
 
     @Test

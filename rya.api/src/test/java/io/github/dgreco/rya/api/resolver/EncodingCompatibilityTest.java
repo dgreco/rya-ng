@@ -27,6 +27,7 @@ import java.util.stream.Stream;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
+import io.github.dgreco.rya.api.domain.RyaTripleTerm;
 import io.github.dgreco.rya.api.domain.RyaType;
 import io.github.dgreco.rya.api.resolver.triple.TripleRowResolver;
 import io.github.dgreco.rya.api.resolver.triple.impl.WholeRowHashedTripleResolver;
@@ -79,7 +80,13 @@ public class EncodingCompatibilityTest {
                 Arguments.of("langString-region", new RyaType(RDF.LANGSTRING, "colour", "en-GB"), "636f6c6f757240656e2d474201687474703a2f2f7777772e77332e6f72672f313939392f30322f32322d7264662d73796e7461782d6e73236c616e67537472696e670108"),
                 // Added with RDF 1.2 base directions; "-legacy" is what older versions wrote for one.
                 Arguments.of("dirLangString", new RyaType(RDF.DIRLANGSTRING, "\u0645\u0631\u062d\u0628\u0627", "ar--rtl"), "d985d8b1d8add8a8d8a74061722d2d72746c01687474703a2f2f7777772e77332e6f72672f313939392f30322f32322d7264662d73796e7461782d6e73236469724c616e67537472696e670108"),
-                Arguments.of("dirLangString-legacy", new RyaType(RDF.DIRLANGSTRING, "hello"), "68656c6c6f01687474703a2f2f7777772e77332e6f72672f313939392f30322f32322d7264662d73796e7461782d6e73236469724c616e67537472696e670108"));
+                Arguments.of("dirLangString-legacy", new RyaType(RDF.DIRLANGSTRING, "hello"), "68656c6c6f01687474703a2f2f7777772e77332e6f72672f313939392f30322f32322d7264662d73796e7461782d6e73236469724c616e67537472696e670108"),
+                // Added with RDF 1.2 triple terms.
+                Arguments.of("tripleTerm", new RyaTripleTerm(new RyaIRI("urn:s"), new RyaIRI("urn:p"), new RyaIRI("urn:o")),
+                        "0275726e3a730275726e3a700275726e3a6f03050306010e"),
+                Arguments.of("tripleTerm-nested", new RyaTripleTerm(new RyaIRI("urn:a"), new RyaIRI("urn:b"),
+                        new RyaTripleTerm(new RyaIRI("urn:s"), new RyaIRI("urn:p"), new RyaType(XMLSchema.STRING, "hello"))),
+                        "0275726e3a610275726e3a6202030675726e3a73030675726e3a70030668656c6c6f0303050303030303050e010e"));
     }
 
     @ParameterizedTest(name = "{0}")
