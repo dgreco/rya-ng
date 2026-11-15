@@ -90,6 +90,38 @@
                 + "  }\n}\n",
         },
         {
+            name: "RDF 1.2: load annotated sample data",
+            query: "# {| |} annotates a statement: it says something about the statement itself.\n"
+                + "# ~ names the annotation (its reifier); without it the reifier is a blank node.\n"
+                + "INSERT DATA {\n  GRAPH <" + SAMPLE_GRAPH + "> {\n"
+                + "    <urn:ex:colosseum> <urn:ex:builtBy> <urn:ex:vespasian> ~ <urn:ex:claim1>\n"
+                + "      {| <urn:ex:source> <urn:ex:suetonius> ; <urn:ex:certainty> 0.9 |} .\n"
+                + "    <urn:ex:pantheon> <urn:ex:builtBy> <urn:ex:agrippa>\n"
+                + "      {| <urn:ex:source> <urn:ex:inscription> ; <urn:ex:certainty> 0.4 |} .\n"
+                + "    <urn:ex:pantheon> <urn:ex:builtBy> <urn:ex:hadrian> {| <urn:ex:certainty> 0.8 |} .\n"
+                + "    # A language tag can carry a text direction.\n"
+                + "    <urn:ex:colosseum> rdfs:label \"\u0627\u0644\u0643\u0648\u0644\u0648\u0633\u064a\u0648\u0645\"@ar--rtl, \"\u05e7\u05d5\u05dc\u05d5\u05e1\u05d0\u05d5\u05dd\"@he--rtl, \"Colosseum\"@en--ltr .\n"
+                + "  }\n}\n",
+        },
+        {
+            name: "RDF 1.2: statements with their annotations",
+            query: "SELECT ?monument ?builder ?certainty ?source WHERE {\n"
+                + "  ?monument <urn:ex:builtBy> ?builder {| <urn:ex:certainty> ?certainty |} .\n"
+                + "  OPTIONAL { << ?monument <urn:ex:builtBy> ?builder >> <urn:ex:source> ?source }\n}\n"
+                + "ORDER BY DESC(?certainty)\n",
+        },
+        {
+            name: "RDF 1.2: triple terms and their parts",
+            query: "# A triple term is a value: here, what each annotation is about.\n"
+                + "SELECT ?reifier ?term (SUBJECT(?term) AS ?s) (PREDICATE(?term) AS ?p) (OBJECT(?term) AS ?o) WHERE {\n"
+                + "  ?reifier rdf:reifies ?term .\n  FILTER(isTRIPLE(?term))\n}\n",
+        },
+        {
+            name: "RDF 1.2: labels with a text direction",
+            query: "SELECT ?s ?label (LANG(?label) AS ?language) (LANGDIR(?label) AS ?direction) WHERE {\n"
+                + "  ?s rdfs:label ?label .\n  FILTER(hasLANGDIR(?label))\n}\n",
+        },
+        {
             name: "Remove sample data",
             query: "DROP SILENT GRAPH <" + SAMPLE_GRAPH + ">\n",
         },
@@ -182,7 +214,9 @@
         } else {
             window.RyaTrace.drop(tab.getId());
         }
-        tab.setRequestConfig({ args: args });
+        // Graph results are asked in N-Triples, which the page reads itself (see rya-sparql12.js);
+        // set here so that tabs remembered from an earlier version follow too.
+        tab.setRequestConfig({ args: args, acceptHeaderGraph: window.RyaSparql12.GRAPH_RESULTS });
     });
 
     // Each tab keeps its own trace, and the panel shows the selected tab's. YASGUI fires
