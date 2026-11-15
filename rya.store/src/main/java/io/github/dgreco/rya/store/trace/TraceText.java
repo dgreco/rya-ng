@@ -18,6 +18,7 @@ package io.github.dgreco.rya.store.trace;
 import java.nio.charset.StandardCharsets;
 
 import io.github.dgreco.rya.api.domain.RyaStatement;
+import io.github.dgreco.rya.api.domain.RyaTripleTerm;
 import io.github.dgreco.rya.api.domain.RyaType;
 import io.github.dgreco.rya.store.spi.KeyRange;
 
@@ -98,6 +99,9 @@ public final class TraceText {
     public static String term(final RyaType t) {
         if (t == null) {
             return "?";
+        }
+        if (t instanceof RyaTripleTerm tt) {
+            return "<<( " + term(tt.getSubject()) + ' ' + term(tt.getPredicate()) + ' ' + term(tt.getObject()) + " )>>";
         }
         final String data = String.valueOf(t.getData());
         if (t.getDataType() == null || "http://www.w3.org/2001/XMLSchema#anyURI".equals(t.getDataType().stringValue())) {

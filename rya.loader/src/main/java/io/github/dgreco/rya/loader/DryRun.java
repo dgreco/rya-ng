@@ -37,6 +37,8 @@ import io.github.dgreco.rya.store.index.TextIndex;
 import io.github.dgreco.rya.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
+import io.github.dgreco.rya.api.domain.RyaType;
+import io.github.dgreco.rya.api.domain.RyaTripleTerm;
 import io.github.dgreco.rya.api.resolver.RyaTripleContext;
 import io.github.dgreco.rya.loader.gen.EntityGenerator;
 
@@ -190,20 +192,28 @@ public final class DryRun {
         }
     }
 
+    private static void object(final StringBuilder b, final RyaType object) {
+        if (object instanceof RyaTripleTerm term) {
+            b.append("<<( <").append(term.getSubject().getData()).append("> <").append(term.getPredicate().getData()).append("> ");
+            object(b, term.getObject());
+            b.append(" )>>");
+        } else if (object instanceof RyaIRI) {
+            b.append('<').append(object.getData()).append('>');
+        } else {
+            b.append('"').append(object.getData().replace("\\", "\\\\").replace("\"", "\\\"")).append('"');
+            if (object.getLanguage() != null) {
+                b.append('@').append(object.getLanguage());
+            } else {
+                b.append("^^<").append(object.getDataType()).append('>');
+            }
+        }
+    }
+
     /** A statement in N-Quads form (for --print). */
     static String nquad(final RyaStatement st) {
         final StringBuilder b = new StringBuilder();
         b.append('<').append(st.getSubject().getData()).append("> <").append(st.getPredicate().getData()).append("> ");
-        if (st.getObject() instanceof RyaIRI) {
-            b.append('<').append(st.getObject().getData()).append('>');
-        } else {
-            b.append('"').append(st.getObject().getData().replace("\\", "\\\\").replace("\"", "\\\"")).append('"');
-            if (st.getObject().getLanguage() != null) {
-                b.append('@').append(st.getObject().getLanguage());
-            } else {
-                b.append("^^<").append(st.getObject().getDataType()).append('>');
-            }
-        }
+        object(b, st.getObject());
         if (st.getContext() != null) {
             b.append(" <").append(st.getContext().getData()).append('>');
         }

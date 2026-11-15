@@ -37,6 +37,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.Value;
 
+import io.github.dgreco.rya.api.resolver.RdfToRyaConversions;
 import io.github.dgreco.rya.api.persist.RdfDAOException;
 import io.github.dgreco.rya.api.persist.RdfEvalStatsDAO;
 import io.github.dgreco.rya.store.spi.CellScanner;
@@ -148,7 +149,8 @@ public class RyaStoreEvalStatsDAO implements RdfEvalStatsDAO<StoreRdfConfigurati
         final byte[] cq = context == null ? EMPTY : context.stringValue().getBytes(StandardCharsets.UTF_8);
         final StringJoiner row = new StringJoiner(DELIM);
         for (final Value v : val) {
-            row.add(v.stringValue());
+            // A triple term is counted under its encoded form, which is what the writer has.
+            row.add(v.isTripleTerm() ? RdfToRyaConversions.convertValue(v).getData() : v.stringValue());
         }
         final ScanSpec spec = ScanSpec.builder(conf.getStoreAuths()).column(cf.getBytes(StandardCharsets.UTF_8), cq).build();
         final StoreTrace.Reason why = StoreTrace.reason(() -> "statistics: " + card + " count of " + row.toString().replace(DELIM, " · ")
