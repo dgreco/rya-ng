@@ -62,7 +62,8 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletResponse;
 
 /**
- * SPARQL 1.1 Protocol endpoint (https://www.w3.org/TR/sparql11-protocol/).
+ * SPARQL Protocol endpoint (https://www.w3.org/TR/sparql11-protocol/), for SPARQL 1.1 and 1.2
+ * queries and updates.
  *
  * <ul>
  *   <li>Query: {@code GET /sparql?query=...}, {@code POST} with a {@code query} form field, or
@@ -167,7 +168,8 @@ public class SparqlController {
                         .orElseThrow(() -> notAcceptable(TUPLE_FORMATS));
                 response.setContentType(ContentNegotiation.contentType(format));
                 final OutputStream out = response.getOutputStream();
-                tuple.evaluate(BlankNodeOutput.wrap(QueryResultIO.createTupleWriter(format, out)));
+                tuple.evaluate(BlankNodeOutput.wrap(TupleQueryResultFormat.JSON.equals(format)
+                        ? new DirectionJsonWriter(out) : QueryResultIO.createTupleWriter(format, out)));
             } else if (query instanceof BooleanQuery ask) {
                 final BooleanQueryResultFormat format = ContentNegotiation.choose(accept, BOOLEAN_FORMATS)
                         .orElseThrow(() -> notAcceptable(BOOLEAN_FORMATS));
