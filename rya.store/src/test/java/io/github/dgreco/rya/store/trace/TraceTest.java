@@ -58,6 +58,12 @@ public class TraceTest {
         assertEquals("<urn:a> ? \"42\"^^xsd:integer in <urn:g>",
                 TraceText.pattern(new RyaStatement(new RyaIRI("urn:a"), null, new RyaType(XSD.INTEGER, "42"), new RyaIRI("urn:g"))));
         assertEquals("? <urn:p> ?", TraceText.pattern(new RyaStatement(null, new RyaIRI("urn:p"), null)));
+        assertEquals("? ? [\"a\"^^xsd:string … \"b\"^^xsd:string]", TraceText.pattern(new RyaStatement(null, null,
+                new io.github.dgreco.rya.api.domain.RyaTypeRange(new RyaType("a"), new RyaType("b")))));
+        assertEquals("<urn:r> ? <<( <urn:a> <urn:b> <<( <urn:c> <urn:d> \"e\"@en )>> )>>", TraceText.pattern(new RyaStatement(
+                new RyaIRI("urn:r"), null, new io.github.dgreco.rya.api.domain.RyaTripleTerm(new RyaIRI("urn:a"), new RyaIRI("urn:b"),
+                        new io.github.dgreco.rya.api.domain.RyaTripleTerm(new RyaIRI("urn:c"), new RyaIRI("urn:d"),
+                                new RyaType(org.eclipse.rdf4j.model.vocabulary.RDF.LANGSTRING, "e", "en"))))));
     }
 
     @Test

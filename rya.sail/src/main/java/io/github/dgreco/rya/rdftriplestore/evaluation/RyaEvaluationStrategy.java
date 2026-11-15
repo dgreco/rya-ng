@@ -45,6 +45,7 @@ import org.eclipse.rdf4j.query.algebra.Filter;
 import org.eclipse.rdf4j.query.algebra.Join;
 import org.eclipse.rdf4j.query.algebra.LeftJoin;
 import org.eclipse.rdf4j.query.algebra.StatementPattern;
+import org.eclipse.rdf4j.query.algebra.TripleRef;
 import org.eclipse.rdf4j.query.algebra.TupleExpr;
 import org.eclipse.rdf4j.query.algebra.Var;
 import org.eclipse.rdf4j.query.algebra.helpers.TupleExprs;
@@ -231,6 +232,13 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
             };
         }
         return super.prepare(node, context);
+    }
+
+    /** A triple term in a pattern: matched in memory when it is already bound, else read from the store. */
+    @Override
+    protected QueryEvaluationStep prepare(final TripleRef node, final QueryEvaluationContext context) {
+        return tripleSource instanceof StoreTripleSource<?> source ? new TripleRefStep(node, source, context)
+                : super.prepare(node, context);
     }
 
     /**

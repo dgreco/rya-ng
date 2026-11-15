@@ -59,7 +59,7 @@ public class IntersectionOfVisitor extends AbstractInferVisitor {
         final Var predVar = node.getPredicateVar();
         final Var objVar = node.getObjectVar();
         final Var conVar = node.getContextVar();
-        if (predVar != null && objVar != null && objVar.getValue() != null && RDF.TYPE.equals(predVar.getValue()) && !EXPANDED.equals(conVar)) {
+        if (predVar != null && objVar != null && objVar.getValue() instanceof IRI && RDF.TYPE.equals(predVar.getValue()) && !EXPANDED.equals(conVar)) {
             final List<Set<Resource>> intersections = inferenceEngine.getIntersectionsImplying((IRI) objVar.getValue());
             if (intersections != null && !intersections.isEmpty()) {
                 final List<TupleExpr> joins = new ArrayList<>();

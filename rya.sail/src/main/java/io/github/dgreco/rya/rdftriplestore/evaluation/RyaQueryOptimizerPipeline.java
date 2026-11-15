@@ -99,7 +99,9 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
                 StandardQueryOptimizerPipeline.SAME_TERM_FILTER_OPTIMIZER,
                 StandardQueryOptimizerPipeline.UNION_SCOPE_CHANGE_OPTIMIZER,
                 StandardQueryOptimizerPipeline.QUERY_MODEL_NORMALIZER,
-                StandardQueryOptimizerPipeline.PROJECTION_REMOVAL_OPTIMIZER));
+                StandardQueryOptimizerPipeline.PROJECTION_REMOVAL_OPTIMIZER,
+                // Before inference and join ordering, which then see exact lookups.
+                TripleTermOptimizer.fold(tripleSource.getValueFactory())));
         if (graphSizes != null) {
             // Before inference, which leaves the fixed patterns it produces alone.
             optimizers.add(graphSizes);
@@ -112,6 +114,7 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
         }
         optimizers.addAll(List.of(
                 new QueryJoinOptimizer(statistics, strategy.isTrackResultSize(), tripleSource),
+                TripleTermOptimizer.order(),
                 StandardQueryOptimizerPipeline.ITERATIVE_EVALUATION_OPTIMIZER,
                 new FilterOptimizer(statistics, false, true),
                 StandardQueryOptimizerPipeline.FILTER_IN_VALUES_OPTIMIZER,

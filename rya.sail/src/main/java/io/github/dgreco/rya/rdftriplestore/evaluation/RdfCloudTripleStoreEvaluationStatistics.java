@@ -44,6 +44,7 @@ import org.eclipse.rdf4j.query.algebra.Join;
 import org.eclipse.rdf4j.query.algebra.Projection;
 import org.eclipse.rdf4j.query.algebra.Slice;
 import org.eclipse.rdf4j.query.algebra.StatementPattern;
+import org.eclipse.rdf4j.query.algebra.TripleRef;
 import org.eclipse.rdf4j.query.algebra.TupleExpr;
 import org.eclipse.rdf4j.query.algebra.UnaryTupleOperator;
 import org.eclipse.rdf4j.query.algebra.Var;
@@ -60,6 +61,7 @@ public class RdfCloudTripleStoreEvaluationStatistics<C extends RdfCloudTripleSto
     private RdfEvalStatsDAO<C> rdfEvalStatsDAO;
     protected boolean pushEmptyRdfTypeDown = true;
     protected boolean useCompositeCardinalities = true;
+    private static final double TRIPLE_REF_CARDINALITY = 1_000_000_000d;
 
     public RdfCloudTripleStoreEvaluationStatistics(final C conf, final RdfEvalStatsDAO<C> rdfEvalStatsDAO) {
         checkNotNull(conf);
@@ -112,10 +114,25 @@ public class RdfCloudTripleStoreEvaluationStatistics<C extends RdfCloudTripleSto
             return sp instanceof IndexedStatementPattern ? Math.max(1, plain * IndexedStatementPattern.SELECTIVITY) : plain;
         }
 
+        /**
+         * Without a store to count them, a triple term reference is taken to be large, so join
+         * ordering starts from a pattern. {@link TripleTermOptimizer} then places it.
+         */
+        @Override
+        protected double getCardinality(final TripleRef tripleRef) {
+            return TRIPLE_REF_CARDINALITY;
+        }
+
         private double plainCardinality(final StatementPattern sp) {
             final Var subjectVar = sp.getSubjectVar();
-            final Resource subj = (Resource) getConstantValue(subjectVar);
             final Var predicateVar = sp.getPredicateVar();
+            // A literal or a triple term can be bound to these positions, and matches nothing there.
+            if ((getConstantValue(subjectVar) != null && !(getConstantValue(subjectVar) instanceof Resource))
+                    || (getConstantValue(predicateVar) != null && !(getConstantValue(predicateVar) instanceof IRI))
+                    || (getConstantValue(sp.getContextVar()) != null && !(getConstantValue(sp.getContextVar()) instanceof Resource))) {
+                return 0;
+            }
+            final Resource subj = (Resource) getConstantValue(subjectVar);
             final IRI pred = (IRI) getConstantValue(predicateVar);
             final Var objectVar = sp.getObjectVar();
             final Value obj = getConstantValue(objectVar);

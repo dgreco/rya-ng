@@ -48,7 +48,7 @@ public class SubClassOfVisitor extends AbstractInferVisitor {
         final Var predVar = sp.getPredicateVar();
         final Var objVar = sp.getObjectVar();
         final Var conVar = sp.getContextVar();
-        if (predVar != null && objVar != null && objVar.getValue() != null && RDF.TYPE.equals(predVar.getValue())
+        if (predVar != null && objVar != null && objVar.getValue() instanceof IRI && RDF.TYPE.equals(predVar.getValue())
                 && !EXPANDED.equals(conVar)) {
             /**
              * ?type sesame:directSubClassOf ub:Student . ?student rdf:type ?type +

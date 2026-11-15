@@ -130,6 +130,9 @@ public class SparqlEndpointIT {
         assertEquals(204, update("INSERT DATA { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>>, <<( <urn:a> <urn:b> \"c\" )>> }").statusCode());
         final String count = "ASK { { SELECT (COUNT(?o) AS ?n) WHERE { <urn:s> <urn:p> ?o FILTER(isTRIPLE(?o)) } } FILTER(?n = %d) }";
         assertTrue(ask(count.formatted(2)));
+        assertTrue(ask("ASK { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>> }"));
+        assertFalse(ask("ASK { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:d> )>> }"));
+        assertTrue(ask("ASK { ?s <urn:p> <<( <urn:a> ?p \"c\" )>> }"));
         assertTrue(ask("ASK { <urn:s> <urn:p> ?o FILTER(isTRIPLE(?o) && SUBJECT(?o) = <urn:a> && OBJECT(?o) = <urn:c>) }"));
 
         assertEquals(204, update("DELETE DATA { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>> }").statusCode());
