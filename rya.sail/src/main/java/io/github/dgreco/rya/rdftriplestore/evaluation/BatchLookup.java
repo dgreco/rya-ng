@@ -39,6 +39,7 @@ import io.github.dgreco.rya.api.query.strategy.TriplePatternStrategy;
 import io.github.dgreco.rya.api.resolver.RdfToRyaConversions;
 import io.github.dgreco.rya.api.resolver.RyaContext;
 import io.github.dgreco.rya.api.resolver.RyaToRdfConversions;
+import io.github.dgreco.rya.api.resolver.UnsupportedValueException;
 import io.github.dgreco.rya.api.resolver.RyaTripleContext;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.model.Resource;
@@ -165,7 +166,12 @@ public final class BatchLookup {
 
             final RyaIRI s = key.subject() == null ? null : RdfToRyaConversions.convertResource(key.subject());
             final RyaIRI p = key.predicate() == null ? null : RdfToRyaConversions.convertIRI(key.predicate());
-            final RyaType o = key.object() == null ? null : RdfToRyaConversions.convertValue(key.object());
+            final RyaType o;
+            try {
+                o = key.object() == null ? null : RdfToRyaConversions.convertValue(key.object());
+            } catch (final UnsupportedValueException e) {
+                return null; // let the single lookup report it
+            }
             final RyaIRI c = context == null ? null : RdfToRyaConversions.convertResource(context);
             if (s == null && p == null && o == null) {
                 return null; // a full scan; nothing to gain from batching

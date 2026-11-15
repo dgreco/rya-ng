@@ -38,6 +38,7 @@ import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.model.util.Literals;
+import org.eclipse.rdf4j.model.vocabulary.RDF;
 
 /**
  * Methods for converting values from their RDF4J object representations into
@@ -74,6 +75,10 @@ public class RdfToRyaConversions {
             return null;
         }
         if (literal.getDatatype() != null) {
+            if (RDF.DIRLANGSTRING.equals(literal.getDatatype())) {
+                throw new UnsupportedValueException(
+                        "Literals with a base direction (rdf:dirLangString) cannot be stored: " + LogUtils.clean(literal.toString()));
+            }
             if (Literals.isLanguageLiteral(literal)) {
                 final String language = literal.getLanguage().get();
                 if (Literals.isValidLanguageTag(language)) {
@@ -94,12 +99,13 @@ public class RdfToRyaConversions {
      * {@code value}.
      * @param value the {@link Value} to convert.
      * @return the {@link RyaType} representation of the {@code value}.
+     * @throws UnsupportedValueException if the store has no encoding for the value, such as an
+     *         RDF 1.2 triple term. Returning {@code null} instead would turn it into a wildcard.
      */
     public static RyaType convertValue(final Value value) {
         if (value == null) {
             return null;
         }
-        //assuming either IRI or Literal here
         if (value instanceof Resource) {
             return convertResource((Resource) value);
         }
@@ -115,7 +121,8 @@ public class RdfToRyaConversions {
                 return new RyaTypeRange(convertLiteral((Literal) rv.getStart()), convertLiteral((Literal) rv.getEnd()));
             }
         }
-        return null;
+        throw new UnsupportedValueException((value.isTripleTerm() ? "Triple terms" : "Values of this kind")
+                + " cannot be stored or looked up: " + LogUtils.clean(value.toString()));
     }
 
     /**
