@@ -202,14 +202,22 @@ public class TripleTermIT extends RyaSailITBase {
     }
 
     @Test
-    public void tracedQueriesRunTheSameAndOnlyUnboundTermsScanTheStore() {
-        final Map<String, Boolean> scansTerms = new java.util.LinkedHashMap<>();
-        scansTerms.put("SELECT * WHERE { ?r rdf:reifies <<( :alice :knows :bob )>> }", false);
-        scansTerms.put("SELECT * WHERE { ?r rdf:reifies <<( :alice ?p ?o )>> . ?r :since ?d }", false);
-        scansTerms.put("SELECT * WHERE { ?r rdf:reifies <<( :dave :says <<( :alice :knows ?x )>> )>> }", false);
-        scansTerms.put("SELECT * WHERE { :alice :knows ?o {| :since ?d |} }", false);
-        scansTerms.put("SELECT * WHERE { BIND(<<( ?s :knows ?o )>> AS ?t) }", true);
-        scansTerms.forEach((query, expected) -> {
+    public void tracedQueriesRunTheSameAndReadOnlyWhatTheyNeed() {
+        // What each query reads beyond exact lookups: nothing, the range of terms with the
+        // pattern's constant subject, or every stored triple term.
+        final Map<String, String> reads = new java.util.LinkedHashMap<>();
+        reads.put("SELECT * WHERE { ?r rdf:reifies <<( :alice :knows :bob )>> }", "");
+        reads.put("SELECT * WHERE { ?r rdf:reifies <<( ?s :knows ?o )>> . ?r :since ?d }", "");
+        // Join ordering starts from the few :since statements, so the reifiers are already bound.
+        reads.put("SELECT * WHERE { ?r rdf:reifies <<( :alice ?p ?o )>> . ?r :since ?d }", "");
+        reads.put("SELECT * WHERE { ?r rdf:reifies <<( :alice ?p ?o )>> }", "range");
+        reads.put("SELECT * WHERE { ?r ?how <<( :alice :likes ?o )>> }", "range");
+        reads.put("SELECT * WHERE { GRAPH :g { ?r rdf:reifies <<( :alice ?p ?o )>> } }", "range");
+        reads.put("SELECT * WHERE { ?r rdf:reifies <<( :dave :says <<( :alice :knows ?x )>> )>> }", "range");
+        reads.put("SELECT * WHERE { :alice :knows ?o {| :since ?d |} }", "");
+        reads.put("SELECT * WHERE { << :alice :knows ?o >> ?about ?v }", "range");
+        reads.put("SELECT * WHERE { BIND(<<( ?s :knows ?o )>> AS ?t) }", "all");
+        reads.forEach((query, expected) -> {
             final Map<Map<String, Value>, Integer> untraced = counted(repo, query);
             final List<TraceEvent> events = new ArrayList<>();
             final Map<Map<String, Value>, Integer> traced;
@@ -220,8 +228,38 @@ public class TripleTermIT extends RyaSailITBase {
             assertFalse(traced.isEmpty(), query);
             final List<String> reasons = events.stream().filter(e -> e instanceof TraceEvent.ScanStart)
                     .map(e -> ((TraceEvent.ScanStart) e).reason()).toList();
-            assertEquals(expected, reasons.stream().anyMatch(r -> r.contains("triple terms: ")), query + " " + reasons);
+            assertEquals(expected.equals("range"), reasons.stream().anyMatch(r -> r.contains("triple terms: only statements about")),
+                    query + " " + reasons);
+            assertEquals(expected.equals("all"), reasons.stream().anyMatch(r -> r.contains("triple terms: the pattern's term is not bound")),
+                    query + " " + reasons);
         });
+    }
+
+    /** The narrowed range must find exactly what reading every statement and filtering would. */
+    @Test
+    public void theRangeOfTermsAboutASubjectIsExact() {
+        // Subjects that sort around :alice, a string that looks like her terms, and other objects.
+        update(PREFIXES + """
+                INSERT DATA {
+                  :x1 rdf:reifies <<( :alic :knows :bob )>> , <<( :alice2 :knows :bob )>> , <<( :alicE :knows :bob )>> , :alice , "alice" .
+                  :x2 :other <<( :alice :knows :zed )>> .
+                  GRAPH :g2 { :x3 rdf:reifies <<( :alice :knows <<( :alice :knows :bob )>> )>> }
+                }""");
+        assertEquals(Set.of("urn:r1", "urn:r2", "urn:r4", "urn:x3"), withoutBlankNodes(
+                column("SELECT ?r WHERE { ?r rdf:reifies <<( :alice ?p ?o )>> }", "r")));
+        assertEquals(Set.of("urn:r1", "urn:r4", "urn:x3"), withoutBlankNodes(
+                column("SELECT ?r WHERE { ?r rdf:reifies <<( :alice :knows ?o )>> }", "r")));
+        assertEquals(Set.of("urn:r1", "urn:r2", "urn:r4", "urn:x2", "urn:x3"), withoutBlankNodes(
+                column("SELECT ?r WHERE { ?r ?how <<( :alice ?p ?o )>> }", "r")));
+        assertEquals(Set.of("urn:x3"), column("SELECT ?r WHERE { GRAPH :g2 { ?r rdf:reifies <<( :alice ?p ?o )>> } }", "r"));
+        assertEquals(Set.of("urn:r4", "urn:x3"),
+                column("SELECT ?r WHERE { GRAPH ?g { ?r rdf:reifies <<( :alice ?p ?o )>> } FILTER(?g IN (:g, :g2)) }", "r"));
+        assertEquals(Set.of("urn:x1"), column("SELECT ?r WHERE { ?r rdf:reifies <<( :alic ?p ?o )>> }", "r"));
+    }
+
+    private static Set<String> withoutBlankNodes(final Set<String> values) {
+        values.removeIf(v -> v.startsWith(io.github.dgreco.rya.api.domain.RyaSchema.BNODE_NAMESPACE));
+        return values;
     }
 
     // ------------------------------------------------------------------ helpers

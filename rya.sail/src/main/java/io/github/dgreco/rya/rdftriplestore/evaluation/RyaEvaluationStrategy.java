@@ -185,8 +185,9 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
                 || sp instanceof FixedStatementPattern || sp instanceof TransitivePropertySP) {
             return null;
         }
-        // An indexed pattern is a plain store lookup only once its subject or object is bound.
-        if (sp instanceof IndexedStatementPattern
+        // An indexed pattern, or one read as a range of triple terms, is a plain store lookup
+        // only once its subject or object is bound.
+        if ((sp instanceof IndexedStatementPattern || TripleTermRangeSource.prefixFor(sp) != null)
                 && !(boundByLeft(node, sp.getSubjectVar()) || boundByLeft(node, sp.getObjectVar()))) {
             return null;
         }
@@ -230,6 +231,12 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
                     throw new QueryEvaluationException(e);
                 }
             };
+        }
+        if (tripleSource instanceof StoreTripleSource<?> source) {
+            final String termPrefix = TripleTermRangeSource.prefixFor(node);
+            if (termPrefix != null) {
+                return new StatementPatternQueryEvaluationStep(node, context, new TripleTermRangeSource(source, termPrefix));
+            }
         }
         return super.prepare(node, context);
     }

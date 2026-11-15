@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 
 import io.github.dgreco.rya.api.domain.RyaStatement;
 import io.github.dgreco.rya.api.domain.RyaRange;
+import io.github.dgreco.rya.api.domain.RyaSchema;
 import io.github.dgreco.rya.api.domain.RyaTripleTerm;
 import io.github.dgreco.rya.api.domain.RyaType;
 import io.github.dgreco.rya.store.spi.KeyRange;
@@ -96,10 +97,22 @@ public final class TraceText {
                 + (st.getContext() == null ? "" : " in " + term(st.getContext()));
     }
 
+    private static final String TRIPLE_TERM = RyaSchema.TRIPLE_TERM.stringValue();
+
     /** One position of a pattern. */
     public static String term(final RyaType t) {
         if (t == null) {
             return "?";
+        }
+        if (t instanceof RyaRange range && TRIPLE_TERM.equals(range.getStart().getDataType().stringValue())) {
+            // The range of stored triple terms starting with some parts: U+0002 separates them.
+            final StringBuilder b = new StringBuilder("<<( ");
+            for (final String part : range.getStart().getData().split("\u0002")) {
+                if (!part.isEmpty()) {
+                    b.append('<').append(part).append("> ");
+                }
+            }
+            return b.append("… )>>").toString();
         }
         if (t instanceof RyaRange range) {
             return '[' + term(range.getStart()) + " … " + term(range.getStop()) + ']';

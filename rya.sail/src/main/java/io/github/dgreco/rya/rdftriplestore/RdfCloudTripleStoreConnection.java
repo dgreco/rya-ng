@@ -19,6 +19,7 @@ package io.github.dgreco.rya.rdftriplestore;
  * under the License.
  */
 
+import java.util.function.Function;
 import org.eclipse.rdf4j.query.algebra.evaluation.NativeTripleTermSource;
 import org.eclipse.rdf4j.model.TripleTerm;
 import org.eclipse.rdf4j.common.iteration.LookAheadIteration;
@@ -532,21 +533,41 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 }
             }
             storeLookups++;
+            return inGraphs(contexts, graph -> pattern(subject, predicate, object, graph));
+        }
+
+        /**
+         * The statements whose object is a triple term starting with {@code prefix}
+         * ({@link TripleTermResolver#prefix}), such as the terms about one subject: one range scan
+         * of the predicate's objects, or of all objects without a predicate.
+         */
+        public CloseableIteration<? extends Statement> getStatementsAboutTripleTerms(final IRI predicate, final String prefix,
+                final Resource... contexts) throws QueryEvaluationException {
+            storeLookups++;
+            final RyaIRI p = RdfToRyaConversions.convertIRI(predicate);
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "triple terms: only statements about terms with the pattern's constant parts are read")) {
+                // U+10FFFF: no text sorts after its UTF-8.
+                return inGraphs(contexts, graph -> new RyaStatement(null, p, new RyaTypeRange(new RyaType(RyaSchema.TRIPLE_TERM, prefix),
+                        new RyaType(RyaSchema.TRIPLE_TERM, prefix + "\uDBFF\uDFFF")), RdfToRyaConversions.convertResource(graph)));
+            }
+        }
+
+        /** Runs a lookup with RDF4J's context semantics: no contexts means every graph; {@code null} the default graph only. */
+        private CloseableIteration<Statement> inGraphs(final Resource[] contexts, final Function<Resource, RyaStatement> pattern) {
             if (contexts == null || contexts.length == 0) {
-                return lookup(subject, predicate, object, null, false);
+                return lookup(pattern.apply(null), false);
             }
             final Resource[] graphs = distinct(contexts);
             if (graphs.length == 1) {
-                return lookup(subject, predicate, object, graphs[0], graphs[0] == null);
+                return lookup(pattern.apply(graphs[0]), graphs[0] == null);
             }
-            return new Concat(subject, predicate, object, graphs);
+            return new Concat(pattern, graphs);
         }
 
-        private CloseableIteration<Statement> lookup(final Resource subject, final IRI predicate, final Value object,
-                final Resource context, final boolean defaultGraphOnly) {
+        private CloseableIteration<Statement> lookup(final RyaStatement pattern, final boolean defaultGraphOnly) {
             final CloseableIteration<RyaStatement> found;
             try {
-                found = ryaDAO.getQueryEngine().query(pattern(subject, predicate, object, context), conf);
+                found = ryaDAO.getQueryEngine().query(pattern, conf);
             } catch (final RyaDAOException e) {
                 throw new QueryEvaluationException(e);
             }
@@ -686,16 +707,12 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
 
         /** Looks up each graph in turn. */
         private final class Concat implements CloseableIteration<Statement> {
-            private final Resource subject;
-            private final IRI predicate;
-            private final Value object;
+            private final Function<Resource, RyaStatement> pattern;
             private final Iterator<Resource> graphs;
             private CloseableIteration<Statement> current;
 
-            Concat(final Resource subject, final IRI predicate, final Value object, final Resource[] graphs) {
-                this.subject = subject;
-                this.predicate = predicate;
-                this.object = object;
+            Concat(final Function<Resource, RyaStatement> pattern, final Resource[] graphs) {
+                this.pattern = pattern;
                 this.graphs = Arrays.asList(graphs).iterator();
             }
 
@@ -710,7 +727,7 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                         return false;
                     }
                     final Resource g = graphs.next();
-                    current = lookup(subject, predicate, object, g, g == null);
+                    current = lookup(pattern.apply(g), g == null);
                 }
                 return true;
             }
