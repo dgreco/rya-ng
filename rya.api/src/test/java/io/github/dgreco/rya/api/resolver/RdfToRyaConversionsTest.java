@@ -145,9 +145,17 @@ public class RdfToRyaConversionsTest {
     }
 
     @Test
-    public void testConvertLiteral_baseDirectionIsRefused() {
+    public void testConvertLiteral_baseDirection() {
         final Literal literal = VF.createLiteral("مرحبا", "ar", Literal.BaseDirection.RTL);
-        assertThrows(UnsupportedValueException.class, () -> RdfToRyaConversions.convertLiteral(literal));
-        assertThrows(UnsupportedValueException.class, () -> RdfToRyaConversions.convertValue(literal));
+        final RyaType ryaType = RdfToRyaConversions.convertLiteral(literal);
+        assertEquals(RDF.DIRLANGSTRING, ryaType.getDataType());
+        assertEquals("مرحبا", ryaType.getData());
+        assertEquals("ar--rtl", ryaType.getLanguage());
+        assertEquals(ryaType, RdfToRyaConversions.convertValue(literal));
+        assertEquals(literal, RyaToRdfConversions.convertValue(ryaType));
+
+        final Literal ltr = VF.createLiteral("Hello", "en-GB", Literal.BaseDirection.LTR);
+        assertEquals("en-GB--ltr", RdfToRyaConversions.convertLiteral(ltr).getLanguage());
+        assertEquals(ltr, RyaToRdfConversions.convertLiteral(RdfToRyaConversions.convertLiteral(ltr)));
     }
 }

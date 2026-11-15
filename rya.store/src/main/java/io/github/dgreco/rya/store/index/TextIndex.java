@@ -39,7 +39,7 @@ public final class TextIndex implements SecondaryIndex {
 
     /** Whether a literal of this datatype is text: what the index covers and {@code text:matches} accepts. */
     public static boolean isText(final IRI datatype) {
-        return XSD.STRING.equals(datatype) || RDF.LANGSTRING.equals(datatype);
+        return XSD.STRING.equals(datatype) || RDF.LANGSTRING.equals(datatype) || RDF.DIRLANGSTRING.equals(datatype);
     }
 
     /** Whether statements with this predicate are indexed. */

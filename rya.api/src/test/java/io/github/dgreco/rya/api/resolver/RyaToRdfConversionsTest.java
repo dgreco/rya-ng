@@ -136,4 +136,13 @@ public class RyaToRdfConversionsTest {
         assertEquals(VF.createLiteral("Hello"), RyaToRdfConversions.convertLiteral(ryaType));
         assertEquals(VF.createLiteral("Hello"), RyaToRdfConversions.convertValue(ryaType));
     }
+
+    @Test
+    public void testConvertLiteral_baseDirection() {
+        final RyaType ryaType = new RyaType(RDF.DIRLANGSTRING, "Hello", "en--ltr");
+        final Literal literal = RyaToRdfConversions.convertLiteral(ryaType);
+        assertEquals(VF.createLiteral("Hello", "en", Literal.BaseDirection.LTR), literal);
+        assertEquals(RDF.DIRLANGSTRING, literal.getDatatype());
+        assertEquals(Literal.BaseDirection.LTR, literal.getBaseDirection());
+    }
 }

@@ -87,6 +87,15 @@ public class CustomDatatypeResolver extends RyaTypeResolverImpl {
                 rt.setLanguage(LiteralLanguageUtils.UNDETERMINED_LANGUAGE);
             }
             data = parsedData;
+        } else if (RDF.DIRLANGSTRING.equals(rt.getDataType())) {
+            // "label@ar--rtl". A row written before base directions were supported has no tag;
+            // it keeps its data whole and no language.
+            final int langDelimiterPos = data.lastIndexOf(LiteralLanguageUtils.LANGUAGE_DELIMITER);
+            final String tag = langDelimiterPos < 0 ? null : data.substring(langDelimiterPos + 1);
+            if (LiteralLanguageUtils.directionSeparator(tag) >= 0) {
+                rt.setLanguage(tag);
+                data = data.substring(0, langDelimiterPos);
+            }
         }
         rt.setData(data);
         return rt;

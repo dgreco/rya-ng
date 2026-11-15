@@ -130,9 +130,25 @@ public class SparqlEndpointIT {
         assertTrue(ask("ASK { <urn:s> <urn:p> \"a\", \"b\" }"));
 
         assertEquals(400, update("INSERT DATA { <urn:s> <urn:q> <<( <urn:a> <urn:b> <urn:c> )>> }").statusCode());
-        final HttpResponse<String> directional = update("INSERT DATA { <urn:s> <urn:q> \"x\"@ar--rtl }");
-        assertEquals(400, directional.statusCode(), directional.body());
         assertFalse(ask("ASK { <urn:s> <urn:q> ?o }"));
+    }
+
+    @Test
+    void baseDirectionLiterals() throws Exception {
+        assertEquals(204, update("INSERT DATA { <urn:s> <urn:p> \"x\"@ar--rtl, \"x\"@ar, \"x\"@ar--ltr }").statusCode());
+        assertTrue(ask("ASK { <urn:s> <urn:p> \"x\"@ar--rtl }"));
+        assertTrue(ask("ASK { <urn:s> <urn:p> ?o FILTER(LANGDIR(?o) = \"rtl\" && LANG(?o) = \"ar\") }"));
+
+        final HttpResponse<String> r = get("SELECT ?o WHERE { <urn:s> <urn:p> ?o FILTER(hasLANGDIR(?o)) }",
+                "application/sparql-results+xml");
+        assertEquals(200, r.statusCode(), r.body());
+        assertTrue(r.body().contains("rtl") && r.body().contains("ltr"), r.body());
+
+        // An exact delete removes only that direction.
+        assertEquals(204, update("DELETE DATA { <urn:s> <urn:p> \"x\"@ar--rtl }").statusCode());
+        assertFalse(ask("ASK { <urn:s> <urn:p> \"x\"@ar--rtl }"));
+        assertTrue(ask("ASK { <urn:s> <urn:p> \"x\"@ar--ltr }"));
+        assertTrue(ask("ASK { <urn:s> <urn:p> \"x\"@ar }"));
     }
 
     @Test

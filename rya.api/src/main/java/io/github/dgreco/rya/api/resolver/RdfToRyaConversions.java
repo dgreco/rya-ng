@@ -76,8 +76,9 @@ public class RdfToRyaConversions {
         }
         if (literal.getDatatype() != null) {
             if (RDF.DIRLANGSTRING.equals(literal.getDatatype())) {
-                throw new UnsupportedValueException(
-                        "Literals with a base direction (rdf:dirLangString) cannot be stored: " + LogUtils.clean(literal.toString()));
+                // The RDF 1.2 tag as written, "ar--rtl": language and direction travel together.
+                final String language = literal.getLanguage().filter(Literals::isValidLanguageTag).orElse(UNDETERMINED_LANGUAGE);
+                return new RyaType(literal.getDatatype(), literal.stringValue(), language + literal.getBaseDirection());
             }
             if (Literals.isLanguageLiteral(literal)) {
                 final String language = literal.getLanguage().get();

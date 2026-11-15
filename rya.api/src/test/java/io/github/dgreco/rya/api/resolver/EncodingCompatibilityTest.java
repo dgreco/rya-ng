@@ -76,7 +76,10 @@ public class EncodingCompatibilityTest {
                 Arguments.of("int", new RyaType(XMLSchema.INT, "42"), "3830303030303261010d"),
                 Arguments.of("int-min", new RyaType(XMLSchema.INT, String.valueOf(Integer.MIN_VALUE)), "3030303030303030010d"),
                 Arguments.of("langString", new RyaType(RDF.LANGSTRING, "bonjour", "fr"), "626f6e6a6f757240667201687474703a2f2f7777772e77332e6f72672f313939392f30322f32322d7264662d73796e7461782d6e73236c616e67537472696e670108"),
-                Arguments.of("langString-region", new RyaType(RDF.LANGSTRING, "colour", "en-GB"), "636f6c6f757240656e2d474201687474703a2f2f7777772e77332e6f72672f313939392f30322f32322d7264662d73796e7461782d6e73236c616e67537472696e670108"));
+                Arguments.of("langString-region", new RyaType(RDF.LANGSTRING, "colour", "en-GB"), "636f6c6f757240656e2d474201687474703a2f2f7777772e77332e6f72672f313939392f30322f32322d7264662d73796e7461782d6e73236c616e67537472696e670108"),
+                // Added with RDF 1.2 base directions; "-legacy" is what older versions wrote for one.
+                Arguments.of("dirLangString", new RyaType(RDF.DIRLANGSTRING, "\u0645\u0631\u062d\u0628\u0627", "ar--rtl"), "d985d8b1d8add8a8d8a74061722d2d72746c01687474703a2f2f7777772e77332e6f72672f313939392f30322f32322d7264662d73796e7461782d6e73236469724c616e67537472696e670108"),
+                Arguments.of("dirLangString-legacy", new RyaType(RDF.DIRLANGSTRING, "hello"), "68656c6c6f01687474703a2f2f7777772e77332e6f72672f313939392f30322f32322d7264662d73796e7461782d6e73236469724c616e67537472696e670108"));
     }
 
     @ParameterizedTest(name = "{0}")

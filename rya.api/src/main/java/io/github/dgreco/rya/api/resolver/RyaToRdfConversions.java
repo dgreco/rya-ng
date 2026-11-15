@@ -79,9 +79,15 @@ public class RyaToRdfConversions {
                 return VF.createLiteral(data, LiteralLanguageUtils.UNDETERMINED_LANGUAGE);
             }
         } else if (RDF.DIRLANGSTRING.equals(ryaType.getDataType())) {
-            // Written before such literals were refused, without tag or direction. RDF4J rejects
-            // the datatype without them, which would fail every scan that reaches the row.
-            return VF.createLiteral(ryaType.getData());
+            final String tag = ryaType.getLanguage();
+            final int separator = LiteralLanguageUtils.directionSeparator(tag);
+            if (separator < 0) {
+                // Written before base directions were supported, without tag or direction. RDF4J
+                // rejects the datatype without them, which would fail every scan reaching the row.
+                return VF.createLiteral(ryaType.getData());
+            }
+            return VF.createLiteral(ryaType.getData(), tag.substring(0, separator),
+                    Literal.BaseDirection.fromString(tag.substring(separator)));
         }
         return VF.createLiteral(ryaType.getData(), ryaType.getDataType());
     }
