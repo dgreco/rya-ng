@@ -497,9 +497,13 @@ $R drop    $C --table-prefix big_ --confirm big_
   `load` refuses a store prepared for another dataset or with other index settings.
 - **Parallelism:** `--threads` writers per process. `--part K --parts N` divides the entities between processes, on one or more machines.
 - **Resuming:** progress is saved after each flush (every `--commit-interval`), and `--resume` continues from there. After a crash with `--durability` below `sync`, run `verify`.
-- **Throughput:** with statistics and both indexes on, each triple sends about 1 KB to the tablet servers (`dry-run` shows the breakdown per table), so a 1 Gbit/s link carries about 120k triples/s. `--stats off` or fewer indexes send less. `--durability flush` trades crash safety for speed, and `--max-rate` caps a process.
+- **Statistics:** a load doesn't write a subject's counters whose total is 1. The planner reads a missing counter as 1, so join orders are unchanged.
+  - This leaves out about half of the counter cells: 8.2 cells per triple are sent instead of 11.6.
+  - It is exact because a block holds whole entities, and no subject appears in two entities.
+  - `--stats-ones keep` writes every counter. It is a dataset option, so repeat it on every command, as `prepare` prints.
+- **Throughput:** with statistics and both indexes on, each triple sends about 870 bytes to the tablet servers (`dry-run` shows the breakdown per table), so a 1 Gbit/s link carries about 135k triples/s. `--stats off` or fewer indexes send less. `--durability flush` trades crash safety for speed, and `--max-rate` caps a process.
 - **Too many writers:** more writers than the cluster can absorb can starve ZooKeeper, and a tablet server that loses its ZooKeeper lock exits. Raise `--threads` gradually and watch the cluster.
-- **Disk:** after compaction, a test load took about 160 bytes per triple with statistics and both indexes: about 50 for statistics, 42 for text, 21 for each of spo, po and osp, and 1 for geo. Multiply by the replication factor of the storage.
+- **Disk:** after compaction, a test load took about 160 bytes per triple with statistics and both indexes: about 50 for statistics, 42 for text, 21 for each of spo, po and osp, and 1 for geo. That load wrote every counter. Leaving out the subject counters of 1 should save about two thirds of the statistics bytes, an estimate not yet measured. Multiply by the replication factor of the storage.
 - **Exit codes:** 0 done, 1 failed or interrupted (resume it), 2 bad arguments or a store that doesn't match.
 
 ## Embedding the Sail

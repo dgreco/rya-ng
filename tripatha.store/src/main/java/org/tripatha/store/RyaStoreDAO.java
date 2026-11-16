@@ -209,6 +209,20 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
      */
     @Override
     public synchronized void add(final Iterator<RyaStatement> statements) {
+        add(statements, EvalStatsMutations.CounterPolicy.ALL);
+    }
+
+    /**
+     * Adds statements like {@link #add(Iterator)}, leaving out the counters {@code policy} skips.
+     *
+     * <p>With {@link EvalStatsMutations.CounterPolicy#ALL} the counters are written early once
+     * 50,000 are pending, so memory stays bounded. With any other policy
+     * the counters of the whole call are summed before any is written, so the policy sees each
+     * counter's total for the call: pass bounded batches that hold every statement of their
+     * subjects (the loader passes whole blocks of entities).
+     */
+    public synchronized void add(final Iterator<RyaStatement> statements, final EvalStatsMutations.CounterPolicy policy) {
+        final boolean writeEarly = policy == EvalStatsMutations.CounterPolicy.ALL;
         final EvalStatsMutations.CounterBatch counts = maintainStats ? new EvalStatsMutations.CounterBatch() : null;
         final Set<GraphMarkerKey> markers = new HashSet<>();
         Exception failure = null;
@@ -225,7 +239,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                 }
                 if (counts != null) {
                     counts.add(stmt, 1);
-                    if (counts.size() >= MAX_PENDING_COUNTERS) {
+                    if (writeEarly && counts.size() >= MAX_PENDING_COUNTERS) {
                         bwEval.write(counts.drain());
                     }
                 }
@@ -237,7 +251,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
         // Count what was handed to the writers, even if a later statement failed.
         if (counts != null && counts.size() > 0) {
             try {
-                bwEval.write(counts.drain());
+                bwEval.write(counts.drain(policy));
             } catch (final Exception e) {
                 if (failure == null) {
                     failure = e;

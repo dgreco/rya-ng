@@ -95,9 +95,10 @@ public final class DryRun {
         final AtomicLong cursor = new AtomicLong(range[0]);
         final long end = range[0] + measured;
         t0 = System.nanoTime();
+        final EvalStatsMutations.CounterPolicy counters = o.statsOnes();
         final List<Thread> threads = new ArrayList<>();
         for (int i = 0; i < o.threads(); i++) {
-            final Thread th = new Thread(() -> measure(generator, conf, o.blockSize(), cursor, end, triples, bytes, cells));
+            final Thread th = new Thread(() -> measure(generator, conf, counters, o.blockSize(), cursor, end, triples, bytes, cells));
             threads.add(th);
             th.start();
         }
@@ -137,7 +138,8 @@ public final class DryRun {
                 + "measure it with a small load; storage that keeps 3 replicas uses 3 times that).%n", raw / 1e9);
     }
 
-    private static void measure(final EntityGenerator generator, final StoreRdfConfiguration conf, final int blockSize,
+    private static void measure(final EntityGenerator generator, final StoreRdfConfiguration conf,
+            final EvalStatsMutations.CounterPolicy counters, final int blockSize,
             final AtomicLong cursor, final long end, final AtomicLong triples, final Map<String, AtomicLong> bytes,
             final Map<String, AtomicLong> cells) {
         final RyaTableMutationsFactory factory = new RyaTableMutationsFactory(RyaTripleContext.getInstance(conf));
@@ -171,7 +173,7 @@ public final class DryRun {
                         }
                     }
                 }
-                add(b, c, 3, counts.drain());
+                add(b, c, 3, counts.drain(counters));
             }
         } catch (final Exception e) {
             throw new IllegalStateException(e);

@@ -31,6 +31,7 @@ import java.util.Set;
 
 import org.tripatha.hbase.HBaseLabels;
 import org.tripatha.hbase.HBaseStoreProvider;
+import org.tripatha.store.EvalStatsMutations.CounterPolicy;
 import org.tripatha.store.StoreRdfConfiguration;
 import org.tripatha.store.spi.Durability;
 import org.tripatha.loader.gen.EntityClass;
@@ -69,7 +70,7 @@ public final class LoaderOptions {
     private static final Set<String> VALUED = Set.of("table-prefix", "accumulo-properties", "zookeepers", "instance", "user",
             "backend", "rocksdb-path", "hbase-properties", "hbase-site", "hbase-conf", "hbase-user", "hbase-counters", "hbase-counters-jar",
             "hbase-labels-table", "grant-to",
-            "text-predicates", "stats", "entities", "triples", "start-entity", "end-entity", "seed", "timestamp", "graphs",
+            "text-predicates", "stats", "stats-ones", "entities", "triples", "start-entity", "end-entity", "seed", "timestamp", "graphs",
             "default-graph-fraction", "labels", "labelled-fraction", "geo-scale", "polygon-fraction", "text-scale",
             "link-skew", "word-skew", "class-weights", "rdf12-fraction", "base-iri", "part", "parts", "threads", "block-size",
             "commit-interval", "batch-memory-mb", "writer-threads", "max-latency", "writer-timeout", "durability",
@@ -404,6 +405,20 @@ public final class LoaderOptions {
         return !"off".equalsIgnoreCase(values.getOrDefault("stats", "on"));
     }
 
+    /**
+     * Which statistics counters a load writes: by default it leaves out a subject's counters whose
+     * total is 1 ({@code --stats-ones skip}), which the planner assumes for a missing counter.
+     * Exact because a block holds whole entities, and no subject spans two entities.
+     */
+    public CounterPolicy statsOnes() {
+        final String v = values.getOrDefault("stats-ones", "skip").trim().toLowerCase(Locale.ROOT);
+        return switch (v) {
+            case "skip" -> CounterPolicy.SKIP_SUBJECT_ONES;
+            case "keep" -> CounterPolicy.ALL;
+            default -> throw new IllegalArgumentException("--stats-ones takes skip or keep (got '" + values.get("stats-ones") + "')");
+        };
+    }
+
     /** The store configuration for this prefix and these index settings. */
     public StoreRdfConfiguration rdfConf() {
         final StoreRdfConfiguration conf = new StoreRdfConfiguration();
@@ -601,6 +616,8 @@ public final class LoaderOptions {
         }
         if (!stats()) {
             b.append(" --stats off");
+        } else if (statsOnes() == CounterPolicy.ALL) {
+            b.append(" --stats-ones keep");
         }
         return b.toString();
     }
@@ -716,6 +733,8 @@ public final class LoaderOptions {
                   --text-index --geo-index  maintain the search indexes (must match the endpoint's settings)
                   --text-predicates LIST    predicates to text-index (default all; rdfs:, rdf:, o: prefixes)
                   --stats on|off            keep join-ordering statistics (default on)
+                  --stats-ones skip|keep    skip (default): don't write a subject's counters whose total is 1,
+                                            which the planner assumes for a missing counter; keep: write them
                   --seed 42  --timestamp 1767225600000  --graphs 8  --default-graph-fraction 0.2
                   --labels A,B  --labelled-fraction 0.1  --geo-scale 1  --polygon-fraction 0.25
                   --text-scale 1  --link-skew 0.8  --word-skew 1  --class-weights Person=260,…  --base-iri urn:tripatha-gen:

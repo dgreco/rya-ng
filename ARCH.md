@@ -642,6 +642,13 @@ A label such as `"Colosseo di Roma"@it` adds one `text` entry per distinct word.
 
 The batch is written early once it holds 50,000 keys (`MAX_PENDING_COUNTERS`), so memory stays bounded. The Sail adds statements one call at a time, so this summing pays off only for bulk callers, such as the loader, that pass thousands of statements per call.
 
+**Leaving counters of 1 out.** The planner reads a missing counter as 1 ([section 11.2](#112-how-a-patterns-cardinality-is-estimated)), so a counter whose total is 1 changes no estimate. Most subject counters are such: a subject rarely has two statements with the same object (`so`) or the same predicate (`sp`).
+
+`add(statements, CounterPolicy.SKIP_SUBJECT_ONES)` leaves out the `s`, `sp` and `so` cells whose sum for the call is 1, label by label.
+- **When it is exact:** only when the call holds every statement of its subjects. So with this policy the whole call's counters are summed before any is written, without the early write at 50,000 keys.
+- **Who uses it:** the loader passes whole blocks of entities, which meet that condition ([section 18.3](#183-load)).
+- **What it saves:** about half of the counter cells it sends.
+
 ### 9.4 Flushing, threads and transactions
 
 - **Flushing:** by default (configuration key `ac.dao.flush`, read by `flushEachUpdate()`) the DAO flushes after every `add`, so a write is on the tablet servers when the call returns. Bulk writers call `setFlush(false)` and flush themselves.
@@ -785,6 +792,9 @@ The counters only influence join order, never results, so some drift is accepted
 - **Re-inserts:** re-inserting an existing statement counts it twice, although Accumulo stores it once.
 - **Graph drops:** dropping one graph doesn't adjust the all-graphs counters.
 - **Failed loads:** a load that fails part way may have written counters for blocks it writes again on resume.
+- **Left-out counters of 1** ([section 9.3](#93-counters-are-summed-before-they-are-written)):
+  - Re-adding such a statement online reads 1 instead of 2.
+  - A subject with one statement under label `A` and more under other labels reads the others only, one less.
 
 **Switches:**
 - `query.usestats=false` makes queries use RDF4J's own heuristic, with Tripatha's adjustments for inference and indexed patterns (`RyaDefaultStatistics`).
@@ -1580,6 +1590,11 @@ sequenceDiagram
 
 - **Workers:** each worker thread has its own DAO, because `add` is synchronized per DAO. Its batch-writer settings come from the options (buffer, writer threads, latency, timeout, durability).
 - **Blocks:** blocks of entities (`--block-size`, default 1000) are claimed from a shared counter. Each block is written with one `add`, so its statistics counters are summed before they are sent ([section 9.3](#93-counters-are-summed-before-they-are-written)).
+- **Counters of 1:** a subject's statements all come from its own entity, so a block's `s`, `sp` and `so` sums are final totals. By default the block's add leaves out those equal to 1 (`--stats-ones skip`; `keep` writes them).
+  - `prepare` writes the reference data the same way, in one call.
+  - `SplitPlanner` and `dry-run` count as the load writes.
+  - `verify` expects no cell where a label's count is 1.
+  - `EntityGeneratorTest` checks that no subject spans two entities.
 - **Progress:** a block is recorded in the progress file only after a flush that followed it. The file is written atomically (temporary file, then rename) and carries a fingerprint of the options, so `--resume` never mixes two loads. `--resume` skips recorded blocks and writes the others again. That is harmless for the statement tables (identical keys), but the counters of blocks in flight during a failure may be counted twice.
 - **Parallelism:** `--part K --parts N` divides the entities between processes, on one or several machines.
 

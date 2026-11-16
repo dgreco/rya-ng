@@ -218,6 +218,29 @@ class EntityGeneratorTest {
         assertTrue(checked > 500);
     }
 
+    /**
+     * The loader skips a subject's counters of 1 per block ({@code --stats-ones skip}), which is
+     * exact only because a subject's statements all come from one entity: no subject appears in two
+     * entities, nor in an entity and the reference data (written by prepare in one call).
+     */
+    @Test
+    void noSubjectSpansTwoEntitiesOrTheReferenceData() {
+        for (final GenConfig c : List.of(config, config.withRdf12Fraction(0.25))) {
+            final EntityGenerator g = new EntityGenerator(c);
+            final Map<String, Long> owner = new HashMap<>();
+            for (final RyaStatement s : ReferenceData.statements(g)) {
+                owner.put(s.getSubject().getData(), -1L);
+            }
+            for (long i = 0; i < 20_000; i++) {
+                for (final RyaStatement s : g.generate(i)) {
+                    final Long first = owner.putIfAbsent(s.getSubject().getData(), i);
+                    assertTrue(first == null || first == i, () -> s.getSubject().getData() + " is a subject in entity "
+                            + owner.get(s.getSubject().getData()) + " and in a later one (-1: the reference data)");
+                }
+            }
+        }
+    }
+
     @Test
     void referenceDataDescribesTheDataset() {
         final List<RyaStatement> reference = ReferenceData.statements(generator);

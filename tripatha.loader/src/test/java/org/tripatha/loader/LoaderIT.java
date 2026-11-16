@@ -379,7 +379,10 @@ class LoaderIT extends StoreITBase {
 
     // ---- checks ----
 
-    /** spo holds exactly the generated statements and the reference data; eval holds exactly their summed counters. */
+    /**
+     * spo holds exactly the generated statements and the reference data; eval holds exactly their
+     * summed counters, without the subject counters of 1 the load leaves out by default.
+     */
     private StoreRdfConfiguration assertStoreHoldsExactlyTheDataset() throws Exception {
         final LoaderOptions o = options();
         final StoreRdfConfiguration conf = o.rdfConf();
@@ -405,7 +408,7 @@ class LoaderIT extends StoreITBase {
         final EvalStatsMutations.CounterBatch batch = new EvalStatsMutations.CounterBatch();
         statements.forEach(st -> batch.add(st, 1));
         final Map<String, Long> expectedCounts = new HashMap<>();
-        for (final RowMutation m : batch.drain()) {
+        for (final RowMutation m : batch.drain(o.statsOnes())) {
             for (final RowMutation.Update u : m.updates()) {
                 expectedCounts.merge(cell(m.row(), u.family(), u.qualifier(), u.visibility()), u.delta(), Long::sum);
             }
