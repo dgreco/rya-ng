@@ -15,6 +15,13 @@ KIND, either express or implied.  See the License for the
 specific language governing permissions and limitations
 under the License. -->
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/tripatha-logo-dark.svg">
+    <img src="docs/assets/tripatha-logo-light.svg" alt="Tripatha" height="96">
+  </picture>
+</p>
+
 # rya-ng
 
 [![CI](https://github.com/dgreco/rya-ng/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dgreco/rya-ng/actions/workflows/ci.yml)
