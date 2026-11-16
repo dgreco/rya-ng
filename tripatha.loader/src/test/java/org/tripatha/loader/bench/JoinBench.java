@@ -18,6 +18,8 @@ package org.tripatha.loader.bench;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadMXBean;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -68,9 +70,12 @@ import jdk.jfr.consumer.RecordingFile;
  * <p>It loads the loader's dataset once (a RocksDB store named by
  * {@code -Dtripatha.test.rocksdbPath} is kept and reused), then runs every query a few times to
  * warm up and a few more to time it, and once more traced: the trace says how many scans the
- * query made, how many cells they returned and how long they spent in storage calls. With
- * {@code --profile} it also records where the CPU time of the timed runs went. The report goes to
- * the console and to {@code --out} as Markdown and CSV; {@code --baseline FILE.csv} adds the change
+ * query made, how many cells they returned and how long they spent in storage calls. Each timed
+ * run also measures the CPU time of the thread that ran the query and of the whole JVM, so the
+ * report says how much of a query's time was its own work and how much was waiting. With
+ * {@code --profile} it also records where the CPU time went (CPU samples only). {@code --variant}
+ * runs every query under several settings, alternating, on the same store. The report goes to the
+ * console and to {@code --out} as Markdown and CSV; {@code --baseline FILE.csv} adds the change
  * against an earlier report. Run it with {@code tripatha.loader/bench.sh}.
  */
 public final class JoinBench {
@@ -113,22 +118,27 @@ public final class JoinBench {
                 gen.entities(), settings.triples, Runtime.getRuntime().availableProcessors(), Runtime.version());
         try (Store store = backend.openStore()) {
             ensureLoaded(backend, store, dataset);
-            final StoreRdfConfiguration conf = dataset.rdfConf();
-            conf.setInfer(false);
-            settings.conf.forEach(conf::set);
             final List<Query> suite = suite(new EntityGenerator(gen));
-            final SailRepository repo = RyaSailFactory.createRepository(store, conf);
-            repo.init();
+            final Map<Variant, SailRepository> repos = new LinkedHashMap<>();
             try {
+                for (final Variant v : settings.variants) {
+                    final StoreRdfConfiguration conf = dataset.rdfConf();
+                    conf.setInfer(false);
+                    settings.conf.forEach(conf::set);
+                    v.conf().forEach(conf::set);
+                    final SailRepository repo = RyaSailFactory.createRepository(store, conf);
+                    repo.init();
+                    repos.put(v, repo);
+                }
                 final List<Result> results = new ArrayList<>();
                 for (final Query q : suite) {
                     if (settings.only.isEmpty() || settings.only.contains(q.name)) {
-                        results.add(measure(repo, q));
+                        results.addAll(measure(repos, q));
                     }
                 }
                 report(backend.id(), gen, results);
             } finally {
-                repo.shutDown();
+                repos.values().forEach(SailRepository::shutDown);
             }
         }
     }
@@ -312,17 +322,34 @@ public final class JoinBench {
 
     // ---- measuring ----
 
-    record Result(Query query, long rows, double[] ms, Traced traced, Profile profile) {
+    /** A named set of store settings the suite is run under, on top of {@code --conf}. */
+    record Variant(String name, Map<String, String> conf) {
+    }
+
+    /**
+     * One query under one variant: rows, and per timed run the wall time, the CPU time of the thread
+     * that ran the query, and the CPU time of the whole JVM.
+     */
+    record Result(Query query, Variant variant, long rows, boolean rowsDiffer, double[] ms, double[] cpuMs, double[] jvmCpuMs,
+            Traced traced, Profile profile) {
         double p50() {
-            return percentile(0.5);
+            return percentile(ms, 0.5);
         }
 
         double p90() {
-            return percentile(0.9);
+            return percentile(ms, 0.9);
         }
 
-        private double percentile(final double p) {
-            final double[] sorted = ms.clone();
+        double cpuP50() {
+            return percentile(cpuMs, 0.5);
+        }
+
+        double jvmCpuP50() {
+            return percentile(jvmCpuMs, 0.5);
+        }
+
+        private static double percentile(final double[] values, final double p) {
+            final double[] sorted = values.clone();
             Arrays.sort(sorted);
             return sorted[Math.min(sorted.length - 1, (int) Math.ceil(p * sorted.length) - 1)];
         }
@@ -332,31 +359,61 @@ public final class JoinBench {
     record Traced(int scans, long ranges, long cells, double storageMs, double wallMs) {
     }
 
-    private Result measure(final SailRepository repo, final Query q) throws Exception {
-        out.printf(Locale.ROOT, "%-14s ", q.name);
-        long rows = 0;
-        for (int i = 0; i < settings.warmup; i++) {
-            rows = execute(repo, q);
+    private static final ThreadMXBean THREADS = ManagementFactory.getThreadMXBean();
+    private static final com.sun.management.OperatingSystemMXBean OS =
+            (com.sun.management.OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
+
+    /**
+     * Runs a query under every variant: the warm-up runs, then the timed runs alternating between
+     * the variants (so drift in the machine's state affects them alike), then the profile and the
+     * traced run of each.
+     */
+    private List<Result> measure(final Map<Variant, SailRepository> repos, final Query q) throws Exception {
+        final List<Variant> variants = new ArrayList<>(repos.keySet());
+        final int n = variants.size();
+        final long[] rows = new long[n];
+        for (int j = 0; j < n; j++) {
+            for (int i = 0; i < settings.warmup; i++) {
+                rows[j] = execute(repos.get(variants.get(j)), q);
+            }
         }
-        final double[] ms = new double[settings.runs];
-        final Recording recording = settings.profile ? startRecording() : null;
-        try {
-            for (int i = 0; i < settings.runs; i++) {
+        final double[][] ms = new double[n][settings.runs];
+        final double[][] cpu = new double[n][settings.runs];
+        final double[][] jvm = new double[n][settings.runs];
+        for (int i = 0; i < settings.runs; i++) {
+            for (int j = 0; j < n; j++) {
+                final long c0 = THREADS.getCurrentThreadCpuTime();
+                final long p0 = OS.getProcessCpuTime();
                 final long t0 = System.nanoTime();
-                rows = execute(repo, q);
-                ms[i] = (System.nanoTime() - t0) / 1e6;
-            }
-        } finally {
-            if (recording != null) {
-                recording.stop();
+                rows[j] = execute(repos.get(variants.get(j)), q);
+                ms[j][i] = (System.nanoTime() - t0) / 1e6;
+                cpu[j][i] = (THREADS.getCurrentThreadCpuTime() - c0) / 1e6;
+                jvm[j][i] = (OS.getProcessCpuTime() - p0) / 1e6;
             }
         }
-        final Profile profile = recording == null ? null : Profile.of(recording, settings.out.resolve(q.name + ".jfr"));
-        final Traced traced = traced(repo, q);
-        final Result r = new Result(q, rows, ms, traced, profile);
-        out.printf(Locale.ROOT, "%,8d rows  p50 %9.1f ms  p90 %9.1f ms  %,6d scans  %,10d cells  storage %5.0f %%%n", rows, r.p50(),
-                r.p90(), traced.scans, traced.cells, traced.wallMs == 0 ? 0 : Math.min(100, 100 * traced.storageMs / traced.wallMs));
-        return r;
+        final List<Result> results = new ArrayList<>(n);
+        for (int j = 0; j < n; j++) {
+            final SailRepository repo = repos.get(variants.get(j));
+            Profile profile = null;
+            if (settings.profile) {
+                final Recording recording = startRecording();
+                try {
+                    for (int i = 0; i < settings.runs; i++) {
+                        execute(repo, q);
+                    }
+                } finally {
+                    recording.stop();
+                }
+                profile = Profile.of(recording, settings.out.resolve(q.name + "-" + j + ".jfr"));
+            }
+            final Traced traced = traced(repo, q);
+            final Result r = new Result(q, variants.get(j), rows[j], rows[j] != rows[0], ms[j], cpu[j], jvm[j], traced, profile);
+            results.add(r);
+            out.printf(Locale.ROOT, "%-14s %-10s %,8d rows%s  p50 %9.1f ms  query CPU %8.1f ms  JVM CPU %8.1f ms  %,7d ranges  %,10d cells%n",
+                    q.name, n == 1 ? "" : variants.get(j).name(), rows[j], r.rowsDiffer ? " (DIFFERENT)" : "", r.p50(), r.cpuP50(),
+                    r.jvmCpuP50(), traced.ranges, traced.cells);
+        }
+        return results;
     }
 
     private long execute(final SailRepository repo, final Query q) {
@@ -406,13 +463,13 @@ public final class JoinBench {
 
     private static Recording startRecording() {
         final Recording r = new Recording();
+        // CPU samples only: threads waiting on the network or a lock are not sampled.
         r.enable("jdk.ExecutionSample").withPeriod(Duration.ofMillis(1));
-        r.enable("jdk.NativeMethodSample").withPeriod(Duration.ofMillis(10));
         r.start();
         return r;
     }
 
-    /** Where the sampled time of the timed runs went: by kind of code, and the busiest methods. */
+    /** Where the CPU time of the profiled runs went: by kind of code, and the busiest methods. */
     record Profile(int samples, Map<String, Integer> byArea, List<Map.Entry<String, Integer>> topOwn,
             List<Map.Entry<String, Integer>> topSelf) {
 
@@ -424,7 +481,8 @@ public final class JoinBench {
             final Map<String, Integer> self = new HashMap<>();
             int samples = 0;
             for (final RecordedEvent e : RecordingFile.readAllEvents(file)) {
-                if (e.getStackTrace() == null || e.getStackTrace().getFrames().isEmpty()) {
+                if (!e.getEventType().getName().equals("jdk.ExecutionSample") || e.getStackTrace() == null
+                        || e.getStackTrace().getFrames().isEmpty()) {
                     continue;
                 }
                 final var thread = e.getThread("sampledThread");
@@ -502,41 +560,77 @@ public final class JoinBench {
     // ---- reporting ----
 
     private void report(final String backend, final GenConfig gen, final List<Result> results) throws IOException {
-        final Map<String, double[]> baseline = settings.baseline == null ? Map.of() : readBaseline(settings.baseline);
+        final Map<String, Double> baseline = settings.baseline == null ? Map.of() : readBaseline(settings.baseline);
+        final boolean variants = settings.variants.size() > 1;
+        final Variant first = settings.variants.get(0);
         final StringBuilder md = new StringBuilder();
         md.append("# Join benchmark, ").append(backend).append("\n\n");
         md.append(String.format(Locale.ROOT, "%s, %,d entities (about %s triples), %d warm-up and %d timed runs per query, "
-                + "%d processors, Java %s.%s%n%n", LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS), gen.entities(), settings.triples,
+                + "%d processors, Java %s.%s%n", LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS), gen.entities(), settings.triples,
                 settings.warmup, settings.runs, Runtime.getRuntime().availableProcessors(), Runtime.version(),
                 settings.conf.isEmpty() ? "" : " Settings: " + settings.conf + "."));
-        md.append("| Query | What it exercises | Rows | p50 ms | p90 ms |").append(baseline.isEmpty() ? "" : " p50 vs baseline |")
-                .append(" Scans | Ranges | Cells | Storage % |\n");
-        md.append("|---|---|---|---|---|").append(baseline.isEmpty() ? "" : "---|").append("---|---|---|---|\n");
-        final StringBuilder csv = new StringBuilder("query,rows,p50_ms,p90_ms,scans,ranges,cells,storage_ms,wall_ms\n");
+        if (variants) {
+            md.append("\nVariants, timed alternately: ").append(settings.variants.stream()
+                    .map(v -> "`" + v.name() + "` " + (v.conf().isEmpty() ? "(no change)" : v.conf().toString()))
+                    .collect(Collectors.joining(", "))).append(".\n");
+        }
+        md.append('\n');
+        md.append("| Query |").append(variants ? " Variant |" : " What it exercises |").append(" Rows | p50 ms | p90 ms |")
+                .append(variants ? " vs `" + first.name() + "` |" : "").append(baseline.isEmpty() ? "" : " p50 vs baseline |")
+                .append(" Query CPU ms | JVM CPU ms | Scans | Ranges | Cells | Storage % |\n");
+        md.append("|---|---|---|---|---|").append(variants ? "---|" : "").append(baseline.isEmpty() ? "" : "---|")
+                .append("---|---|---|---|---|---|\n");
+        final StringBuilder csv = new StringBuilder("query,variant,rows,p50_ms,p90_ms,cpu_ms,jvm_cpu_ms,scans,ranges,cells,storage_ms,wall_ms\n");
+        final Map<String, Double> firstP50 = new HashMap<>();
+        for (final Result r : results) {
+            if (r.variant.equals(first)) {
+                firstP50.put(r.query.name, r.p50());
+            }
+        }
         for (final Result r : results) {
             final Traced t = r.traced;
-            md.append(String.format(Locale.ROOT, "| %s | %s | %,d | %.1f | %.1f |", r.query.name, r.query.purpose, r.rows, r.p50(),
-                    r.p90()));
-            if (!baseline.isEmpty()) {
-                final double[] b = baseline.get(r.query.name);
-                md.append(b == null ? " — |" : String.format(Locale.ROOT, " %+.0f %% |", 100 * (r.p50() - b[0]) / b[0]));
+            md.append(String.format(Locale.ROOT, "| %s | %s | %,d%s | %.1f | %.1f |", r.query.name,
+                    variants ? r.variant.name() : r.query.purpose, r.rows, r.rowsDiffer ? " ≠" : "", r.p50(), r.p90()));
+            if (variants) {
+                final Double f = firstP50.get(r.query.name);
+                md.append(r.variant.equals(first) || f == null ? " — |" : String.format(Locale.ROOT, " %+.0f %% |", 100 * (r.p50() - f) / f));
             }
-            md.append(String.format(Locale.ROOT, " %,d | %,d | %,d | %.0f |%n", t.scans, t.ranges, t.cells,
-                    t.wallMs == 0 ? 0 : Math.min(100, 100 * t.storageMs / t.wallMs)));
-            csv.append(String.format(Locale.ROOT, "%s,%d,%.3f,%.3f,%d,%d,%d,%.3f,%.3f%n", r.query.name, r.rows, r.p50(), r.p90(),
-                    t.scans, t.ranges, t.cells, t.storageMs, t.wallMs));
+            if (!baseline.isEmpty()) {
+                Double b = baseline.get(r.query.name + "|" + r.variant.name());
+                if (b == null) {
+                    b = baseline.get(r.query.name);
+                }
+                md.append(b == null ? " — |" : String.format(Locale.ROOT, " %+.0f %% |", 100 * (r.p50() - b) / b));
+            }
+            md.append(String.format(Locale.ROOT, " %.1f | %.1f | %,d | %,d | %,d | %.0f |%n", r.cpuP50(), r.jvmCpuP50(), t.scans, t.ranges,
+                    t.cells, t.wallMs == 0 ? 0 : Math.min(100, 100 * t.storageMs / t.wallMs)));
+            csv.append(String.format(Locale.ROOT, "%s,%s,%d,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%.3f,%.3f%n", r.query.name, r.variant.name(), r.rows,
+                    r.p50(), r.p90(), r.cpuP50(), r.jvmCpuP50(), t.scans, t.ranges, t.cells, t.storageMs, t.wallMs));
         }
-        md.append("\n**Storage %** is the time the traced run spent in storage calls, summed over its scans, against its wall "
-                + "time. Concurrent scans can add up to more than the wall time, so it is capped at 100.\n");
+        md.append("""
+
+                - **Query CPU** is the CPU time of the thread that ran the query (median of the timed runs). It waited for the rest \
+                of its wall time: on the store, or on scanner threads.
+                - **JVM CPU** is the CPU time of the whole JVM over the same runs: scanner threads, and a store running in this \
+                JVM (RocksDB, the HBase test cluster). The Accumulo test cluster's tablet server runs in another process, so its \
+                work is not in it.
+                - **Storage %** is the time the traced run spent in storage calls, summed over its scans, against its wall time. \
+                It includes the client's work on every cell returned. Concurrent scans can add up to more than the wall time, so it \
+                is capped at 100.
+                """);
+        if (results.stream().anyMatch(r -> r.rowsDiffer)) {
+            md.append("- **≠**: this variant returned a different number of rows than the first. That is a bug in the variant.\n");
+        }
         if (results.stream().anyMatch(r -> r.profile != null)) {
-            md.append("\n## Where the time goes\n\nSamples of the timed runs, by the innermost frame that isn't the JDK "
-                    + "(so a `HashMap.get` counts for the code that called it).\n");
+            md.append("\n## Where the CPU time goes\n\nCPU samples of extra runs (threads waiting on the network or a lock are not "
+                    + "sampled), by the innermost frame that isn't the JDK (so a `HashMap.get` counts for the code that called it).\n");
             for (final Result r : results) {
                 final Profile p = r.profile;
                 if (p == null || p.samples == 0) {
                     continue;
                 }
-                md.append("\n### ").append(r.query.name).append(" (").append(p.samples).append(" samples)\n\n");
+                md.append("\n### ").append(r.query.name).append(variants ? " (" + r.variant.name() + ")" : "").append(", ")
+                        .append(p.samples).append(" samples\n\n");
                 md.append(p.byArea.entrySet().stream().sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
                         .map(e -> String.format(Locale.ROOT, "- %s: %.0f %%", e.getKey(), 100.0 * e.getValue() / p.samples))
                         .collect(Collectors.joining("\n")));
@@ -557,12 +651,19 @@ public final class JoinBench {
         out.println("Report: " + mdFile.toAbsolutePath() + " (and .csv; pass it as --baseline to compare a later run)");
     }
 
-    private static Map<String, double[]> readBaseline(final Path csv) throws IOException {
-        final Map<String, double[]> m = new HashMap<>();
+    /** p50 by query, and by query and variant when the report has variants (older reports have none). */
+    private static Map<String, Double> readBaseline(final Path csv) throws IOException {
+        final Map<String, Double> m = new HashMap<>();
         final List<String> lines = Files.readAllLines(csv, StandardCharsets.UTF_8);
+        final boolean withVariant = lines.get(0).startsWith("query,variant,");
         for (final String line : lines.subList(1, lines.size())) {
             final String[] f = line.split(",");
-            m.put(f[0], new double[] {Double.parseDouble(f[2])});
+            if (withVariant) {
+                m.put(f[0] + "|" + f[1], Double.parseDouble(f[3]));
+                m.putIfAbsent(f[0], Double.parseDouble(f[3]));
+            } else {
+                m.put(f[0], Double.parseDouble(f[2]));
+            }
         }
         return m;
     }
@@ -570,7 +671,7 @@ public final class JoinBench {
     // ---- settings ----
 
     record Settings(String triples, int warmup, int runs, int timeoutSeconds, int loadThreads, boolean profile, Path out,
-            Path baseline, List<String> only, Map<String, String> conf) {
+            Path baseline, List<String> only, Map<String, String> conf, List<Variant> variants) {
         static final String USAGE = """
                 Usage: bench.sh [--backend rocksdb|accumulo|hbase] [options]
                   --triples 10M        dataset size (the loader's generator, both indexes on)
@@ -579,6 +680,8 @@ public final class JoinBench {
                   --profile            record where the CPU time of the timed runs goes (JFR)
                   --only a,b           run only these queries
                   --conf key=value     a store configuration setting, for example query.join.batchsize=100
+                  --variant NAME:k=v,k=v  run every query under this variant too, alternating with the others on the
+                                       same store (repeat it; the first is the reference; NAME: alone changes nothing)
                   --baseline FILE.csv  compare the p50 latencies with an earlier report
                   --out DIR            where reports go (default tripatha.loader/target/bench)
                   --load-threads 8     writer threads for the one-time load
@@ -595,6 +698,7 @@ public final class JoinBench {
             Path baseline = null;
             List<String> only = List.of();
             final Map<String, String> conf = new LinkedHashMap<>();
+            final List<Variant> variants = new ArrayList<>();
             for (int i = 0; i < args.length; i++) {
                 final String a = args[i];
                 if (a.equals("--profile")) {
@@ -621,10 +725,33 @@ public final class JoinBench {
                         }
                         conf.put(v.substring(0, eq), v.substring(eq + 1));
                     }
+                    case "--variant" -> variants.add(variant(v));
                     default -> throw new IllegalArgumentException("unknown option " + a);
                 }
             }
-            return new Settings(triples, warmup, runs, timeout, loadThreads, profile, out, baseline, only, conf);
+            if (variants.isEmpty()) {
+                variants.add(new Variant("default", Map.of()));
+            }
+            return new Settings(triples, warmup, runs, timeout, loadThreads, profile, out, baseline, only, conf, List.copyOf(variants));
+        }
+
+        private static Variant variant(final String v) {
+            final int colon = v.indexOf(':');
+            if (colon <= 0) {
+                throw new IllegalArgumentException("--variant takes NAME:key=value,key=value (got '" + v + "')");
+            }
+            final Map<String, String> conf = new LinkedHashMap<>();
+            for (final String kv : v.substring(colon + 1).split(",")) {
+                if (kv.isBlank()) {
+                    continue;
+                }
+                final int eq = kv.indexOf('=');
+                if (eq <= 0) {
+                    throw new IllegalArgumentException("--variant takes NAME:key=value,key=value (got '" + v + "')");
+                }
+                conf.put(kv.substring(0, eq).trim(), kv.substring(eq + 1).trim());
+            }
+            return new Variant(v.substring(0, colon), conf);
         }
     }
 }

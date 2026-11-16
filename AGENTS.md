@@ -56,8 +56,13 @@ mvn -pl tripatha.sail verify -Dit.test=InferenceIT -Dtest=none -Dsurefire.failIf
 - **Speed:** MAC tests cost about 5 s each, mostly creating the six Tripatha tables; HBase tests about the same (table deletes run in the background).
 - **Join benchmark** (`JoinBench` in `tripatha.loader`'s test sources, SCALE-STUDY.md M8): `tripatha.loader/bench.sh [--build] [--backend rocksdb|accumulo|hbase] [--profile] [--baseline FILE.csv]`.
   - It loads a generated store of 10M triples once. On RocksDB the store is kept in `tripatha.loader/target/bench/rocksdb` and reused.
-  - It runs a fixed query suite and writes a Markdown and a CSV report to `tripatha.loader/target/bench`: latencies, plus scans, cells and storage time from the trace. `--profile` adds where the CPU time goes.
-  - Use `--build` after changing code. Report a query-path optimization as a before/after pair of these reports.
+  - It runs a fixed query suite and writes a Markdown and a CSV report to `tripatha.loader/target/bench`:
+    - latencies;
+    - the query thread's CPU time and the JVM's (the rest of a query's time is waiting);
+    - scans, cells and storage time from the trace.
+  - `--profile` adds where the CPU time goes (CPU samples only).
+  - `--variant NAME:k=v,…` (repeatable) runs each query under each setting, alternating, on the same store, and flags a variant that returns different rows. Runs on different days are too noisy to compare (±40 % on the Accumulo test cluster), so prefer variants.
+  - Use `--build` after changing code. Report a query-path optimization as a before/after pair of reports, or as variants of one run when it has a switch.
 - **Hadoop override:** the root POM forces Hadoop 3.5.0 everywhere: Accumulo's default, 3.3.x, fails on JDK 23+ with `getSubject is not supported`, and HBase's 3.4.3 is untested here. `hbase-client` excludes `hadoop-common`/`hadoop-auth` and uses `hadoop-client-api`/`-runtime`, like Accumulo; only the test cluster (`hbase-testing-util`) brings the full Hadoop jars.
 - **`metrics-core`:** required at test scope; without it the MAC ZooKeeper dies with `NoClassDefFoundError: com/codahale/metrics/Reservoir`.
 - **Logging:** non-Boot modules bind `slf4j-simple` in tests. Do not add it to `tripatha.sparql`, where Spring Boot requires Logback to be the only SLF4J provider.
