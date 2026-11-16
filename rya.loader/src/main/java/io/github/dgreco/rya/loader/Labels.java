@@ -22,6 +22,7 @@ import java.util.List;
 
 import io.github.dgreco.rya.hbase.HBaseLabels;
 import io.github.dgreco.rya.hbase.HBaseStore;
+import io.github.dgreco.rya.rocksdb.RocksStore;
 import io.github.dgreco.rya.store.spi.Store;
 
 /**
@@ -36,6 +37,10 @@ final class Labels {
     }
 
     static void run(final Store store, final LoaderOptions o, final PrintStream out) {
+        if (store instanceof RocksStore) {
+            out.println("Nothing to do: a RocksDB store has no accounts, so every label is held.");
+            return;
+        }
         final String user = o.grantTo() != null ? o.grantTo() : store.access().whoami();
         grant(store, user, o.labelList(), o.hbaseLabelsTable());
         out.println("Gave " + user + " the labels " + o.labelList()

@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 import io.github.dgreco.rya.accumulo.AccumuloStore;
 import io.github.dgreco.rya.hbase.HBaseLabels;
 import io.github.dgreco.rya.hbase.HBaseStore;
+import io.github.dgreco.rya.rocksdb.RocksStore;
 import io.github.dgreco.rya.store.spi.Store;
 
 /**
@@ -154,6 +155,8 @@ public final class LoaderMain {
             final Properties props = accumulo.client().properties();
             out.println("Connected to Accumulo instance " + props.getProperty("instance.name") + " (ZooKeepers "
                     + props.getProperty("instance.zookeepers") + ") as " + user + ".");
+        } else if (store instanceof RocksStore rocks) {
+            out.println("Opened the RocksDB database in " + rocks.directory() + " as " + user + ".");
         } else {
             out.println("Connected to " + store.backend() + " as " + user + ".");
         }
@@ -162,6 +165,9 @@ public final class LoaderMain {
         if (labels.isPresent()) {
             out.println("Labels of " + user + ": " + (labels.get().isEmpty() ? "none (unlabeled data only)"
                     : String.join(",", labels.get())));
+        } else if (store instanceof RocksStore) {
+            out.println("Labels: every label is held (a RocksDB store has no accounts; whoever can read its "
+                    + "directory can read every statement)");
         } else {
             out.println("Labels of " + user + ": not readable on " + store.backend()
                     + " (the endpoint checks its labels at startup)");

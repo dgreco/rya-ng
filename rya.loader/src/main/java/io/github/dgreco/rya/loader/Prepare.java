@@ -24,6 +24,7 @@ import org.apache.hadoop.io.Text;
 
 import io.github.dgreco.rya.hbase.HBaseLabels;
 import io.github.dgreco.rya.hbase.HBaseStore;
+import io.github.dgreco.rya.rocksdb.RocksStore;
 import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import io.github.dgreco.rya.store.spi.Store;
 import io.github.dgreco.rya.store.RyaStoreDAO;
@@ -61,7 +62,9 @@ public final class Prepare {
 
             final int servers = Math.max(1, store.tables().serverCount());
             final int splits = o.splits() < 0 ? 4 * servers - 1 : o.splits();
-            if (splits > 0) {
+            if (store instanceof RocksStore) {
+                out.println("No splits: a RocksDB store is one local database.");
+            } else if (splits > 0) {
                 out.println("Planning " + splits + " splits per table (" + servers + " servers)…");
                 final Map<String, SortedSet<Text>> plan = SplitPlanner.plan(generator, conf, splits);
                 SplitPlanner.apply(store, plan);
@@ -94,9 +97,14 @@ public final class Prepare {
                 + Math.round(o.genConfig().entities() * LoaderOptions.triplesPerEntity(o.genConfig()) / 1e6) + "M triples), fingerprint "
                 + o.genConfig().fingerprint().substring(0, 16) + "…");
         out.println();
-        out.println("Load it (one process, or one per --part on as many machines as you like):");
-        out.println("  run.sh load " + o.datasetArgs() + " --threads 8");
-        out.println("  run.sh load " + o.datasetArgs() + " --part 0 --parts 2 --threads 8   # and --part 1 --parts 2");
+        if (store instanceof RocksStore) {
+            out.println("Load it (one process: only one at a time can open a RocksDB directory):");
+            out.println("  run.sh load " + o.datasetArgs() + " --threads 8");
+        } else {
+            out.println("Load it (one process, or one per --part on as many machines as you like):");
+            out.println("  run.sh load " + o.datasetArgs() + " --threads 8");
+            out.println("  run.sh load " + o.datasetArgs() + " --part 0 --parts 2 --threads 8   # and --part 1 --parts 2");
+        }
         out.println();
         final StringBuilder flags = new StringBuilder();
         if (store instanceof HBaseStore hbase) {
@@ -108,6 +116,9 @@ public final class Prepare {
             if (!o.hbaseLabelsTable().equals(HBaseLabels.DEFAULT_TABLE)) {
                 flags.append("--rya.hbase.labels-table=").append(o.hbaseLabelsTable()).append(' ');
             }
+        }
+        if (store instanceof RocksStore rocks) {
+            flags.append("--rya.backend=rocksdb --rya.rocksdb.path=").append(rocks.directory()).append(' ');
         }
         flags.append("--rya.table-prefix=").append(o.tablePrefix());
         flags.append(" --rya.text-index=").append(o.textIndex()).append(" --rya.geo-index=").append(o.geoIndex());

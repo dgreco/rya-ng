@@ -17,6 +17,7 @@ package io.github.dgreco.rya.loader;
 
 import io.github.dgreco.rya.accumulo.AccumuloStore;
 import io.github.dgreco.rya.hbase.HBaseStoreProvider;
+import io.github.dgreco.rya.rocksdb.RocksStore;
 import io.github.dgreco.rya.store.spi.Store;
 
 /** Opens the store of {@code --backend}: Accumulo (the default) or HBase. */
@@ -35,7 +36,8 @@ final class StoreFactory {
                 }
                 yield new HBaseStoreProvider().open(settings);
             }
-            default -> throw new IllegalArgumentException("--backend must be accumulo or hbase, not " + o.backend());
+            case "rocksdb" -> RocksStore.open(o.rocksdbPath());
+            default -> throw new IllegalArgumentException("--backend must be accumulo, hbase or rocksdb, not " + o.backend());
         };
     }
 }

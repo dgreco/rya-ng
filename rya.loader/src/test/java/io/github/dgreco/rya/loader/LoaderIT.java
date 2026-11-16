@@ -104,6 +104,9 @@ class LoaderIT extends StoreITBase {
             return env(MiniAccumuloSingleton.ROOT_USER, MiniAccumuloSingleton.ROOT_PASSWORD);
         }
         final Properties settings = backend().storeSettings();
+        if (onBackend("rocksdb")) {
+            return Map.of("RYA_BACKEND", "rocksdb", "RYA_ROCKSDB_PATH", settings.getProperty("rocksdb.path"));
+        }
         final List<String> conf = new ArrayList<>();
         for (final String key : settings.stringPropertyNames()) {
             if (key.startsWith("hbase.conf.")) {
@@ -181,9 +184,12 @@ class LoaderIT extends StoreITBase {
         }
 
         final StoreRdfConfiguration conf = assertStoreHoldsExactlyTheDataset();
-        assertEquals(7, getStore().tables().splitCount(getTablePrefix() + "spo"));
-        assertTrue(getStore().tables().splitCount(getTablePrefix() + "text") > 0);
-        assertTrue(getStore().tables().splitCount(getTablePrefix() + "geo") > 0);
+        if (!onBackend("rocksdb")) {
+            // A RocksDB store is one local database: there is nothing to split.
+            assertEquals(7, getStore().tables().splitCount(getTablePrefix() + "spo"));
+            assertTrue(getStore().tables().splitCount(getTablePrefix() + "text") > 0);
+            assertTrue(getStore().tables().splitCount(getTablePrefix() + "geo") > 0);
+        }
         for (final IndexType type : IndexType.values()) {
             final IndexVerifier.Report report = IndexVerifier.verify(getStore(), conf, type);
             assertTrue(report.isClean(), type + ": " + report);
@@ -326,6 +332,11 @@ class LoaderIT extends StoreITBase {
         }
         final Run r = run(asAdmin, "labels", args);
         assertEquals(0, r.code(), r.all());
+        if (onBackend("rocksdb")) {
+            // No accounts: every label is held, and the command says so.
+            assertTrue(r.out().contains("every label is held"), r.all());
+            return;
+        }
         assertTrue(getUserAuthorizations().contains(label), getUserAuthorizations().toString());
         if (onBackend("hbase")) {
             assertEquals(List.of(), io.github.dgreco.rya.hbase.HBaseLabels.missingCanaries((io.github.dgreco.rya.hbase.HBaseStore) getStore(),
