@@ -20,6 +20,7 @@ package io.github.dgreco.rya.test.accumulo;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.util.Map;
 import java.util.Properties;
 
 import org.apache.accumulo.minicluster.MiniAccumuloCluster;
@@ -30,13 +31,17 @@ import org.slf4j.LoggerFactory;
 /**
  * One {@link MiniAccumuloCluster} per JVM, started on first use and stopped by a shutdown hook.
  * Starting a cluster takes several seconds, so tests share it and isolate themselves with
- * unique table prefixes (see {@link AccumuloITBase}).
+ * unique table prefixes (see {@link AccumuloITBase}). Its servers bind to, and are advertised
+ * as, the loopback address, like the HBase test cluster's.
  */
 public final class MiniAccumuloSingleton {
     private static final Logger log = LoggerFactory.getLogger(MiniAccumuloSingleton.class);
 
     public static final String ROOT_USER = "root";
     public static final String ROOT_PASSWORD = "password";
+
+    /** The address the cluster's servers bind to and advertise. */
+    private static final String LOOPBACK = "127.0.0.1";
 
     private static MiniAccumuloCluster cluster;
     private static File clusterDir;
@@ -54,6 +59,10 @@ public final class MiniAccumuloSingleton {
                 clusterDir = dir;
                 final MiniAccumuloConfig config = new MiniAccumuloConfig(dir, ROOT_PASSWORD);
                 config.setNumTservers(1);
+                // Without this the servers advertise the machine's host name, and a name that
+                // stops resolving mid-run (another network, a rename, a sleep) cuts the manager
+                // off from the tablet server, which it then halts.
+                config.setSiteConfig(Map.of("rpc.bind.addr", LOOPBACK));
                 final MiniAccumuloCluster started = new MiniAccumuloCluster(config);
                 log.info("Starting MiniAccumuloCluster in {}", dir);
                 started.start();
