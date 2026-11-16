@@ -56,6 +56,11 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
      * (their attributes) in one batch per window of driver rows, instead of one per join.
      */
     public static final String CONF_JOIN_ENTITY_PREFETCH = "query.join.entityprefetch";
+    /**
+     * Read a subject asked for by several lookups of one batch as one range (default false: on
+     * the warm join benchmark it read 4 times the cells for no gain, SCALE-STUDY.md O21).
+     */
+    public static final String CONF_JOIN_SUBJECT_RANGES = "query.join.subjectranges";
     /** Narrow a pattern's scan to the prefix a {@code STRSTARTS} filter requires of its object (default true). */
     public static final String CONF_QUERY_PREFIX_RANGES = "query.prefixranges";
     /** Maintain the full-text index (table {@code <prefix>text}). */
@@ -730,6 +735,15 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setJoinEntityPrefetch(final boolean enabled) {
         setBoolean(CONF_JOIN_ENTITY_PREFETCH, enabled);
+    }
+
+    /** Whether a subject asked for by several lookups of one batch is read as one range. */
+    public boolean isJoinSubjectRanges() {
+        return getBoolean(CONF_JOIN_SUBJECT_RANGES, false);
+    }
+
+    public void setJoinSubjectRanges(final boolean enabled) {
+        setBoolean(CONF_JOIN_SUBJECT_RANGES, enabled);
     }
 
     /** Whether a {@code STRSTARTS} filter on a pattern's object narrows the pattern's scan to the prefix. */

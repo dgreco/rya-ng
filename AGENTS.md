@@ -136,6 +136,9 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
   - The step reads left rows in windows (64, doubling up to `query.join.batchsize`, default 1000), and `StoreTripleSource.prefetch` fetches all of a window's lookups via `BatchLookup` (one `batchQuery` per table and graph). A `LIMIT` query thus stops after a small fetch.
   - RDF4J's own statement-pattern step then runs per row against that cache, so join semantics stay RDF4J's.
   - `BatchLookup` matches results to lookups on exact encoded values and deduplicates cells. Never register a partial prefetch: a missing key must mean "ask the store".
+  - **Subject ranges** (`query.join.subjectranges`, off by default): a subject asked for by two or more keys of a batch in `spo` is read as its whole range, and the exact matching keeps the answers.
+    - If those ranges return more than 64 cells per subject (plus 1,024), the batch is re-read one range per key.
+    - It is off because on the warm benchmark it read 4× the cells for no gain. It is to be tried on a cold cache.
   - Run the ITs with `-Dtripatha.test.joinBatchSize=2` (and `-Dtripatha.join-batch-size=2` for `tripatha.sparql`) to push every test through chunk boundaries.
   - Run them with `-Dtripatha.test.indexes=true` to maintain both indexes in every test. `RyaSailITBase` then checks each test's index tables against spo with `IndexVerifier`.
 - **Entity prefetch:** `prepare(Join)` (before trying a `BatchedJoinStep`) and `prepare(LeftJoin)` look for an `EntityChain`: joins and OPTIONALs that each add one statement pattern over a driver, typically an entity's attributes (`?s a :P ; :name ?n OPTIONAL { ?s :email ?e }`). On by default (`query.join.entityprefetch`, endpoint `tripatha.entity-prefetch`); needs batching allowed.

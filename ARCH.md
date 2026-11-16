@@ -1076,8 +1076,13 @@ The join then shows `algorithm: RyaBatchedJoin` in the plan. A chunk with a sing
 
    A key's answer is exactly what a single lookup would have returned.
 3. **No double counting.** Within a group, a stored cell counts once, identified by its statement, graph, qualifier, label and timestamp.
-4. **A size cap.** If more than `query.join.prefetchlimit` statements (default 100,000) would be held in memory, `fetch` returns `null`. Nothing is cached, and every key is looked up on its own.
-5. **Never a partial batch.** A key missing from the cache must mean "ask the store", never "no results". So a batch is registered whole or not at all.
+4. **One range per subject, when switched on** (`query.join.subjectranges`, off by default). In `spo`, a subject asked for by two or more keys of a group (the links of an entity chain, for example) is read as its whole range, `s 00`, instead of one range per key.
+   - **The idea:** the subject's statements are neighbouring rows, so one seek reads them all.
+   - **Why the answers don't change:** the exact matching of step 2 keeps only what each key asks for.
+   - **Large subjects:** if the group's subject ranges return more than 64 cells per subject read whole, plus 1,024, a subject with many statements is among them. The group is then read again one range per key, and the trace notes it.
+   - **Why it is off:** on the warm join benchmark it halved the ranges but read about four times the cells. Accumulo was no faster, and RocksDB was 50 to 64 % slower (SCALE-STUDY.md O21). It may pay where a seek is a block read, on a cold cache, and that is still to be measured.
+5. **A size cap.** If more than `query.join.prefetchlimit` statements (default 100,000) would be held in memory, `fetch` returns `null`. Nothing is cached, and every key is looked up on its own.
+6. **Never a partial batch.** A key missing from the cache must mean "ask the store", never "no results". So a batch is registered whole or not at all.
 
 Batches form a stack in `StoreTripleSource`, so nested batched joins each keep their own until they release it.
 
