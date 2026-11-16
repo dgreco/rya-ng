@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-rya-ng is an RDF triple store on Accumulo or HBase. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with nine modules (plus `rya.coverage` under `-Pcoverage`), groupId `io.github.dgreco.rya`, version `1.0.0-SNAPSHOT`, Java packages under `io.github.dgreco.rya`. `BACKENDS-STUDY.md` is the design of the storage layer and of the HBase mapping.
+rya-ng is an RDF triple store on Accumulo, HBase or an embedded RocksDB database. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with ten modules (plus `rya.coverage` under `-Pcoverage`), groupId `io.github.dgreco.rya`, version `1.0.0-SNAPSHOT`, Java packages under `io.github.dgreco.rya`. `BACKENDS-STUDY.md` is the design of the storage layer and of the HBase mapping.
 
 | Component | Version | Notes |
 |---|---|---|
@@ -12,6 +12,7 @@ rya-ng is an RDF triple store on Accumulo or HBase. It's an independent project 
 | RDF4J | 6.1 | Jakarta-based |
 | Accumulo | 2.1.6 | client API only: `AccumuloClient`, never `Connector`/`Instance` |
 | HBase | 3.0.0 | the plain `hbase-client` (not the shaded one), with `VisibilityController` for labels |
+| RocksDB | 11.8.1 | `rocksdbjni`: a JNI library, so test JVMs run with `--enable-native-access=ALL-UNNAMED` |
 | Spring Boot | 4.1 | `rya.sparql` only |
 | JUnit | 6 | |
 
@@ -30,6 +31,9 @@ mvn -pl rya.sail -am install -DskipTests -DskipITs    # failsafe ignores -DskipT
 mvn verify -pl rya.test,rya.sail,rya.loader,rya.sparql -Drya.test.backend=hbase
 mvn verify -pl rya.test -Drya.test.backend=hbase -Drya.test.hbaseCounters=increment   # counters without the coprocessor
 
+# ...or on RocksDB: no cluster, about two minutes for all of them
+mvn verify -pl rya.rocksdb,rya.test,rya.sail,rya.loader,rya.sparql -Drya.test.backend=rocksdb
+
 # single test: install upstream first, then run one module without -am
 mvn -pl rya.api test -Dtest=TypeEncodingDelimiterTest
 mvn -pl rya.sail verify -Dit.test=InferenceIT -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false
@@ -39,7 +43,7 @@ mvn -pl rya.sail verify -Dit.test=InferenceIT -Dtest=none -Dsurefire.failIfNoSpe
 - **Coverage and CI:**
   - `-Pcoverage` attaches JaCoCo's agent to surefire (`target/jacoco.exec`) and failsafe (`target/jacoco-it.exec`). It also adds `rya.coverage`, whose `report-aggregate` merges both into `rya.coverage/target/site/jacoco-aggregate`.
   - The agent travels in the `argLine` property, so failsafe's `argLine` must keep `@{argLine}`. Any new surefire/failsafe `argLine` must include it too.
-  - `.github/workflows/ci.yml` runs `mvn clean verify -Pcoverage` (job `build`), and the ITs on HBase in both counter modes (job `hbase`). `.github/scripts/ci_summary.py` turns the test XML and `jacoco.csv` into the run summary and the badge JSON. Pushes to `main` deploy the report to GitHub Pages (`/coverage/`, plus `/badge.json` and `/tests.json`, which feed the README's shields.io endpoint badges).
+  - `.github/workflows/ci.yml` runs `mvn clean verify -Pcoverage` (job `build`), the ITs on HBase in both counter modes (job `hbase`), and the ITs on RocksDB (job `rocksdb`). `.github/scripts/ci_summary.py` turns the test XML and `jacoco.csv` into the run summary and the badge JSON. Pushes to `main` deploy the report to GitHub Pages (`/coverage/`, plus `/badge.json` and `/tests.json`, which feed the README's shields.io endpoint badges).
 - **IT base classes** (`rya.test`):
   - `StoreITBase` gives each test a `Store` on the backend named by `-Drya.test.backend` (`accumulo` by default; `TestBackends`), and a unique table prefix whose tables are deleted afterwards. `grantAuthorizations(...)` gives the test account labels: Accumulo rejects scans with labels the user lacks and HBase silently ignores them, so any visibility test must call it. `assumeBackend("accumulo")` marks a backend-only test.
   - `TestBackend` is a backend's shared cluster: `openStore()`, `grantLabels`, `compact(table)`, and `storeSettings()`/`endpointProperties()` for code that connects on its own (the loader, the endpoint ITs, `DevServer`).
@@ -47,6 +51,7 @@ mvn -pl rya.sail verify -Dit.test=InferenceIT -Dtest=none -Dsurefire.failIfNoSpe
   - `rya.sail` tests use `RyaSailITBase`, which adds `newConf()`, `newDao(conf)` and `newStore(conf, inference)`.
   - `rya.test`'s own tests are the store-level ITs (`RyaStoreDAOIT`, `RangeParityIT`, `LabelParityIT`, `CounterIT`, …), run on the selected backend.
 - **The Accumulo test cluster** (`MiniAccumuloSingleton`): one MiniAccumuloCluster per JVM, with `rpc.bind.addr` set to the loopback address. Otherwise its servers advertise the machine's host name, and a name that stops resolving mid-run makes the manager halt the tablet server; the tests then hang until the fork times out.
+- **The RocksDB test backend** (`RocksDBTestBackend`): one database per JVM in a new temporary directory (`-Drya.test.rocksdbPath` names another), kept open until the JVM exits. The backend has no accounts, so the labels a test grants are only remembered. It is the fastest way to run the ITs while working on anything above the storage SPI; run them on Accumulo and HBase before a PR.
 - **The HBase test cluster** (`MiniHBaseSingleton`, recipe in BACKENDS-STUDY.md phase 0): ZooKeeper plus HBase in the test JVM, on the local file system (in-process HDFS clashes with Accumulo's Jersey 3), with `VisibilityController` and `hbase.security.authorization=true`. The process user is an HBase superuser, who sees every cell, so tests run as the normal account `ryatest`. The coprocessor is on the cluster's classpath through `rya.test`'s dependencies. It binds to and advertises the loopback address: with two interfaces on one network, the host name can resolve to the wrong one mid-run.
 - **Speed:** MAC tests cost about 5 s each, mostly creating the six Rya tables; HBase tests about the same (table deletes run in the background).
 - **Hadoop override:** the root POM forces Hadoop 3.5.0 everywhere: Accumulo's default, 3.3.x, fails on JDK 23+ with `getSubject is not supported`, and HBase's 3.4.3 is untested here. `hbase-client` excludes `hadoop-common`/`hadoop-auth` and uses `hadoop-client-api`/`-runtime`, like Accumulo; only the test cluster (`hbase-testing-util`) brings the full Hadoop jars.
@@ -55,7 +60,7 @@ mvn -pl rya.sail verify -Dit.test=InferenceIT -Dtest=none -Dsurefire.failIfNoSpe
 
 ## Architecture
 
-Data flows `rya.api` → `rya.store` → `rya.sail` → `rya.sparql`, with a backend (`rya.accumulo` or `rya.hbase`) plugged in under `rya.store`. `rya.loader` writes through `rya.store` only.
+Data flows `rya.api` → `rya.store` → `rya.sail` → `rya.sparql`, with a backend (`rya.accumulo`, `rya.hbase` or `rya.rocksdb`) plugged in under `rya.store`. `rya.loader` writes through `rya.store` only.
 
 ### Storage (`rya.store`)
 
@@ -83,7 +88,14 @@ The storage SPI (`store.spi`) is cell-shaped: `Store` (`scan`, `batchScan`, `del
   - **Writes:** one `BufferedMutator` per table, all flushed at once; one HBase mutation per operation and label.
   - **Counters:** `coprocessor` mode (default): deltas are plain puts, `rya.hbase.coprocessor`'s `CounterObserver` gives each a unique timestamp and sums them on reads, flushes and major compactions. `increment` mode: HBase increments; dropping counters sets them to zero instead of deleting them (an increment's timestamp can run ahead of the clock, and a delete there would hide the next ones). A table's own descriptor decides its mode; an account that can't read descriptors uses its configured mode, so every writer must be configured alike.
   - Rows over 32,767 bytes are refused.
-- **Trace:** `StoreTrace` (scope, reasons, `Trace`) is neutral. Accumulo reports through client proxies (`AccumuloTrace.wrap`, applied by `AccumuloStore`), HBase through `TracedScans` and its writer.
+- **RocksDB** (`rya.rocksdb`, BACKENDS-STUDY.md section 10): a store in a local directory, in the caller's process.
+  - **Cells** (`RocksCodec`): key = `esc(row) 00 01 family 00 qualifier 00 visibility`, where `esc` writes a `00` byte as `00 FF`, so RocksDB's default byte order is Accumulo's key order (`RocksCodecTest`). Don't give RocksDB a Java comparator: it costs a JNI call per comparison. Value = 8-byte big-endian timestamp, then the value. One version per cell: the last write wins.
+  - **Tables** are column families of one database; a table's `TableKind` is recorded in the default column family. Every family has the add operator, so the database reopens without knowing each kind. `deleteRows` drops and recreates the family; handles of dropped families are closed with the database, because a scanner may still be reading one.
+  - **Labels** are enforced in `RocksScan`, the only read path, with `VisibilityExpression`. There are no accounts: every label is held, `Auths.ALL_HELD` filters nothing, and `heldLabels()` is empty. File access to the directory bypasses labels.
+  - **Counters:** RocksDB's `uint64add` merge operator, 8-byte little-endian, summed on reads and compactions. Merging onto a value that isn't 8 bytes silently restarts the count, so counter tables refuse PUT and other tables refuse counter deltas.
+  - **Writes:** one `WriteBatch` per `CellWriter`, across families; a flush is one atomic write. A timestamped delete first writes the batch, then reads the cell and deletes it only if its timestamp is at or before the delete's.
+  - **One database per directory and process** (`RocksDatabase`): stores and scanners of a directory in one JVM share the open database and count their uses; the last release closes it. Scanners hold native memory: close them (they close themselves when exhausted).
+- **Trace:** `StoreTrace` (scope, reasons, `Trace`) is neutral. Accumulo reports through client proxies (`AccumuloTrace.wrap`, applied by `AccumuloStore`), HBase and RocksDB through `TracedScans` and their writers.
 
 ### Loader (`rya.loader`)
 
@@ -91,9 +103,9 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
 - **Generator** (`gen/`): `EntityGenerator.generate(i)` returns entity `i`'s statements from the seed and `i` alone (`SplitMix64` streams), so any process can produce any range, and a rerun writes identical keys (one fixed timestamp per dataset). `ClassLayout` interleaves the classes over 1000 slots. Literals use the exact lexical form the resolvers read back. `GenConfig.fingerprint()` identifies a dataset. `--rdf12-fraction` annotates that share of the links with triple terms and gives that share of the language-tagged labels a base direction, from a random stream of its own: the other choices, and the fingerprint at 0, are those of the RDF 1.1 dataset.
 - **`prepare`** runs once, from one process: one DAO init creates the tables with READY indexes (concurrent inits would race), `SplitPlanner` adds split points at quantiles of the rows a sample would write (same serializers as the DAO), and `ReferenceData` writes the ontology plus the dataset description holding the fingerprint.
 - **`load`:** `StoreCheck.forLoad` refuses a store that wasn't prepared for the same dataset and index settings. Each worker thread has its own DAO, claims blocks of entities from a shared cursor, and writes each block with one `add`. A block is recorded in the `Progress` file only after a later flush; `--resume` skips recorded blocks.
-- **Connection:** `StoreFactory` opens `--backend accumulo|hbase`. For Accumulo, `ClientFactory` uses `AccumuloClients.fromFile` (in `rya.accumulo`, shared with the endpoint); a properties file with password auth and no `auth.token` takes the password from `RYA_ACCUMULO_PASSWORD`. For HBase, `LoaderOptions.hbaseSettings()` layers the provider's settings: `RYA_HBASE_*`, then the `--hbase-properties` file (which selects HBase; only provider keys, client settings as `hbase.conf.<key>`), then `--hbase-site`, `--hbase-conf 'k=v;k=v'`, `--hbase-user`, `--hbase-counters`, `--hbase-counters-jar`. An empty `--hbase-user=` clears the account, so `labels` can run as the process user. `check` reports what the store reaches. An account that sees label canaries (`HBaseLabels.NotEnforced`) is a configuration error, exit 2.
+- **Connection:** `StoreFactory` opens `--backend accumulo|hbase|rocksdb`. RocksDB needs only `--rocksdb-path DIR` (or `RYA_ROCKSDB_PATH`), which also selects it; `prepare` plans no splits for it, and one process at a time can open the directory (`--threads`, not `--part` across processes). For Accumulo, `ClientFactory` uses `AccumuloClients.fromFile` (in `rya.accumulo`, shared with the endpoint); a properties file with password auth and no `auth.token` takes the password from `RYA_ACCUMULO_PASSWORD`. For HBase, `LoaderOptions.hbaseSettings()` layers the provider's settings: `RYA_HBASE_*`, then the `--hbase-properties` file (which selects HBase; only provider keys, client settings as `hbase.conf.<key>`), then `--hbase-site`, `--hbase-conf 'k=v;k=v'`, `--hbase-user`, `--hbase-counters`, `--hbase-counters-jar`. An empty `--hbase-user=` clears the account, so `labels` can run as the process user. `check` reports what the store reaches. An account that sees label canaries (`HBaseLabels.NotEnforced`) is a configuration error, exit 2.
 - **`labels`** (and `prepare --grant-auths`) gives an account labels; on HBase it also registers them, grants `rya.none`, and writes their canaries (needs an HBase superuser).
-- **`configure.sh`** asks for the backend first, then writes `accumulo-client.properties` or `hbase.properties` (for `--hbase-properties`), with mode 600. Test it as `/bin/bash rya.loader/configure.sh` with piped answers and `--defaults` for both backends. Values are escaped the way Java reads `.properties` (ISO-8859-1): anything outside printable ASCII becomes `\uXXXX` via `iconv` and `od`, which must stay bash-3.2 compatible.
+- **`configure.sh`** asks for the backend first, then writes `accumulo-client.properties` or `hbase.properties` (for `--hbase-properties`), with mode 600. For RocksDB it writes nothing: it asks for the directory and prints the `--rocksdb-path` option. Test it as `/bin/bash rya.loader/configure.sh` with piped answers and `--defaults` for both backends. Values are escaped the way Java reads `.properties` (ISO-8859-1): anything outside printable ASCII becomes `\uXXXX` via `iconv` and `od`, which must stay bash-3.2 compatible.
 - **`verify`** regenerates a sample of entities and compares them with spo and the subject counters, under the reader's labels.
 - `LoaderIT` checks spo and eval cell by cell against the regenerated data, after parallel parts, a stop and resume, and a write failure followed by a resume.
 
@@ -130,7 +142,7 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
   - `TripleTermOptimizer.fold` (after projection removal) turns all-constant `TripleRef`s into a one-row `BindingSetAssignment`; `order` (right after `QueryJoinOptimizer`) puts each remaining `TripleRef` just after the pattern that binds its variable.
   - `TripleRefStep` unifies a bound term in memory, and otherwise asks `StoreTripleSource.tripleTerms`. RDF4J's own step lists the whole store and casts subjects to `Resource`.
   - `TripleTermRangeSource` makes a statement pattern whose object is a term with a constant subject read only that prefix range. The `TripleRef` still checks every result.
-  - Run `TripleTermIT` on both backends, and with the batch-size and index switches above, after touching any of this.
+  - Run `TripleTermIT` on every backend, and with the batch-size and index switches above, after touching any of this.
 - **Inference nodes:** `RyaEvaluationStrategy.prepare(StatementPattern)` handles the two node types inference produces. `FixedStatementPattern` is matched from in-memory ontology statements; `TransitivePropertySP` goes through `InferenceEngine.findTransitiveProperty`.
 - **`InferenceEngine`:** loads the ontology into memory (`ValueGraph` for the subClassOf/subPropertyOf hierarchies) and reloads it on a timer. Ontology changes are invisible until the next `refreshGraph()`; tests call it explicitly.
 - **Wiring:** `RyaSailFactory` builds DAO + stats + inference + sail from a `Store` and a `StoreRdfConfiguration`. The caller owns the store.
@@ -143,7 +155,7 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
 
 - `SparqlController` implements the SPARQL Protocol at `/sparql` for SPARQL 1.1 and 1.2, with content negotiation in `ContentNegotiation` and errors mapped in `SparqlExceptionHandler`.
 - **RDF 1.2 output:** `BlankNodeOutput` recurses into triple terms. SELECT results in JSON go through `DirectionJsonWriter` (`"its:dir": "rtl"`; RDF4J 6.1 writes `"--rtl"`, which its own reader rejects). RDF4J's TSV reader can't read a nested triple term back, and JSON-LD writes triple terms as `urn:rdf4j:tripleTerm:` IRIs.
-- Settings are `RyaProperties` (`rya.*` in `application.yaml`). `rya.backend` picks the store (`RyaStoreConfiguration`); `rya.hbase.*` configures HBase (`conf[key]` for client settings). On HBase the endpoint refuses to start when its account can't read a label of `rya.sparql.authorizations` (their canaries).
+- Settings are `RyaProperties` (`rya.*` in `application.yaml`). `rya.backend` picks the store (`RyaStoreConfiguration`); `rya.hbase.*` configures HBase (`conf[key]` for client settings), and `rya.rocksdb.path` is the directory of a RocksDB store. On HBase the endpoint refuses to start when its account can't read a label of `rya.sparql.authorizations` (their canaries).
 - A request's `timeout=` (seconds) replaces `rya.sparql.query-timeout`, up to `rya.sparql.max-query-timeout`; the query page sends it from its Timeout field.
 - **Tracing:** `trace=<id>` streams the request's storage operations as Server-Sent Events on `/sparql/trace/<id>` (`TraceController`, `TraceHub`), shown by `ui/rya-trace.js`.
   - Recording lives in `rya.store`'s `trace` package, and a `ThreadLocal` scope collects the events (see Backends for how each backend reports).
@@ -161,7 +173,7 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
   - Settings go in as `--rya.*` arguments. Spring's environment-variable form of a dashed name drops the dash (`RYA_ACCUMULO_CLIENTPROPERTIES`), so arguments are less error-prone.
   - Only the password travels in the environment (`RYA_ACCUMULO_PASSWORD`). It is read when the script starts and never written. HBase needs none (simple authentication or Kerberos).
   - To test it, pipe answers in (one per line) or use `--defaults`, then run `bash -n` on the output.
-- `DevServer`, under test sources, runs the endpoint on a throwaway in-process cluster (`mvn -pl rya.sparql spring-boot:test-run -Dspring-boot.run.main-class=io.github.dgreco.rya.sparql.DevServer`; add `-Dspring-boot.run.jvmArguments=-Drya.test.backend=hbase` for HBase).
+- `DevServer`, under test sources, runs the endpoint on a throwaway in-process cluster (`mvn -pl rya.sparql spring-boot:test-run -Dspring-boot.run.main-class=io.github.dgreco.rya.sparql.DevServer`; add `-Dspring-boot.run.jvmArguments=-Drya.test.backend=hbase` for HBase, or `"-Drya.test.backend=rocksdb -Drya.test.rocksdbPath=DIR"` for a RocksDB store that keeps its data in `DIR`). The Docker image runs it; with `RYA_BACKEND=rocksdb` its data is in the `rya-data` volume.
 
 ## Gotchas
 

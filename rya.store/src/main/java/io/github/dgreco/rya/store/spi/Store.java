@@ -27,7 +27,7 @@ import java.util.Collection;
  */
 public interface Store extends AutoCloseable {
 
-    /** The backend's id: {@code accumulo}, {@code hbase}. */
+    /** The backend's id: {@code accumulo}, {@code hbase}, {@code rocksdb}. */
     String backend();
 
     /** What the backend does natively. */

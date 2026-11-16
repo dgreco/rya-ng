@@ -23,7 +23,7 @@ import java.util.Properties;
  */
 public interface StoreProvider {
 
-    /** The backend's id, as in {@code rya.backend}: {@code accumulo}, {@code hbase}. */
+    /** The backend's id, as in {@code rya.backend}: {@code accumulo}, {@code hbase}, {@code rocksdb}. */
     String id();
 
     /**
