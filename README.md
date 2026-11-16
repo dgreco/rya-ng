@@ -175,6 +175,15 @@ mvn -pl rya.sparql -am install -DskipTests
 mvn -pl rya.sparql spring-boot:test-run -Dspring-boot.run.main-class=io.github.dgreco.rya.sparql.DevServer
 ```
 
+Or with Docker, which needs neither a JDK nor Maven. It runs the same throwaway server, with both search indexes on:
+
+```bash
+docker compose up --build                     # then open http://localhost:8080/
+RYA_BACKEND=hbase docker compose up --build   # on HBase instead of Accumulo
+```
+
+The first build downloads the dependencies and takes several minutes. `RYA_PORT` changes the published port. The data is lost when the container stops, so this is for trying rya-ng out, not for running it.
+
 ### Query page
 
 Open the server's root URL (for example `http://localhost:8080/`) for a query page built on [YASGUI](https://github.com/zazuko/Yasgui).

@@ -1,0 +1,10 @@
+.git
+.github
+.idea
+.nodeterm
+**/target
+*.progress
+rya-sparql.sh
+accumulo-client.properties
+hbase.properties
+CLAUDE.local.md
