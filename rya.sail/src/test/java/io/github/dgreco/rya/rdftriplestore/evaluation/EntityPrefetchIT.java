@@ -132,6 +132,16 @@ public class EntityPrefetchIT extends RyaSailITBase {
         assertEquals(0, prefetch.getPrefetchOverflowCount());
     }
 
+    /** RDF4J nests plain joins to the right, which hid all but the first from the chain. */
+    @Test
+    public void requiredAttributesAreFetchedTogether() {
+        final String query = "SELECT * WHERE { ?s a <urn:Person> ; <urn:name> ?n ; <urn:worksFor> ?c }";
+        final StoreTripleSource<StoreRdfConfiguration> prefetch = evaluate(query, c -> { });
+
+        assertEquals(1, prefetch.getStoreLookupCount(), "only the driver's scan goes to the store");
+        assertEquals(1, prefetch.getPrefetchCount());
+    }
+
     @Test
     public void windowsTooLargeToHoldAreHalved() {
         final StoreTripleSource<StoreRdfConfiguration> limited = evaluate(STAR, c -> c.setJoinPrefetchLimit(10));

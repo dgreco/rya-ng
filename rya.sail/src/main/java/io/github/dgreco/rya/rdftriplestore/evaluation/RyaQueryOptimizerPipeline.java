@@ -119,7 +119,10 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
                 new FilterOptimizer(statistics, false, true),
                 StandardQueryOptimizerPipeline.FILTER_IN_VALUES_OPTIMIZER,
                 new FilterOptimizer(statistics),
-                StandardQueryOptimizerPipeline.ORDER_LIMIT_OPTIMIZER));
+                StandardQueryOptimizerPipeline.ORDER_LIMIT_OPTIMIZER,
+                // Last: gives every join of a chain a statement pattern on its right, which is
+                // what the batched join and the entity prefetch work on.
+                new LeftDeepJoinOptimizer()));
         return optimizers;
     }
 }

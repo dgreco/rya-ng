@@ -108,6 +108,7 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
 
 - **Connection:** `RdfCloudTripleStoreConnection.evaluateInternal` uses RDF4J's stock `DefaultEvaluationStrategy`, subclassed as `RyaEvaluationStrategy`, over `StoreTripleSource`.
 - **Optimizers:** `RyaQueryOptimizerPipeline` mirrors RDF4J's `StandardQueryOptimizerPipeline`, with `InferenceOptimizer` (the 15 `*Visitor` rewrites in `inference/`) inserted before `QueryJoinOptimizer`. When copying RDF4J internals, read the sources jars in `~/.m2` (for example `rdf4j-queryalgebra-model-6.1.0-sources.jar`).
+- **Join shape:** RDF4J's join optimizer nests joins to the right (`Join(a, Join(b, c))`), which evaluates the inner join once per row of `a`: nothing to batch, no entity chain. `LeftDeepJoinOptimizer`, the last step of the pipeline, rotates them to `Join(Join(a, b), c)`, same argument order and same results. It leaves merge joins, scope changes, subqueries and join subclasses (inference) alone.
 - **Batched joins:** `RyaEvaluationStrategy.prepare(Join)` returns a `BatchedJoinStep` when the right side is a plain statement pattern, optionally under filters, and there is no dataset, merge join, scope change or `query.limit`. Otherwise it uses RDF4J's own join.
   - The step reads up to `query.join.batchsize` left rows (default 1000), and `StoreTripleSource.prefetch` fetches all their lookups via `BatchLookup` (one `batchQuery` per table and graph).
   - RDF4J's own statement-pattern step then runs per row against that cache, so join semantics stay RDF4J's.
