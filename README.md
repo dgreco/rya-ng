@@ -80,7 +80,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs `mvn clean verify -Pcoverage` o
 - Each run's summary lists the tests and the coverage per module, and the HTML coverage report is attached to the run.
 - For pushes to `main`, the report is published at <https://dgreco.github.io/tripatha/coverage/>. The coverage and tests badges above show its line coverage and test count.
 
-The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.jar`.
+The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.jar`. `tripatha.standalone` packages it with the RocksDB backend only, as a jar and as a native executable (see [Standalone](#standalone-one-program-no-cluster-no-jvm)).
 
 ## Modules
 
@@ -95,6 +95,7 @@ The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.ja
 | `tripatha.sail` | RDF4J Sail (`RdfCloudTripleStore`), query planning, inference, and `RyaSailFactory` |
 | `tripatha.sparql` | Spring Boot SPARQL endpoint |
 | `tripatha.loader` | Synthetic data generator and parallel loader, for stress tests |
+| `tripatha.standalone` | The endpoint with the RocksDB backend only: an executable jar, and with `-Pnative` a native executable |
 | `tripatha.test` | Test-only harness: one shared cluster per backend per JVM, and the store-level integration tests |
 
 ## Storage backends
@@ -127,6 +128,25 @@ tripatha.loader/run.sh prepare --rocksdb-path /var/lib/tripatha --table-prefix t
 - **Rewriting a statement** keeps the last write. Accumulo and HBase keep the write with the newest timestamp, which differs only when timestamps are set out of order.
 - Splits mean nothing here: `prepare` plans none.
 - It is one database on one machine: no replication, and its size and speed are that machine's.
+
+### Standalone: one program, no cluster, no JVM
+
+`tripatha.standalone` is the endpoint and its query page with the RocksDB backend and nothing of Accumulo, HBase or Hadoop's clusters. It builds two things:
+
+```bash
+# an executable jar (needs Java 25)
+mvn -pl tripatha.standalone -am package -DskipTests -DskipITs
+java -jar tripatha.standalone/target/tripatha-1.0.0-SNAPSHOT.jar --tripatha.backend=rocksdb --tripatha.rocksdb.path=/var/lib/tripatha
+
+# a native executable (needs GraalVM 25 with native-image to build; nothing to run)
+mvn -Pnative -pl tripatha.standalone -am package -DskipTests -DskipITs
+tripatha.standalone/target/tripatha --tripatha.backend=rocksdb --tripatha.rocksdb.path=/var/lib/tripatha
+```
+
+- The native executable takes the same settings as the jar, as arguments or as `TRIPATHA_*` environment variables. It starts in well under a second and uses far less memory than the JVM.
+- It is built for the machine it is compiled on (Linux x64 and arm64, macOS). It unpacks RocksDB's native library into the temporary directory when it starts, so that directory must be writable.
+- `tripatha.standalone/smoke-test.sh http://localhost:8080` runs a started endpoint through its result formats, updates, searches, triple terms, tracing and the query page's files. It empties the store first.
+- The loader is not part of it: load through SPARQL updates, or with the loader jar while the endpoint is stopped.
 
 ## Running the SPARQL endpoint
 
@@ -210,7 +230,11 @@ TRIPATHA_BACKEND=hbase docker compose up --build   # on HBase instead of Accumul
 TRIPATHA_BACKEND=rocksdb docker compose up --build # on RocksDB: the data is kept in a volume
 ```
 
-The first build downloads the dependencies and takes several minutes. `TRIPATHA_PORT` changes the published port. On Accumulo and HBase the data is lost when the container stops. On RocksDB it is kept in the `tripatha-data` volume until `docker compose down -v`. Either way this is for trying Tripatha out, not for running it.
+The first build downloads the dependencies and takes several minutes. `TRIPATHA_PORT` changes the published port.
+- **Accumulo and HBase** run on a JVM with an in-process cluster. The data is lost when the container stops.
+- **RocksDB** runs the [native executable](#standalone-one-program-no-cluster-no-jvm) on a small base image: it starts in about a second, and the data is kept in the `tripatha-data` volume until `docker compose down -v`. Compiling the executable takes a few more minutes and several GB of memory.
+
+Either way this is for trying Tripatha out, not for running it.
 
 ### Query page
 

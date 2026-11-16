@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Tripatha is an RDF triple store on Accumulo, HBase or an embedded RocksDB database. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with ten modules (plus `tripatha.coverage` under `-Pcoverage`), groupId `org.tripatha`, version `1.0.0-SNAPSHOT`, Java packages under `org.tripatha`. `BACKENDS-STUDY.md` is the design of the storage layer and of the HBase mapping.
+Tripatha is an RDF triple store on Accumulo, HBase or an embedded RocksDB database. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with eleven modules (plus `tripatha.coverage` under `-Pcoverage`), groupId `org.tripatha`, version `1.0.0-SNAPSHOT`, Java packages under `org.tripatha`. `BACKENDS-STUDY.md` is the design of the storage layer and of the HBase mapping.
 
 | Component | Version | Notes |
 |---|---|---|
@@ -173,7 +173,13 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
   - Settings go in as `--tripatha.*` arguments. Spring's environment-variable form of a dashed name drops the dash (`TRIPATHA_ACCUMULO_CLIENTPROPERTIES`), so arguments are less error-prone.
   - Only the password travels in the environment (`TRIPATHA_ACCUMULO_PASSWORD`). It is read when the script starts and never written. HBase needs none (simple authentication or Kerberos).
   - To test it, pipe answers in (one per line) or use `--defaults`, then run `bash -n` on the output.
-- `DevServer`, under test sources, runs the endpoint on a throwaway in-process cluster (`mvn -pl tripatha.sparql spring-boot:test-run -Dspring-boot.run.main-class=org.tripatha.sparql.DevServer`; add `-Dspring-boot.run.jvmArguments=-Dtripatha.test.backend=hbase` for HBase, or `"-Dtripatha.test.backend=rocksdb -Dtripatha.test.rocksdbPath=DIR"` for a RocksDB store that keeps its data in `DIR`). The Docker image runs it; with `TRIPATHA_BACKEND=rocksdb` its data is in the `tripatha-data` volume.
+- **No backend imports:** `RyaStoreConfiguration` builds each backend's settings and calls `Stores.open`, so the endpoint compiles without any backend (they are runtime dependencies). Keep it that way: `tripatha.standalone` leaves Accumulo and HBase out. A backend that can't refuse a read with unheld labels reports them through `StoreAccess.unreadableLabels`, which the endpoint checks at start-up.
+- **Standalone and native** (`tripatha.standalone`): the endpoint's `lib` jar plus `tripatha.rocksdb`, repackaged as an executable jar; `-Pnative` runs Spring Boot's ahead-of-time processing and GraalVM's `native-image` (`target/tripatha`).
+  - Reachability metadata is in `src/main/resources/META-INF/native-image/org.tripatha/traced/`. Don't put it under `org.tripatha/tripatha.standalone`: Spring's generated file has that path and replaces it.
+  - It was collected with the tracing agent (`java -agentlib:native-image-agent=config-output-dir=DIR -jar …`) while `smoke-test.sh` ran against the jar. After upgrading RDF4J, Spring Boot or RocksDB, or adding a result format or a function, run that again, merge the result, rebuild and run `smoke-test.sh` against the executable. The Java ITs can't start it.
+  - RocksDB's library is embedded as a resource per platform (the `librocksdbjni-*` globs) and unpacked to the temporary directory at start-up.
+  - The Dockerfile's last stage is picked by the `TRIPATHA_BACKEND` build argument: the JVM image for accumulo and hbase, the native one (built in a GraalVM stage, run on Debian) for rocksdb. The run-time glibc must be at least the build image's.
+- `DevServer`, under test sources, runs the endpoint on a throwaway in-process cluster (`mvn -pl tripatha.sparql spring-boot:test-run -Dspring-boot.run.main-class=org.tripatha.sparql.DevServer`; add `-Dspring-boot.run.jvmArguments=-Dtripatha.test.backend=hbase` for HBase, or `"-Dtripatha.test.backend=rocksdb -Dtripatha.test.rocksdbPath=DIR"` for a RocksDB store that keeps its data in `DIR`). The Docker image runs it for accumulo and hbase.
 
 ## Gotchas
 

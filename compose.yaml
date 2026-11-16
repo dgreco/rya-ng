@@ -4,14 +4,20 @@
 #   TRIPATHA_BACKEND=hbase docker compose up --build
 #   TRIPATHA_BACKEND=rocksdb docker compose up --build
 #
-# The first build downloads the dependencies and takes several minutes. On accumulo and hbase the
-# data lives in an in-process cluster and is lost when the container stops. On rocksdb it is kept
-# in the tripatha-data volume (docker compose down -v deletes it). The page's Examples menu loads
-# sample data.
+# The first build downloads the dependencies and takes several minutes.
+# - accumulo, hbase: the endpoint on a JVM with an in-process cluster; the data is lost when the
+#   container stops.
+# - rocksdb: the native executable, which starts in about a second; the data is kept in the
+#   tripatha-data volume (docker compose down -v deletes it). Compiling the executable takes a few
+#   minutes and several GB of memory.
+# The page's Examples menu loads sample data.
 services:
   tripatha:
-    build: .
-    image: tripatha-dev
+    build:
+      context: .
+      args:
+        TRIPATHA_BACKEND: ${TRIPATHA_BACKEND:-accumulo}
+    image: tripatha-${TRIPATHA_BACKEND:-accumulo}
     ports:
       - "${TRIPATHA_PORT:-8080}:8080"
     environment:
@@ -20,6 +26,8 @@ services:
       # Both search indexes, so the text and geo examples use them.
       TRIPATHA_TEXTINDEX: "true"
       TRIPATHA_GEOINDEX: "true"
+      # Query-time inference, as on the other backends' DevServer.
+      TRIPATHA_INFERENCE: "true"
     volumes:
       - tripatha-data:/var/lib/tripatha
     healthcheck:
