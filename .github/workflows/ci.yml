@@ -1,7 +1,7 @@
 # Build, unit tests, integration tests and coverage on every push and pull request: the full build on Accumulo
 # (build), and the integration tests again on an in-process HBase cluster (hbase).
 # Pushes to main also publish the coverage report to GitHub Pages:
-#   https://dgreco.github.io/rya-ng/coverage/   (badge data: /badge.json for coverage, /tests.json for tests)
+#   https://dgreco.github.io/tripatha/coverage/   (badge data: /badge.json for coverage, /tests.json for tests)
 name: CI
 
 on:
@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      REPORT: rya.coverage/target/site/jacoco-aggregate
+      REPORT: tripatha.coverage/target/site/jacoco-aggregate
     steps:
       - uses: actions/checkout@v7
 
@@ -35,15 +35,15 @@ jobs:
 
       - name: Check the shell scripts
         run: |
-          bash -n rya.loader/run.sh rya.loader/configure.sh rya.sparql/configure.sh
-          rya.sparql/configure.sh --defaults --output "$RUNNER_TEMP/rya-sparql.sh"
-          bash -n "$RUNNER_TEMP/rya-sparql.sh"
-          RYA_ACCUMULO_PASSWORD='p\ä ss' rya.loader/configure.sh --defaults --output "$RUNNER_TEMP/accumulo-client.properties"
+          bash -n tripatha.loader/run.sh tripatha.loader/configure.sh tripatha.sparql/configure.sh
+          tripatha.sparql/configure.sh --defaults --output "$RUNNER_TEMP/tripatha-sparql.sh"
+          bash -n "$RUNNER_TEMP/tripatha-sparql.sh"
+          TRIPATHA_ACCUMULO_PASSWORD='p\ä ss' tripatha.loader/configure.sh --defaults --output "$RUNNER_TEMP/accumulo-client.properties"
           grep -qx 'auth.token=\\u0070\\u005c\\u00e4\\u0020\\u0073\\u0073' "$RUNNER_TEMP/accumulo-client.properties"
           [ "$(stat -c %a "$RUNNER_TEMP/accumulo-client.properties")" = 600 ]
-          RYA_BACKEND=hbase RYA_HBASE_USER=rya rya.loader/configure.sh --defaults --output "$RUNNER_TEMP/hbase.properties"
+          TRIPATHA_BACKEND=hbase TRIPATHA_HBASE_USER=tripatha tripatha.loader/configure.sh --defaults --output "$RUNNER_TEMP/hbase.properties"
           grep -qx 'hbase.conf.hbase.zookeeper.quorum=localhost' "$RUNNER_TEMP/hbase.properties"
-          grep -qx 'hbase.user=rya' "$RUNNER_TEMP/hbase.properties"
+          grep -qx 'hbase.user=tripatha' "$RUNNER_TEMP/hbase.properties"
           [ "$(stat -c %a "$RUNNER_TEMP/hbase.properties")" = 600 ]
 
       - name: Build and test
@@ -77,8 +77,8 @@ jobs:
         with:
           name: jars
           path: |
-            rya.sparql/target/rya.sparql-*.jar
-            rya.loader/target/rya.loader-*.jar
+            tripatha.sparql/target/tripatha.sparql-*.jar
+            tripatha.loader/target/tripatha.loader-*.jar
           retention-days: 7
 
       - name: Assemble the Pages site
@@ -89,7 +89,7 @@ jobs:
           cat > site/index.html <<'EOF'
           <!doctype html>
           <meta charset="utf-8">
-          <title>rya-ng coverage</title>
+          <title>Tripatha coverage</title>
           <meta http-equiv="refresh" content="0; url=coverage/">
           <a href="coverage/">Coverage report</a>
           EOF
@@ -116,13 +116,13 @@ jobs:
       - name: Build
         run: mvn -B -ntp install -DskipTests -DskipITs
 
-      # The store, Sail, loader and endpoint ITs, with HBase counters summed by rya-ng's coprocessor (the default)...
+      # The store, Sail, loader and endpoint ITs, with HBase counters summed by Tripatha's coprocessor (the default)...
       - name: Test on HBase (coprocessor counters)
-        run: mvn -B -ntp verify -pl rya.test,rya.sail,rya.loader,rya.sparql -Drya.test.backend=hbase
+        run: mvn -B -ntp verify -pl tripatha.test,tripatha.sail,tripatha.loader,tripatha.sparql -Dtripatha.test.backend=hbase
 
       # ...and the store-level ITs again with HBase increments, the mode for clusters without the coprocessor.
       - name: Test on HBase (increment counters)
-        run: mvn -B -ntp verify -pl rya.test -Drya.test.backend=hbase -Drya.test.hbaseCounters=increment
+        run: mvn -B -ntp verify -pl tripatha.test -Dtripatha.test.backend=hbase -Dtripatha.test.hbaseCounters=increment
 
       - name: Upload test reports
         if: ${{ failure() }}
@@ -152,7 +152,7 @@ jobs:
 
       # The backend's own tests, and the store, Sail, loader and endpoint ITs on it.
       - name: Test on RocksDB
-        run: mvn -B -ntp verify -pl rya.rocksdb,rya.test,rya.sail,rya.loader,rya.sparql -Drya.test.backend=rocksdb
+        run: mvn -B -ntp verify -pl tripatha.rocksdb,tripatha.test,tripatha.sail,tripatha.loader,tripatha.sparql -Dtripatha.test.backend=rocksdb
 
       - name: Upload test reports
         if: ${{ failure() }}

@@ -1,0 +1,605 @@
+/*
+ * Copyright 2026 David Greco
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+:root {
+    --tripatha-bar: #0f172a;
+    --tripatha-bar-text: #e2e8f0;
+    --tripatha-muted: #94a3b8;
+    --tripatha-accent: #22d3ee;
+    --tripatha-accent-strong: #0e7490;
+    --tripatha-page: #f8fafc;
+    --tripatha-field: #1e293b;
+    --tripatha-field-border: #334155;
+}
+
+html, body {
+    margin: 0;
+    background: var(--tripatha-page);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.tripatha-bar {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 20px;
+    background: var(--tripatha-bar);
+    color: var(--tripatha-bar-text);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.4);
+}
+
+.tripatha-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.tripatha-name {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.tripatha-tag {
+    padding: 2px 8px;
+    border: 1px solid var(--tripatha-accent);
+    border-radius: 999px;
+    color: var(--tripatha-accent);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+}
+
+.tripatha-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px;
+}
+
+.tripatha-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--tripatha-muted);
+    font-size: 13px;
+}
+
+.tripatha-field select,
+.tripatha-field input {
+    min-width: 200px;
+    padding: 6px 10px;
+    border: 1px solid var(--tripatha-field-border);
+    border-radius: 6px;
+    background: var(--tripatha-field);
+    color: var(--tripatha-bar-text);
+    font: inherit;
+    font-size: 13px;
+}
+
+.tripatha-field input.tripatha-number {
+    min-width: 0;
+    width: 7em;
+}
+
+.tripatha-field select:focus,
+.tripatha-field input:focus {
+    outline: 2px solid var(--tripatha-accent);
+    outline-offset: 1px;
+}
+
+.tripatha-link {
+    color: var(--tripatha-accent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    text-decoration: none;
+}
+
+.tripatha-link:hover {
+    text-decoration: underline;
+}
+
+#yasgui {
+    padding: 12px 20px 40px;
+}
+
+/* Map tab */
+
+.tripatha-map {
+    height: 560px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+}
+
+.tripatha-map-note {
+    padding: 6px 2px;
+    color: #475569;
+    font-size: 13px;
+}
+
+.tripatha-map-icon {
+    display: inline-flex;
+    align-items: center;
+}
+
+.tripatha-map-popup {
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.tripatha-map-popup td {
+    padding: 2px 6px;
+    vertical-align: top;
+    word-break: break-word;
+}
+
+.tripatha-map-popup td:first-child {
+    color: var(--tripatha-accent-strong);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+    .tripatha-bar {
+        padding: 10px 16px;
+    }
+
+    .tripatha-field select,
+    .tripatha-field input {
+        min-width: 0;
+        width: 100%;
+    }
+
+    #yasgui {
+        padding: 8px 16px 32px;
+    }
+}
+
+/* RDF 1.2: triple terms in the results table, and SPARQL 1.2 syntax in the editor (tripatha-sparql12.js) */
+.yasr .tripatha-term-mark {
+    color: #64748b;
+    font-weight: 600;
+}
+
+.yasqe .CodeMirror .cm-tripatha-modern {
+    font-weight: 600;
+}
+
+/* Trace switch and side panel */
+
+.tripatha-check {
+    cursor: pointer;
+    user-select: none;
+}
+
+.tripatha-check input {
+    min-width: 0;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--tripatha-accent);
+}
+
+:root {
+    /* Set by tripatha-trace.js from the header's real height (it wraps on narrow screens). */
+    --tripatha-bar-height: 56px;
+}
+
+.tripatha-workspace {
+    display: flex;
+    align-items: flex-start;
+}
+
+.tripatha-workspace > #yasgui {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.tripatha-trace,
+.tripatha-trace-resizer {
+    position: sticky;
+    top: var(--tripatha-bar-height);
+    height: calc(100vh - var(--tripatha-bar-height));
+}
+
+.tripatha-trace {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    box-sizing: border-box;
+    width: 520px;
+    max-width: 75vw;
+    border-left: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 13px;
+}
+
+.tripatha-trace[hidden],
+.tripatha-trace-resizer[hidden],
+.tripatha-trace-tab[hidden] {
+    display: none;
+}
+
+.tripatha-trace-resizer {
+    flex: 0 0 8px;
+    margin-right: -4px;
+    z-index: 2;
+    cursor: col-resize;
+    touch-action: none;
+    background: transparent;
+}
+
+.tripatha-trace-resizer:hover,
+.tripatha-trace-resizer:focus-visible,
+body.tripatha-resizing .tripatha-trace-resizer {
+    outline: none;
+    background: linear-gradient(to right, transparent 2px, var(--tripatha-accent) 2px, var(--tripatha-accent) 6px, transparent 6px);
+}
+
+body.tripatha-resizing {
+    cursor: col-resize;
+    user-select: none;
+}
+
+.tripatha-trace-head {
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f1f5f9;
+}
+
+.tripatha-trace-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.tripatha-trace-status {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.tripatha-trace-status.running {
+    background: #cffafe;
+    color: var(--tripatha-accent-strong);
+}
+
+.tripatha-trace-status.ok {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.tripatha-trace-status.failed {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.tripatha-trace-fold {
+    margin-left: auto;
+    padding: 0 6px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #475569;
+    font-size: 14px;
+    line-height: 20px;
+    cursor: pointer;
+}
+
+.tripatha-trace-fold:hover {
+    color: var(--tripatha-accent-strong);
+}
+
+.tripatha-trace-totals {
+    flex-basis: 100%;
+    color: #475569;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.tripatha-trace-body {
+    flex: 1 1 auto;
+    padding: 8px 12px 16px;
+    overflow: auto;
+}
+
+.tripatha-trace-hint {
+    margin: 4px 0;
+    color: #64748b;
+}
+
+.tripatha-trace-tab {
+    position: sticky;
+    top: calc(var(--tripatha-bar-height) + 12px);
+    flex: none;
+    margin-top: 12px;
+    padding: 14px 6px;
+    border: 1px solid #cbd5e1;
+    border-right: 0;
+    border-radius: 6px 0 0 6px;
+    background: #f1f5f9;
+    color: var(--tripatha-accent-strong);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    cursor: pointer;
+}
+
+.tripatha-trace-tab:hover {
+    background: #e2e8f0;
+}
+
+.tripatha-trace-tab.running::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-bottom: 8px;
+    border-radius: 50%;
+    background: var(--tripatha-accent);
+    animation: tripatha-trace-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes tripatha-trace-blink {
+    50% {
+        opacity: 0.3;
+    }
+}
+
+.tripatha-trace-note {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    margin: 2px 0;
+}
+
+.tripatha-trace-note-kind {
+    min-width: 56px;
+    color: var(--tripatha-accent-strong);
+    font-weight: 600;
+}
+
+.tripatha-trace-note-text,
+.tripatha-trace-plan pre,
+.tripatha-trace-range,
+.tripatha-trace-table,
+.tripatha-trace-position {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+}
+
+pre.tripatha-trace-note-text {
+    max-height: 8em;
+    margin: 0;
+    overflow: auto;
+    white-space: pre-wrap;
+}
+
+.tripatha-trace-plan {
+    margin: 6px 0;
+}
+
+.tripatha-trace-plan summary,
+.tripatha-trace-more summary {
+    color: var(--tripatha-accent-strong);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.tripatha-trace-plan pre {
+    max-height: 22em;
+    margin: 4px 0 0;
+    padding: 8px;
+    overflow: auto;
+    border-radius: 6px;
+    background: #f8fafc;
+}
+
+.tripatha-trace-cards {
+    margin-top: 6px;
+    border-top: 1px solid #e2e8f0;
+}
+
+.tripatha-trace-card {
+    padding: 6px 4px 8px;
+    border-bottom: 1px solid #f1f5f9;
+}
+
+.tripatha-trace-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 8px;
+}
+
+.tripatha-trace-id,
+.tripatha-trace-at {
+    color: #64748b;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.tripatha-trace-op {
+    font-weight: 600;
+}
+
+.tripatha-trace-card.flush .tripatha-trace-op {
+    color: #7c3aed;
+}
+
+.tripatha-trace-table {
+    color: var(--tripatha-accent-strong);
+}
+
+.tripatha-trace-figures {
+    display: inline-flex;
+    gap: 8px;
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.tripatha-trace-ms {
+    color: #64748b;
+}
+
+.tripatha-trace-what {
+    margin-top: 2px;
+    word-break: break-all;
+}
+
+.tripatha-trace-reason {
+    word-break: normal;
+}
+
+.tripatha-trace-range {
+    color: #1e293b;
+}
+
+.tripatha-trace-dim,
+.tripatha-trace-skipped {
+    color: #64748b;
+    font-size: 12px;
+}
+
+.tripatha-trace-byte {
+    display: inline-block;
+    margin: 0 1px;
+    padding: 0 3px;
+    border-radius: 3px;
+    background: #e0f2fe;
+    color: #0369a1;
+    font-size: 10px;
+    line-height: 14px;
+    vertical-align: 1px;
+}
+
+.tripatha-trace-running {
+    box-shadow: inset 3px 0 0 var(--tripatha-accent);
+    padding-left: 10px;
+    animation: tripatha-trace-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tripatha-trace-pulse {
+    50% {
+        box-shadow: inset 3px 0 0 var(--tripatha-accent-strong);
+    }
+}
+
+.tripatha-trace-live {
+    margin-top: 2px;
+}
+
+.tripatha-trace-position {
+    color: var(--tripatha-accent-strong);
+}
+
+.tripatha-trace-waiting {
+    color: #b45309;
+    font-weight: 600;
+}
+
+.tripatha-trace-summary h3 {
+    margin: 14px 0 4px;
+    font-size: 13px;
+}
+
+.tripatha-trace-scroll {
+    overflow-x: auto;
+}
+
+.tripatha-trace-totals-table {
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.tripatha-trace-totals-table th {
+    padding: 3px 6px;
+    border-bottom: 1px solid #cbd5e1;
+    color: #475569;
+    font-weight: 600;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.tripatha-trace-totals-table td {
+    padding: 3px 6px;
+    border-bottom: 1px solid #f1f5f9;
+}
+
+.tripatha-trace-num {
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tripatha-trace-running,
+    .tripatha-trace-tab.running::before {
+        animation: none;
+    }
+}
+
+/* Narrow screens: the panel goes under the results, full width. */
+@media (max-width: 900px) {
+    .tripatha-workspace {
+        display: block;
+    }
+
+    .tripatha-trace {
+        position: static;
+        width: auto !important;
+        max-width: none;
+        height: auto;
+        margin: 0 16px 32px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+    }
+
+    .tripatha-trace-body {
+        overflow: visible;
+    }
+
+    .tripatha-trace-resizer {
+        display: none !important;
+    }
+
+    .tripatha-trace-tab {
+        position: static;
+        margin: 0 16px 24px;
+        border-right: 1px solid #cbd5e1;
+        border-radius: 6px;
+        writing-mode: horizontal-tb;
+        transform: none;
+    }
+}

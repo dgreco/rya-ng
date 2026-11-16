@@ -14,16 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# rya-ng architecture
+# Tripatha architecture
 
-This document explains how rya-ng works inside. It covers:
+This document explains how Tripatha works inside. It covers:
 - how an RDF statement becomes Accumulo keys;
 - how a SPARQL query becomes a handful of range scans;
 - how statistics, inference, batched joins and the search indexes fit around that.
 
 It assumes you know Java, but little or nothing about Accumulo or RDF4J. Sections 2 to 4 introduce what you need of RDF, Accumulo and RDF4J. If you already know them, skip to [section 5](#5-modules).
 
-To use rya-ng rather than change it, start with the [README](README.md). [AGENTS.md](AGENTS.md) has the build commands and the short list of rules for contributors.
+To use Tripatha rather than change it, start with the [README](README.md). [AGENTS.md](AGENTS.md) has the build commands and the short list of rules for contributors.
 
 ## Contents
 
@@ -53,7 +53,7 @@ To use rya-ng rather than change it, start with the [README](README.md). [AGENTS
 
 ## 1. The big picture
 
-rya-ng stores RDF graph data in [Apache Accumulo](https://accumulo.apache.org/), a distributed sorted key-value store, and answers [SPARQL](https://www.w3.org/TR/sparql11-query/) queries over it. It is derived from Apache Rya and keeps Rya's storage model.
+Tripatha stores RDF graph data in [Apache Accumulo](https://accumulo.apache.org/), a distributed sorted key-value store, and answers [SPARQL](https://www.w3.org/TR/sparql11-query/) queries over it. It is derived from Apache Rya and keeps Rya's storage model.
 
 The core idea fits in one sentence:
 
@@ -69,23 +69,23 @@ Everything else is built around that idea:
 flowchart TB
     client["SPARQL client<br/>(curl, browser, application)"]
     embed["Java application<br/>(embedded Sail)"]
-    subgraph sparql["rya.sparql: Spring Boot endpoint"]
+    subgraph sparql["tripatha.sparql: Spring Boot endpoint"]
         ctrl["SparqlController<br/>HTTP /sparql"]
     end
-    subgraph sail["rya.sail: RDF4J Sail"]
+    subgraph sail["tripatha.sail: RDF4J Sail"]
         conn["RdfCloudTripleStoreConnection"]
         opt["Optimizer pipeline<br/>(inference, index search, join order)"]
         eval["RyaEvaluationStrategy<br/>(batched joins, inference nodes)"]
         inf["InferenceEngine<br/>(ontology held in memory)"]
     end
-    subgraph acc["rya.accumulo: storage"]
+    subgraph acc["tripatha.accumulo: storage"]
         dao["RyaStoreDAO<br/>(writes, deletes)"]
         qe["RyaStoreQueryEngine<br/>(range scans)"]
         idx["IndexManager / IndexSearcher<br/>(text and geo indexes)"]
         stats["RyaStoreEvalStatsDAO<br/>(cardinality counters)"]
     end
-    api["rya.api<br/>RyaStatement, row and value encoding"]
-    loader["rya.loader<br/>(parallel synthetic-data loader)"]
+    api["tripatha.api<br/>RyaStatement, row and value encoding"]
+    loader["tripatha.loader<br/>(parallel synthetic-data loader)"]
     subgraph cluster["Accumulo cluster"]
         t1[("prefix_spo<br/>prefix_po<br/>prefix_osp")]
         t2[("prefix_eval")]
@@ -115,8 +115,8 @@ flowchart TB
 ```
 
 Two ways in:
-- **The SPARQL endpoint** (`rya.sparql`): a Spring Boot server that speaks the SPARQL 1.1 Protocol over HTTP.
-- **The embedded Sail** (`rya.sail`): a Java application builds the same RDF4J repository itself with `RyaSailFactory` and calls it directly.
+- **The SPARQL endpoint** (`tripatha.sparql`): a Spring Boot server that speaks the SPARQL 1.1 Protocol over HTTP.
+- **The embedded Sail** (`tripatha.sail`): a Java application builds the same RDF4J repository itself with `RyaSailFactory` and calls it directly.
 
 Both paths end in the same objects: an `RdfCloudTripleStoreConnection` on top of an `RyaStoreDAO`.
 
@@ -188,7 +188,7 @@ An Accumulo **table** is a sorted map from **keys** to **values**. A key has fiv
 - Keys are sorted by row, then column family, then column qualifier, then visibility, comparing bytes one by one (unsigned).
 - Then by timestamp, newest first.
 
-So all the keys whose row starts with the same bytes are stored next to each other. *"Give me everything whose row starts with X"* is one sequential read, called a **range scan**. rya-ng is built on that property.
+So all the keys whose row starts with the same bytes are stored next to each other. *"Give me everything whose row starts with X"* is one sequential read, called a **range scan**. Tripatha is built on that property.
 
 A **row** is all the keys that share the same row bytes. One row can hold many cells (one per column family / qualifier / visibility / timestamp combination).
 
@@ -198,7 +198,7 @@ A table is cut by row ranges into **tablets**. Each tablet is served by one **ta
 
 ```mermaid
 flowchart LR
-    subgraph table["table rya_spo, sorted by row"]
+    subgraph table["table tripatha_spo, sorted by row"]
         direction TB
         a["tablet 1<br/>rows from the start up to 'http://ex.org/m'"]
         b["tablet 2<br/>rows from 'http://ex.org/m' up to 'urn:'"]
@@ -223,13 +223,13 @@ Both can:
 - carry a set of **authorizations** (see 3.6);
 - attach scan-time iterators (see 3.5).
 
-A **Range** runs from a start key to an end key. rya-ng mostly builds ranges of the form *from `prefix` to `prefix` followed by byte `0xFF`*, which covers every row that starts with `prefix`.
+A **Range** runs from a start key to an end key. Tripatha mostly builds ranges of the form *from `prefix` to `prefix` followed by byte `0xFF`*, which covers every row that starts with `prefix`.
 
 ### 3.4 Writing: Mutation and BatchWriter
 
 - **Mutation:** a set of changes to *one row* (puts and deletes of cells). A mutation is applied atomically. There are no transactions across rows or tables.
 - **BatchWriter:** buffers mutations in memory and sends them to the tablet servers in the background. `flush()` blocks until everything buffered so far is written. A **MultiTableBatchWriter** shares one buffer between writers for several tables.
-- **Delete:** a delete is a *marker* for an exact key, including its visibility and timestamp. It hides the cells with that key whose timestamp is not newer than the marker's. To delete a cell you must know its exact visibility, which is why rya-ng reads a statement before deleting it ([section 10](#10-deletes-graph-drops-and-purges)).
+- **Delete:** a delete is a *marker* for an exact key, including its visibility and timestamp. It hides the cells with that key whose timestamp is not newer than the marker's. To delete a cell you must know its exact visibility, which is why Tripatha reads a statement before deleting it ([section 10](#10-deletes-graph-drops-and-purges)).
 
 ### 3.5 Iterators
 
@@ -237,9 +237,9 @@ A **Range** runs from a start key to an end key. rya-ng mostly builds ranges of 
 - **When:** at scan time, and when files are compacted.
 - **Order:** they are stacked by priority.
 
-rya-ng uses three kinds:
+Tripatha uses three kinds:
 
-| Iterator | What it does | Where rya-ng uses it |
+| Iterator | What it does | Where Tripatha uses it |
 |---|---|---|
 | `VersioningIterator` | keeps only the newest version of each key (Accumulo attaches it to new tables by default, at priority 20) | every table, implicitly |
 | `SummingCombiner` | merges all the cells of a key by adding their values | the `eval` table: the statistics counters |
@@ -260,7 +260,7 @@ The visibility is **part of the key**. The same row, family and qualifier under 
 
 ## 4. Primer: RDF4J
 
-[RDF4J](https://rdf4j.org/) is a Java framework for RDF. rya-ng uses its SPARQL parser, query algebra, optimizers and evaluation engine, and plugs its own storage underneath.
+[RDF4J](https://rdf4j.org/) is a Java framework for RDF. Tripatha uses its SPARQL parser, query algebra, optimizers and evaluation engine, and plugs its own storage underneath.
 
 ### 4.1 Repository and Sail
 
@@ -270,9 +270,9 @@ flowchart TB
     repo["Repository / RepositoryConnection<br/>(user-facing API)"]
     sailrepo["SailRepository<br/>(adapter)"]
     sail["Sail / SailConnection<br/>(storage plug-in API)"]
-    rya["RdfCloudTripleStore /<br/>RdfCloudTripleStoreConnection"]
+    tripatha["RdfCloudTripleStore /<br/>RdfCloudTripleStoreConnection"]
     app --> repo --> sailrepo --> sail
-    rya -- "implements" --> sail
+    tripatha -- "implements" --> sail
 ```
 
 - **Repository API:** what applications call.
@@ -283,7 +283,7 @@ flowchart TB
   - `getStatementsInternal` and `evaluateInternal` for reads;
   - `commitInternal` and the namespace methods for the rest.
 
-rya-ng's Sail is `RdfCloudTripleStore`. Its connection is `RdfCloudTripleStoreConnection`.
+Tripatha's Sail is `RdfCloudTripleStore`. Its connection is `RdfCloudTripleStoreConnection`.
 
 ### 4.2 From SPARQL text to an algebra tree
 
@@ -338,46 +338,46 @@ A statement-pattern step reads data only through a **TripleSource**: `getStateme
 
 ```mermaid
 flowchart LR
-    api["rya.api"] --> store["rya.store"]
-    store --> accumulo["rya.accumulo"]
-    store --> hbase["rya.hbase"]
-    store --> rocksdb["rya.rocksdb"]
-    store --> sail["rya.sail"]
-    sail --> sparql["rya.sparql"]
+    api["tripatha.api"] --> store["tripatha.store"]
+    store --> accumulo["tripatha.accumulo"]
+    store --> hbase["tripatha.hbase"]
+    store --> rocksdb["tripatha.rocksdb"]
+    store --> sail["tripatha.sail"]
+    sail --> sparql["tripatha.sparql"]
     accumulo --> sparql
     hbase --> sparql
     rocksdb --> sparql
-    accumulo --> loader["rya.loader"]
+    accumulo --> loader["tripatha.loader"]
     hbase --> loader
     rocksdb --> loader
-    test["rya.test<br/>(test scope only)"] -.-> sail
+    test["tripatha.test<br/>(test scope only)"] -.-> sail
     test -.-> sparql
     test -.-> loader
 ```
 
-An arrow `A → B` means *B depends on A*. `rya.coverage` only exists under `-Pcoverage` and merges the coverage reports. `rya.hbase.coprocessor` is installed on HBase region servers; nothing depends on it but the test cluster.
+An arrow `A → B` means *B depends on A*. `tripatha.coverage` only exists under `-Pcoverage` and merges the coverage reports. `tripatha.hbase.coprocessor` is installed on HBase region servers; nothing depends on it but the test cluster.
 
 | Module | Role | Main classes |
 |---|---|---|
-| `rya.api` | Storage-independent model, DAO interfaces, how statements and values become bytes, which table answers which pattern | `RyaStatement`, `RyaType`, `RyaIRI`, `RyaContext`, `WholeRowTripleResolver`, `*TriplePatternStrategy`, `RdfCloudTripleStoreConfiguration` |
-| `rya.store` | The storage SPI (labelled cells, ranges, batched reads, writers, counters), and everything written once on top of it: writes, scans, statistics, graph markers, namespaces, the text and geo indexes, the trace | `Store`, `RyaStoreDAO`, `RyaStoreQueryEngine`, `EvalStatsMutations`, `RyaStoreEvalStatsDAO`, `IndexManager`, `IndexSearcher`, `StoreTrace` |
-| `rya.accumulo` | The Accumulo backend: each SPI call is one Accumulo call | `AccumuloStore`, `AccumuloCellWriter`, `TracingProxies` |
-| `rya.hbase` | The HBase backend: the cell mapping, labels, batched reads, counters | `HBaseStore`, `HBaseCodec`, `HBaseBatchScan`, `HBaseLabels` |
-| `rya.rocksdb` | The RocksDB backend: a store in a local directory, in the caller's process | `RocksStore`, `RocksCodec`, `RocksScan`, `RocksCellWriter`, `RocksDatabase` |
-| `rya.sail` | The RDF4J Sail: connection, optimizer pipeline, evaluation strategy, batched joins, inference, index-search rewrite | `RdfCloudTripleStore`, `RdfCloudTripleStoreConnection`, `RyaEvaluationStrategy`, `BatchedJoinStep`, `InferenceEngine`, `IndexSearchOptimizer`, `RyaSailFactory` |
-| `rya.sparql` | Spring Boot SPARQL 1.1 Protocol endpoint and query page | `SparqlController`, `RyaStoreConfiguration`, `RyaProperties`, `BlankNodeOutput` |
-| `rya.loader` | Command-line generator and parallel loader of synthetic data | `LoaderMain`, `Prepare`, `Loader`, `Verify`, `EntityGenerator` |
-| `rya.test` | One in-process cluster per backend per test JVM, and the store-level integration tests | `StoreITBase`, `TestBackends`, `MiniAccumuloSingleton`, `MiniHBaseSingleton`, `RocksDBTestBackend` |
+| `tripatha.api` | Storage-independent model, DAO interfaces, how statements and values become bytes, which table answers which pattern | `RyaStatement`, `RyaType`, `RyaIRI`, `RyaContext`, `WholeRowTripleResolver`, `*TriplePatternStrategy`, `RdfCloudTripleStoreConfiguration` |
+| `tripatha.store` | The storage SPI (labelled cells, ranges, batched reads, writers, counters), and everything written once on top of it: writes, scans, statistics, graph markers, namespaces, the text and geo indexes, the trace | `Store`, `RyaStoreDAO`, `RyaStoreQueryEngine`, `EvalStatsMutations`, `RyaStoreEvalStatsDAO`, `IndexManager`, `IndexSearcher`, `StoreTrace` |
+| `tripatha.accumulo` | The Accumulo backend: each SPI call is one Accumulo call | `AccumuloStore`, `AccumuloCellWriter`, `TracingProxies` |
+| `tripatha.hbase` | The HBase backend: the cell mapping, labels, batched reads, counters | `HBaseStore`, `HBaseCodec`, `HBaseBatchScan`, `HBaseLabels` |
+| `tripatha.rocksdb` | The RocksDB backend: a store in a local directory, in the caller's process | `RocksStore`, `RocksCodec`, `RocksScan`, `RocksCellWriter`, `RocksDatabase` |
+| `tripatha.sail` | The RDF4J Sail: connection, optimizer pipeline, evaluation strategy, batched joins, inference, index-search rewrite | `RdfCloudTripleStore`, `RdfCloudTripleStoreConnection`, `RyaEvaluationStrategy`, `BatchedJoinStep`, `InferenceEngine`, `IndexSearchOptimizer`, `RyaSailFactory` |
+| `tripatha.sparql` | Spring Boot SPARQL 1.1 Protocol endpoint and query page | `SparqlController`, `RyaStoreConfiguration`, `RyaProperties`, `BlankNodeOutput` |
+| `tripatha.loader` | Command-line generator and parallel loader of synthetic data | `LoaderMain`, `Prepare`, `Loader`, `Verify`, `EntityGenerator` |
+| `tripatha.test` | One in-process cluster per backend per test JVM, and the store-level integration tests | `StoreITBase`, `TestBackends`, `MiniAccumuloSingleton`, `MiniHBaseSingleton`, `RocksDBTestBackend` |
 
-`rya.loader` writes through `rya.store` only. It uses `rya.sail` in its tests.
+`tripatha.loader` writes through `tripatha.store` only. It uses `tripatha.sail` in its tests.
 
-This document describes rya-ng on Accumulo, the backend it was built for. [BACKENDS-STUDY.md](BACKENDS-STUDY.md) describes how the same cells, ranges, labels and counters map onto HBase, and onto an embedded RocksDB database (its section 10).
+This document describes Tripatha on Accumulo, the backend it was built for. [BACKENDS-STUDY.md](BACKENDS-STUDY.md) describes how the same cells, ranges, labels and counters map onto HBase, and onto an embedded RocksDB database (its section 10).
 
 ---
 
 ## 6. The data model
 
-Inside rya-ng, a statement is a `RyaStatement` (`rya.api`):
+Inside Tripatha, a statement is a `RyaStatement` (`tripatha.api`):
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -392,13 +392,13 @@ Inside rya-ng, a statement is a `RyaStatement` (`rya.api`):
 
 A `RyaType` holds three strings: the data (the lexical form), the datatype IRI, and the language tag. `RyaIRI` is a `RyaType` with datatype `xsd:anyURI`.
 
-`RdfToRyaConversions` and `RyaToRdfConversions` translate between RDF4J values and Rya types.
+`RdfToRyaConversions` and `RyaToRdfConversions` translate between RDF4J values and Tripatha types.
 
 **RDF 1.2 values.**
 - A **triple term** (`<<( s p o )>>`) is a `RyaTripleTerm`: a `RyaType` with the reserved datatype `RyaSchema.TRIPLE_TERM`, whose data is the term's encoded form ([section 7.3](#73-value-encoding)). It is immutable and can only be an object. Its own object can be another triple term. A literal that claims the reserved datatype is refused.
 - A **literal with a base direction** (`"..."@ar--rtl`) has the datatype `rdf:dirLangString`, and its language field holds the tag with the direction (`ar--rtl`).
 
-**Blank nodes become IRIs.** `_:b1` is stored as the IRI `urn:rya-ng/bnode/2012/07#b1` (`RyaSchema.BNODE_NAMESPACE`), and the Sail returns it as that IRI. The inference engine relies on this: it casts these values to `IRI` throughout. Only the endpoint turns them back into blank nodes, and only in its output (`BlankNodeOutput`, [section 17](#17-the-sparql-endpoint)).
+**Blank nodes become IRIs.** `_:b1` is stored as the IRI `urn:tripatha/bnode/2012/07#b1` (`RyaSchema.BNODE_NAMESPACE`), and the Sail returns it as that IRI. The inference engine relies on this: it casts these values to `IRI` throughout. Only the endpoint turns them back into blank nodes, and only in its output (`BlankNodeOutput`, [section 17](#17-the-sparql-endpoint)).
 
 **`null` context: two meanings.**
 
@@ -415,7 +415,7 @@ The Sail translates between the two. To look up or delete *only* default-graph s
 
 ### 7.1 The tables
 
-All tables are named `<prefix><suffix>`. The default prefix is `rya_`.
+All tables are named `<prefix><suffix>`. The default prefix is `tripatha_`.
 
 | Table | Row | Column family | Column qualifier | Visibility | Value | Purpose |
 |---|---|---|---|---|---|---|
@@ -424,7 +424,7 @@ All tables are named `<prefix><suffix>`. The default prefix is `rya_`.
 | `osp` | object `00` subject `00` predicate `01` type | same | same | same | same | patterns with a known object |
 | `eval` | one value, or two joined by `00` | which counter: `s`, `p`, `o`, `sp`, `po`, `so` | empty (all graphs) or a graph IRI | statement's label | a count as decimal text, summed server side | cardinality statistics ([section 11](#11-statistics-and-join-ordering)) |
 | `graphs` | graph IRI | `g` | empty | statement's label | empty | named-graph markers |
-| `ns` | a prefix, or `rya` | `namespace`, `version` or `index` | empty, or the index id | none | namespace IRI, `1.0.0`, or index state | namespaces, storage version, index state |
+| `ns` | a prefix, or `tripatha` | `namespace`, `version` or `index` | empty, or the index id | none | namespace IRI, `1.0.0`, or index state | namespaces, storage version, index state |
 | `text` | word `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | full-text index (optional, [section 15](#15-text-and-geo-search)) |
 | `geo` | geohash cell `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | geospatial index (optional) |
 
@@ -653,7 +653,7 @@ The batch is written early once it holds 50,000 keys (`MAX_PENDING_COUNTERS`), s
 `RyaStoreDAO.init()`:
 1. creates any missing tables;
 2. checks that the summing combiner is attached to `eval`, and attaches it if not. Listing a table's iterators needs `ALTER_TABLE`, so for a user without it the check is skipped;
-3. writes the storage version (`ns` row `rya`, family `version`) only if it is missing;
+3. writes the storage version (`ns` row `tripatha`, family `version`) only if it is missing;
 4. opens the batch writers and the query engine;
 5. creates the `IndexManager`, which opens, creates or validates the index tables ([section 15.6](#156-index-lifecycle)).
 
@@ -786,22 +786,22 @@ The counters only influence join order, never results, so some drift is accepted
 - **Failed loads:** a load that fails part way may have written counters for blocks it writes again on resume.
 
 **Switches:**
-- `query.usestats=false` makes queries use RDF4J's own heuristic, with Rya's adjustments for inference and indexed patterns (`RyaDefaultStatistics`).
+- `query.usestats=false` makes queries use RDF4J's own heuristic, with Tripatha's adjustments for inference and indexed patterns (`RyaDefaultStatistics`).
 - `ac.stats.maintain=false` (`setMaintainStats(false)`) stops counting on writes.
-- The endpoint's `rya.stats` sets both.
+- The endpoint's `tripatha.stats` sets both.
 
 ### 11.4 Graph sizes from the counters
 
-*How many statements does each named graph hold?* `COUNT(*)` grouped by graph answers it exactly, but it reads every statement: minutes on a store of hundreds of millions. The counters answer it approximately with a handful of reads, and queries reach that answer through the predicate `stats:approxSize` (namespace `urn:rya-ng:stats#`):
+*How many statements does each named graph hold?* `COUNT(*)` grouped by graph answers it exactly, but it reads every statement: minutes on a store of hundreds of millions. The counters answer it approximately with a handful of reads, and queries reach that answer through the predicate `stats:approxSize` (namespace `urn:tripatha:stats#`):
 
 ```sparql
-PREFIX stats: <urn:rya-ng:stats#>
+PREFIX stats: <urn:tripatha:stats#>
 SELECT ?graph ?statements WHERE { ?graph stats:approxSize ?statements }
 ```
 
 **Where the number comes from.** Every statement in a named graph adds 1 to the counter of its predicate *for that graph*: family `p`, qualifier = the graph IRI ([section 11.1](#111-what-is-counted)). A graph's size is therefore the sum of its `p` counters over all predicates. There are few predicates (55 in the loader's dataset), so that is a few dozen small rows.
 
-`GraphSizes` (`rya.store`, used through `RyaStoreEvalStatsDAO.graphSizes(conf)`) computes it in three steps, all with the reader's authorizations:
+`GraphSizes` (`tripatha.store`, used through `RyaStoreEvalStatsDAO.graphSizes(conf)`) computes it in three steps, all with the reader's authorizations:
 
 ```mermaid
 flowchart TD
@@ -821,7 +821,7 @@ flowchart TD
 
 Scanning `eval` for family `p` directly would be simpler but much slower. A column-family restriction still reads the whole table unless the family has its own locality group, and `eval` holds about 50 bytes per statement.
 
-**How the query uses it.** `GraphSizeOptimizer` (`rya.sail`) runs just before the inference rewrite ([section 12.3](#123-the-optimizer-pipeline)). It replaces every pattern whose predicate is `stats:approxSize` with a `FixedStatementPattern` holding one statement per graph (`<graph> stats:approxSize "n"^^xsd:long`), the same in-memory node inference uses ([section 14.3](#143-example-rdfssubclassof)). The rest of the query, such as filters, joins, bound subjects and `ORDER BY`, works as for any pattern. The sizes are read only if the query contains such a pattern, and fail with an explanation when the store was opened without statistics.
+**How the query uses it.** `GraphSizeOptimizer` (`tripatha.sail`) runs just before the inference rewrite ([section 12.3](#123-the-optimizer-pipeline)). It replaces every pattern whose predicate is `stats:approxSize` with a `FixedStatementPattern` holding one statement per graph (`<graph> stats:approxSize "n"^^xsd:long`), the same in-memory node inference uses ([section 14.3](#143-example-rdfssubclassof)). The rest of the query, such as filters, joins, bound subjects and `ORDER BY`, works as for any pattern. The sizes are read only if the query contains such a pattern, and fail with an explanation when the store was opened without statistics.
 
 **Approximate**, like every counter: re-inserted statements and resumed load blocks count twice, and a new predicate shows up only after the predicate list is read again.
 
@@ -848,7 +848,7 @@ sequenceDiagram
     CN->>CN: evaluateInternal: clone the configuration again,<br/>apply per-query bindings, wrap the tree in QueryRoot
     CN->>ES: new RyaEvaluationStrategy(StoreTripleSource, statistics, inference engine)
     CN->>P: optimize(tree)
-    P->>P: inference rewrite, index rewrite,<br/>join ordering with Rya statistics
+    P->>P: inference rewrite, index rewrite,<br/>join ordering with Tripatha statistics
     CN->>ES: evaluate(optimized tree)
     loop rows pulled by the result writer
         ES->>TS: getStatements(s, p, o, contexts)
@@ -890,7 +890,7 @@ Results are lazy: Accumulo is scanned as the result writer asks for rows, so `LI
 
 ### 12.3 The optimizer pipeline
 
-`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with six Rya steps added (marked ★):
+`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with six Tripatha steps added (marked ★):
 
 ```mermaid
 flowchart TD
@@ -900,13 +900,13 @@ flowchart TD
     o3a --> o3b["★ GraphSizeOptimizer<br/>stats:approxSize patterns from the counters (section 11.4)"]
     o3b --> o4["★ InferenceOptimizer<br/>15 OWL/RDFS rewrites (section 14)"]
     o4 --> o5["★ IndexSearchOptimizer<br/>text and geo patterns (section 15)<br/>only when the store has indexes"]
-    o5 --> o6["QueryJoinOptimizer<br/>join order from Rya statistics (section 11)"]
+    o5 --> o6["QueryJoinOptimizer<br/>join order from Tripatha statistics (section 11)"]
     o6 --> o6b["★ TripleTermOptimizer.order<br/>each triple-term pattern right after what binds its term (section 12.7)"]
     o6b --> o7["IterativeEvaluationOptimizer, FilterOptimizer,<br/>FilterInValuesOptimizer, FilterOptimizer,<br/>OrderLimitOptimizer"]
     o7 --> o8["★ LeftDeepJoinOptimizer<br/>right-nested joins become left-deep (section 13)"]
 ```
 
-**Where the Rya steps sit:**
+**Where the Tripatha steps sit:**
 - **Graph sizes** are filled in before inference, which leaves the in-memory pattern they produce alone.
 - **Inference** runs after the tree is normalized and before join ordering. Join ordering therefore runs once, on the final tree, and sees the patterns inference created.
 - **The index rewrite** runs after inference, so sub-properties added by inference are searched too. It runs before join ordering, which then sees the much smaller indexed patterns.
@@ -926,7 +926,7 @@ flowchart TD
 | `TransitivePropertySP` | the closure computed by `InferenceEngine.findTransitiveProperty` when one end is bound; otherwise a plain lookup |
 | any other node | RDF4J's default |
 
-### 12.5 `StoreTripleSource`: RDF4J lookups on top of Rya
+### 12.5 `StoreTripleSource`: RDF4J lookups on top of Tripatha
 
 `StoreTripleSource` (an inner class of the connection) is the only way the evaluation reads statements. `getStatements(s, p, o, contexts)`:
 1. **Prefetched batches first.** It looks the lookup up in the batches a batched join or an entity prefetch fetched ahead. If the lookup is there, it is answered from memory.
@@ -961,7 +961,7 @@ Join
 └── StatementPattern  ?claim rdf:reifies ?t
 ```
 
-RDF4J's own step for `TripleRef` lists every triple term in the store. rya-ng replaces it:
+RDF4J's own step for `TripleRef` lists every triple term in the store. Tripatha replaces it:
 
 1. **Constant terms are folded** (`TripleTermOptimizer.fold`). A `TripleRef` whose parts are all constants becomes a one-row binding of `?t` to that term, which the statement pattern then looks up like any other object. Nested terms fold from the inside out. The term is bound through a row, not written into the pattern: RDF4J reuses a pattern's constant `Var` in a way that breaks its one-parent rule for triple terms.
 2. **The others are ordered** (`TripleTermOptimizer.order`, right after join ordering). Each `TripleRef` is moved to just after the first pattern that binds its `?t`. A `TripleRef` nothing else binds stays first.
@@ -1045,7 +1045,7 @@ The join then shows `algorithm: RyaBatchedJoin` in the plan. A chunk with a sing
 
 Batches form a stack in `StoreTripleSource`, so nested batched joins each keep their own until they release it.
 
-**Testing:** the ITs can push every join through chunk boundaries with `-Drya.test.joinBatchSize=2`, and the endpoint tests with `-Drya.join-batch-size=2`.
+**Testing:** the ITs can push every join through chunk boundaries with `-Dtripatha.test.joinBatchSize=2`, and the endpoint tests with `-Dtripatha.join-batch-size=2`.
 
 ### 13.5 Entity prefetch: a chain of joins at once
 
@@ -1072,7 +1072,7 @@ LeftJoin                    OPTIONAL { ?s ex:email ?e }     link
 5. **Release.** The loops ask for the next driver row only after the current row's lookups are done, so a window's statements are released when the next window is read. A lookup that misses goes to the store: it costs time, never a wrong answer.
 6. **Window sizes.** The first window is 64 rows, so `LIMIT` and `ASK` queries fetch little; each next one doubles, up to `query.join.batchsize`. A window that would hold more than `query.join.prefetchlimit` statements is halved and fetched again; a single row still over it is left to the store.
 
-It is on by default: `query.join.entityprefetch`, or `rya.entity-prefetch` on the endpoint. Joins in a chain show `algorithm: RyaEntityPrefetch` in the plan, and the trace reason is `entity prefetch: N lookups for M rows fetched together`.
+It is on by default: `query.join.entityprefetch`, or `tripatha.entity-prefetch` on the endpoint. Joins in a chain show `algorithm: RyaEntityPrefetch` in the plan, and the trace reason is `entity prefetch: N lookups for M rows fetched together`.
 
 **Limits.** Patterns rewritten by inference (subPropertyOf, inverseOf, symmetric and so on) are not single statement patterns any more, so they end the chain. Lookups are shared only within a window: an entity met in two windows is fetched twice.
 
@@ -1082,11 +1082,11 @@ It is on by default: `query.join.entityprefetch`, or `rya.entity-prefetch` on th
 
 ## 14. Inference
 
-Inference makes queries also return statements that follow from an **ontology** (RDFS/OWL statements such as `ex:Dog rdfs:subClassOf ex:Animal`), without storing them. rya-ng does it at **query time**: it rewrites the query tree so the extra matches are found by the same scans. It is off by default (`query.infer`, or `rya.inference` on the endpoint).
+Inference makes queries also return statements that follow from an **ontology** (RDFS/OWL statements such as `ex:Dog rdfs:subClassOf ex:Animal`), without storing them. Tripatha does it at **query time**: it rewrites the query tree so the extra matches are found by the same scans. It is off by default (`query.infer`, or `tripatha.inference` on the endpoint).
 
 ### 14.1 The InferenceEngine: the ontology in memory
 
-`InferenceEngine` reads the ontology from the store when it starts, and again on a timer (every 5 minutes by default; `rya.inference-refresh` on the endpoint). It keeps:
+`InferenceEngine` reads the ontology from the store when it starts, and again on a timer (every 5 minutes by default; `tripatha.inference-refresh` on the endpoint). It keeps:
 
 | What | Built from |
 |---|---|
@@ -1218,7 +1218,7 @@ value      empty
 ```
 
 - **`term-or-cell`** is a word (text index) or a geohash cell (geo index).
-- **`objectHash`** is the first 8 bytes of SHA-256 over the object's Rya encoding (value and type), as 16 hex digits. The literal itself is never copied into the index.
+- **`objectHash`** is the first 8 bytes of SHA-256 over the object's Tripatha encoding (value and type), as 16 hex digits. The literal itself is never copied into the index.
 - **Why the subject is in the row:** no row grows without bound, so tablets can still split under a very common word.
 
 Real examples, from the running code:
@@ -1296,7 +1296,7 @@ WKT is parsed with RDF4J's `SpatialSupport`. WKT that doesn't parse is stored bu
 
 ### 15.6 Index lifecycle
 
-An index is only usable if it covers every statement. `IndexManager` records each index's state in the `ns` table (row `rya`, family `index`, qualifier `text` or `geo`): `READY` or `BUILDING`, plus its **definition**. The definition is a string that captures the indexing rules (`text/1;max=64;preds=…`, `geo/1;k=32;lvl=12;eps=1.0E-9`).
+An index is only usable if it covers every statement. `IndexManager` records each index's state in the `ns` table (row `tripatha`, family `index`, qualifier `text` or `geo`): `READY` or `BUILDING`, plus its **definition**. The definition is a string that captures the indexing rules (`text/1;max=64;preds=…`, `geo/1;k=32;lvl=12;eps=1.0E-9`).
 
 ```mermaid
 flowchart TD
@@ -1342,28 +1342,28 @@ flowchart TD
    - otherwise (the pattern sits on the right of a join): a plain store lookup, which is cheaper and goes through the batched-join cache.
 
 The index is **not** used when:
-- the query sets Rya's `query.limit` (SPARQL `LIMIT` is fine);
+- the query sets Tripatha's `query.limit` (SPARQL `LIMIT` is fine);
 - an embedded query sets the binding `query.useindex` to `false`;
 - the plan starts elsewhere and reaches the pattern with its subject already bound.
 
-**Testing:** with `-Drya.test.indexes=true` every IT maintains both indexes, and `RyaSailITBase` checks each test's index tables against `spo` with `IndexVerifier`.
+**Testing:** with `-Dtripatha.test.indexes=true` every IT maintains both indexes, and `RyaSailITBase` checks each test's index tables against `spo` with `IndexVerifier`.
 
 ---
 
 ## 16. Security: visibility labels and authorizations
 
-rya-ng passes Accumulo's cell-level security through to RDF statements: each statement has a visibility label, and each read uses a set of authorizations.
+Tripatha passes Accumulo's cell-level security through to RDF statements: each statement has a visibility label, and each read uses a set of authorizations.
 
 ```mermaid
 flowchart LR
-    user["Accumulo user's authorizations<br/>(granted by an admin)"] --> cfg["endpoint: rya.sparql.authorizations<br/>(must be a subset)"]
+    user["Accumulo user's authorizations<br/>(granted by an admin)"] --> cfg["endpoint: tripatha.sparql.authorizations<br/>(must be a subset)"]
     cfg --> req["request: auths=A,B<br/>(must be a subset, else 403)"]
     req --> conn["connection configuration:<br/>setAuths"]
     conn --> scans["every scan: statements, counters,<br/>graph markers, index entries"]
 ```
 
 **Writing:**
-- **The label:** a statement's label is the connection's `conf.cv`. On the endpoint that is `rya.sparql.default-visibility`. An update may set its own with `visibility=` when `rya.sparql.allow-request-visibility` is on, and the expression is checked first.
+- **The label:** a statement's label is the connection's `conf.cv`. On the endpoint that is `tripatha.sparql.default-visibility`. An update may set its own with `visibility=` when `tripatha.sparql.allow-request-visibility` is on, and the expression is checked first.
 - **Where it goes:** the label is written on everything derived from the statement: the three statement cells, its counters, its graph marker and its index entries.
 
 **Reading:** every scan uses the connection's authorizations. Readers therefore:
@@ -1388,22 +1388,22 @@ flowchart LR
 
 `RyaSparqlApplication` is a Spring Boot application. `RyaStoreConfiguration` builds three beans:
 
-1. **`Store`**, for `rya.backend`:
-   - **Accumulo:** an `AccumuloStore` on a client built from `rya.accumulo.client-properties` (an `accumulo-client.properties` file, read with `AccumuloClients.fromFile`; if the file uses password authentication without a stored password, it comes from `rya.accumulo.password`, i.e. the `RYA_ACCUMULO_PASSWORD` environment variable), or from `rya.accumulo.instance`, `zookeepers`, `user` and `password`;
-   - **HBase:** an `HBaseStore` from `rya.hbase.*`. It refuses to start when the account can't read a label of `rya.sparql.authorizations` (their canaries; see BACKENDS-STUDY.md 4.2).
-   - **RocksDB:** a `RocksStore` on the directory `rya.rocksdb.path`, which this process alone can open.
-2. **`StoreRdfConfiguration`**, from `RyaProperties` (`rya.*` in `application.yaml` or on the command line):
+1. **`Store`**, for `tripatha.backend`:
+   - **Accumulo:** an `AccumuloStore` on a client built from `tripatha.accumulo.client-properties` (an `accumulo-client.properties` file, read with `AccumuloClients.fromFile`; if the file uses password authentication without a stored password, it comes from `tripatha.accumulo.password`, i.e. the `TRIPATHA_ACCUMULO_PASSWORD` environment variable), or from `tripatha.accumulo.instance`, `zookeepers`, `user` and `password`;
+   - **HBase:** an `HBaseStore` from `tripatha.hbase.*`. It refuses to start when the account can't read a label of `tripatha.sparql.authorizations` (their canaries; see BACKENDS-STUDY.md 4.2).
+   - **RocksDB:** a `RocksStore` on the directory `tripatha.rocksdb.path`, which this process alone can open.
+2. **`StoreRdfConfiguration`**, from `RyaProperties` (`tripatha.*` in `application.yaml` or on the command line):
 
    | Setting | Configuration call |
    |---|---|
-   | `rya.table-prefix` | `setTablePrefix` |
-   | `rya.inference` | `setInfer` |
-   | `rya.stats` | `setUseStats` and `setMaintainStats` |
-   | `rya.join-batch-size` | `setJoinBatchSize` |
-   | `rya.text-index`, `rya.text-index-predicates`, `rya.geo-index`, `rya.rebuild-indexes` | `setTextIndex`, `setTextIndexPredicates`, `setGeoIndex`, `setRebuildIndexes` |
-   | `rya.sparql.authorizations` | `setAuths` (the most any request may read with) |
-   | `rya.sparql.default-visibility` | `setCv` (the label written on inserts) |
-   | `rya.inference-refresh` | the inference engine's refresh period |
+   | `tripatha.table-prefix` | `setTablePrefix` |
+   | `tripatha.inference` | `setInfer` |
+   | `tripatha.stats` | `setUseStats` and `setMaintainStats` |
+   | `tripatha.join-batch-size` | `setJoinBatchSize` |
+   | `tripatha.text-index`, `tripatha.text-index-predicates`, `tripatha.geo-index`, `tripatha.rebuild-indexes` | `setTextIndex`, `setTextIndexPredicates`, `setGeoIndex`, `setRebuildIndexes` |
+   | `tripatha.sparql.authorizations` | `setAuths` (the most any request may read with) |
+   | `tripatha.sparql.default-visibility` | `setCv` (the label written on inserts) |
+   | `tripatha.inference-refresh` | the inference engine's refresh period |
 3. **`SailRepository`**, built by `RyaSailFactory.createSail` and initialized at startup. Initialization:
    - opens the DAO: tables, combiner, version, index states, and an optional index rebuild;
    - opens the statistics reader;
@@ -1440,8 +1440,8 @@ flowchart TD
 - **Tracing:** `trace=<id>` streams the request's Accumulo operations to `/sparql/trace/<id>` ([section 17.5](#175-tracing-a-query)).
 - **Formats:** `ContentNegotiation` picks the format from `Accept`, by quality and then by the client's order. The first format of each list is the default. If nothing supported is acceptable, the answer is `406`.
 - **Time limit:** every query and update gets RDF4J's maximum execution time:
-  - by default `rya.sparql.query-timeout` (120 s);
-  - or the request's `timeout=` parameter, in whole seconds, up to `rya.sparql.max-query-timeout` (30 min by default; `0s` for no limit). The query page sends it from its **Timeout** field.
+  - by default `tripatha.sparql.query-timeout` (120 s);
+  - or the request's `timeout=` parameter, in whole seconds, up to `tripatha.sparql.max-query-timeout` (30 min by default; `0s` for no limit). The query page sends it from its **Timeout** field.
 - **RDF 1.2 output:** `BlankNodeOutput` restores blank nodes inside triple terms too. `DirectionJsonWriter` writes a literal's direction in SPARQL JSON as `"its:dir": "rtl"`, where RDF4J 6.1 writes `"--rtl"`.
 - **Errors:** `SparqlExceptionHandler` maps them to plain-text answers:
 
@@ -1456,38 +1456,38 @@ flowchart TD
 ### 17.3 The query page
 
 `src/main/resources/static/index.html` and `ui/` hold the browser page:
-- **`rya-ui.js`** sets up YASGUI on `/sparql`, with the Examples menu and header fields the browser remembers: **Authorizations** (sent as `auths=`), **Timeout** (sent as `timeout=`) and the **Trace** switch.
-- **`rya-trace.js`** is the resizable trace panel on the right ([section 17.5](#175-tracing-a-query)).
-- **`rya-sparql12.js`** adds RDF 1.2 to YASGUI 4, which knows SPARQL 1.1 only, by replacing a few of its methods at load time (YASGUI's files are not changed):
+- **`tripatha-ui.js`** sets up YASGUI on `/sparql`, with the Examples menu and header fields the browser remembers: **Authorizations** (sent as `auths=`), **Timeout** (sent as `timeout=`) and the **Trace** switch.
+- **`tripatha-trace.js`** is the resizable trace panel on the right ([section 17.5](#175-tracing-a-query)).
+- **`tripatha-sparql12.js`** adds RDF 1.2 to YASGUI 4, which knows SPARQL 1.1 only, by replacing a few of its methods at load time (YASGUI's files are not changed):
   - `Yasqe.checkSyntax`: a small tokenizer of our own looks for SPARQL 1.2 syntax. A query that has some loses YASGUI's error marker, is highlighted by that tokenizer (a CodeMirror overlay), and gets its query-or-update kind from it. Other queries are left to YASGUI.
-  - YASR's response parser: triple terms in SPARQL JSON are turned into bindings the table can hold, and N-Triples is read by our own N-Triples 1.2 reader. `rya-ui.js` asks for graph results in Turtle, and in N-Triples when the query uses SPARQL 1.2 syntax. When a Turtle result holds RDF 1.2 values (RDF4J starts it with `@version "1.2"`, and only then), it remembers the query and runs it once more in N-Triples.
+  - YASR's response parser: triple terms in SPARQL JSON are turned into bindings the table can hold, and N-Triples is read by our own N-Triples 1.2 reader. `tripatha-ui.js` asks for graph results in Turtle, and in N-Triples when the query uses SPARQL 1.2 syntax. When a Turtle result holds RDF 1.2 values (RDF4J starts it with `@version "1.2"`, and only then), it remembers the query and runs it once more in N-Triples.
   - The table plugin's cell renderer: triple terms as `<<( s p o )>>`, and the direction of directional literals.
-- **`rya-map.js`** draws `geo:wktLiteral` results on a map.
+- **`tripatha-map.js`** draws `geo:wktLiteral` results on a map.
 - **`wkt.js`** turns WKT into GeoJSON.
 
-The third-party files (YASGUI, the map library, …) are not in the repository. At build time, `maven-antrun-plugin` downloads pinned npm tarballs into `~/.m2/repository/.cache/rya-ng-ui`, checks their SHA-512, and unpacks them into `static/vendor`. `SparqlUiIT` checks that every asset is served.
+The third-party files (YASGUI, the map library, …) are not in the repository. At build time, `maven-antrun-plugin` downloads pinned npm tarballs into `~/.m2/repository/.cache/tripatha-ui`, checks their SHA-512, and unpacks them into `static/vendor`. `SparqlUiIT` checks that every asset is served.
 
 ### 17.4 Running it
 
-- **`rya.sparql/configure.sh`** (bash 3.2 compatible) asks for the settings and writes a launch script that passes them as `--rya.*` arguments. Only the password travels in the environment (`RYA_ACCUMULO_PASSWORD`), and the script never stores it.
+- **`tripatha.sparql/configure.sh`** (bash 3.2 compatible) asks for the settings and writes a launch script that passes them as `--tripatha.*` arguments. Only the password travels in the environment (`TRIPATHA_ACCUMULO_PASSWORD`), and the script never stores it.
 - **`DevServer`** (test sources) runs the endpoint on a throwaway MiniAccumuloCluster.
 
 ### 17.5 Tracing a query
 
-A trace answers *what does this query do in the store?* while it runs. It covers the plan RDF4J builds, every scan with its ranges, columns, iterators, entries and time, every flush of writes, and the reason rya-ng had for each.
+A trace answers *what does this query do in the store?* while it runs. It covers the plan RDF4J builds, every scan with its ranges, columns, iterators, entries and time, every flush of writes, and the reason Tripatha had for each.
 
-**Recording (`rya.store`, package `trace`; on Accumulo, `rya.accumulo`'s `TracingProxies`).**
+**Recording (`tripatha.store`, package `trace`; on Accumulo, `tripatha.accumulo`'s `TracingProxies`).**
 - **One wrapper sees everything.** `AccumuloTrace.wrap(client)` returns a dynamic proxy of the `AccumuloClient`; `AccumuloStore` wraps the client it is given. (The HBase backend reports its scans through `TracedScans` and its flushes from its writer, with the same events.)
   - While a trace runs on the current thread, the scanners, batch scanners and batch deleters it creates are proxies too. They record `setRange(s)`, `fetchColumn…` and `addScanIterator`, then count the entries and the time spent inside `hasNext()` and `next()`.
   - Writers are always wrapped, because the DAO creates them once at startup. They count each mutation for the trace of the thread that adds it, and report a `flush` event when the writes are sent.
   - Without a trace, everything is passed straight through.
 - **Reasons come from the call sites.** Code that is about to scan opens `StoreTrace.reason(() -> "…")` around creating the scanner. Reasons nest, so a scan can read `batched join: 5 right-hand lookups fetched together › batched lookup of 5 patterns on SPO`. Reasons are recorded by: the query engine (lookups, batched lookups), the statistics reader, graph sizes, the index searcher, the DAO (deletes, graph drops, graph list, size, namespaces), the batched join, inference (transitive closures, `owl:sameAs`), and query planning.
 - **Plans.** `RdfCloudTripleStoreConnection.evaluateInternal` reports the tree as parsed and as optimized. When traced, it prepares the optimized tree exactly as `evaluate` would and then reports it, so the plan shows which joins became `RyaBatchedJoin`. Tracing doesn't turn on RDF4J's own result-size or time tracking, which would turn batched joins off.
-- **Progress of long scans.** A scan's counters live in its iterator: entries, time inside Accumulo calls, the call in progress (if any) and the last key read. A daemon thread (`rya-trace-progress`) asks every running trace once a second for a `progress` event. The event lists each scan that has run for at least a second: its entries so far, the time spent, how long the current call has been waiting for the tablet servers, and the last row it read. A long scan therefore shows where it is in the table instead of looking stuck. Progress is only read, never written, by that thread.
+- **Progress of long scans.** A scan's counters live in its iterator: entries, time inside Accumulo calls, the call in progress (if any) and the last key read. A daemon thread (`tripatha-trace-progress`) asks every running trace once a second for a `progress` event. The event lists each scan that has run for at least a second: its entries so far, the time spent, how long the current call has been waiting for the tablet servers, and the last row it read. A long scan therefore shows where it is in the table instead of looking stuck. Progress is only read, never written, by that thread.
 - **One trace per thread.** A trace lives in a `ThreadLocal` from `StoreTrace.start(listener)` until its `Scope` is closed, which reports the `summary`. Scans capture their trace when they are created, so closing one from another thread still reports to the right trace.
 - **Caps.** Up to 1,000 scans and flushes are reported one by one, with at most 10 ranges each. Past that, only the totals grow, and the summary says how many were left out.
 
-**Streaming (`rya.sparql`).**
+**Streaming (`tripatha.sparql`).**
 
 ```mermaid
 sequenceDiagram
@@ -1511,9 +1511,9 @@ sequenceDiagram
 - **Expiry:** a channel whose other half never shows up is dropped after 2 minutes.
 - **The reader never slows the query:** a failed or slow send only stops the stream, never the query.
 - **Clean-up:** the request always closes the trace in a `finally`, so a pooled server thread is never left traced. Otherwise it could report another user's next request.
-- **Turning it off:** `rya.sparql.allow-trace=false` refuses both sides with `403`.
+- **Turning it off:** `tripatha.sparql.allow-trace=false` refuses both sides with `403`.
 
-**The panel (`ui/rya-trace.js`)** is an `aside` to the right of the editor and results, as tall as the window, with its own scroll.
+**The panel (`ui/tripatha-trace.js`)** is an `aside` to the right of the editor and results, as tall as the window, with its own scroll.
 - **Contents:** the notes (the query and its authorizations), the two plans, one card per scan or flush, and a per-table summary.
 - **While the query runs:** the header shows a running clock, and each running scan's card shows its entries so far, the row it has reached, and any wait for the tablet servers.
 - **Resizing:** the divider before it resizes it by dragging or with the arrow keys.
@@ -1525,7 +1525,7 @@ sequenceDiagram
 
 ## 18. The synthetic-data loader
 
-`rya.loader` generates a synthetic dataset (people, organizations, cities, landmarks, events, products, reviews, articles, sensors, observations…) and writes it through the normal DAO, in parallel, for stress tests of up to billions of triples. It is a Spring Boot executable jar run with `rya.loader/run.sh`.
+`tripatha.loader` generates a synthetic dataset (people, organizations, cities, landmarks, events, products, reviews, articles, sensors, observations…) and writes it through the normal DAO, in parallel, for stress tests of up to billions of triples. It is a Spring Boot executable jar run with `tripatha.loader/run.sh`.
 
 ```mermaid
 flowchart LR
@@ -1596,24 +1596,24 @@ sequenceDiagram
 - **Naming:** `*Test` classes are pure unit tests (surefire, `mvn test`). `*IT` classes need a cluster (failsafe, `mvn verify`).
 - **`MiniAccumuloSingleton`** and **`MiniHBaseSingleton`** start one in-process cluster per test JVM, on first use, and stop it with a shutdown hook. The HBase one runs `VisibilityController` with authorization on, and tests use it as a normal account, since the process user is a superuser who sees every cell.
 - **`RocksDBTestBackend`** opens one RocksDB database per test JVM in a temporary directory. It needs no cluster, so the ITs run on it in seconds.
-- **`StoreITBase`** gives each test, on the backend of `-Drya.test.backend` (`accumulo` by default, `hbase` or `rocksdb`):
+- **`StoreITBase`** gives each test, on the backend of `-Dtripatha.test.backend` (`accumulo` by default, `hbase` or `rocksdb`):
   - a `Store`;
   - a unique table prefix, whose tables are deleted afterwards;
   - `grantAuthorizations(...)`. Accumulo rejects scans with labels the user doesn't hold and HBase ignores them, so visibility tests must call it.
 - **`AccumuloITBase`** gives Accumulo-only tests a root `AccumuloClient`.
-- **`RyaSailITBase`** (`rya.sail`) adds `newConf()`, `newDao(conf)` and `newStore(conf, inference)`.
+- **`RyaSailITBase`** (`tripatha.sail`) adds `newConf()`, `newDao(conf)` and `newStore(conf, inference)`.
 - **System properties that widen coverage:**
 
   | Property | Effect |
   |---|---|
-  | `-Drya.test.joinBatchSize=2` | every batched join crosses chunk boundaries |
-  | `-Drya.join-batch-size=2` | the same, for the endpoint tests |
-  | `-Drya.test.indexes=true` | every test maintains both indexes, then `IndexVerifier` checks that each index table holds exactly the entries its statements call for |
-  | `-Drya.test.backend=hbase` | the ITs run on the HBase mini cluster |
-  | `-Drya.test.hbaseCounters=increment` | HBase counter tables use increments instead of the coprocessor |
-  | `-Drya.test.backend=rocksdb` | the ITs run on an embedded RocksDB database |
+  | `-Dtripatha.test.joinBatchSize=2` | every batched join crosses chunk boundaries |
+  | `-Dtripatha.join-batch-size=2` | the same, for the endpoint tests |
+  | `-Dtripatha.test.indexes=true` | every test maintains both indexes, then `IndexVerifier` checks that each index table holds exactly the entries its statements call for |
+  | `-Dtripatha.test.backend=hbase` | the ITs run on the HBase mini cluster |
+  | `-Dtripatha.test.hbaseCounters=increment` | HBase counter tables use increments instead of the coprocessor |
+  | `-Dtripatha.test.backend=rocksdb` | the ITs run on an embedded RocksDB database |
 
-- **Coverage:** `-Pcoverage` adds JaCoCo to both test phases and merges the reports in `rya.coverage`.
+- **Coverage:** `-Pcoverage` adds JaCoCo to both test phases and merges the reports in `tripatha.coverage`.
 
 ---
 
@@ -1629,7 +1629,7 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 6. **An index table never exists while its index is off.** It would silently stop receiving writes.
 7. **A batched-join prefetch is complete or absent.** A key missing from it must mean "ask the store".
 8. **Blank nodes are IRIs in `RyaSchema.BNODE_NAMESPACE`** everywhere inside the Sail. The inference engine relies on it.
-9. **`null` context:** any graph in a Rya pattern, the default graph in RDF4J.
+9. **`null` context:** any graph in a Tripatha pattern, the default graph in RDF4J.
 10. **Per-request settings go on the connection's configuration**, never on the store's.
 11. **New query nodes clone their `Var`s.** RDF4J 6 allows one parent per `Var`.
 12. **`init()` must not write to an existing store.** Read-only users must be able to open it.
@@ -1648,7 +1648,7 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 | **BatchWriter** | Accumulo writer that buffers mutations and sends them in the background. `flush()` waits for them. |
 | **Binding set** | One solution of a query: values for some variables. |
 | **Cardinality** | Estimated number of results of a pattern, used to order joins. |
-| **Column family / qualifier** | Second and third parts of an Accumulo key. rya-ng puts the graph IRI in the family. |
+| **Column family / qualifier** | Second and third parts of an Accumulo key. Tripatha puts the graph IRI in the family. |
 | **Combiner** | Accumulo iterator that merges all cells of a key into one, for example by adding them up. |
 | **Context** | RDF4J's name for a named graph. |
 | **DAO** | Data access object: `RyaStoreDAO`, the class that reads and writes the tables. |
@@ -1669,4 +1669,4 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 | **Trace** | A record of what one request does in Accumulo: its plan, scans and writes, each with a reason ([section 17.5](#175-tracing-a-query)). |
 | **TripleSource** | The RDF4J interface the evaluation reads statements through: `getStatements(s, p, o, contexts)`. |
 | **TupleExpr** | A node of RDF4J's query algebra tree. |
-| **Visibility** | A label expression on an Accumulo cell, such as `A&(B\|C)`. rya-ng gives every cell of a statement the statement's label. |
+| **Visibility** | A label expression on an Accumulo cell, such as `A&(B\|C)`. Tripatha gives every cell of a statement the statement's label. |

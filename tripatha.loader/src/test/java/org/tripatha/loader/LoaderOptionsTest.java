@@ -1,0 +1,330 @@
+/*
+ * Copyright 2026 David Greco
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.tripatha.loader;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+
+import org.tripatha.store.spi.Durability;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+class LoaderOptionsTest {
+
+    private static LoaderOptions parse(final String... args) {
+        return LoaderOptions.parse(args, Map.of());
+    }
+
+    @Test
+    void defaults() {
+        final LoaderOptions o = parse("load", "--table-prefix", "t_", "--entities", "1000");
+        assertEquals(LoaderOptions.Command.LOAD, o.command);
+        assertEquals(8, o.threads());
+        assertEquals(1000, o.blockSize());
+        assertEquals(15_000, o.commitIntervalMs());
+        assertEquals(32L * 1024 * 1024, o.batchMemoryBytes());
+        assertEquals(Durability.DEFAULT, o.durability());
+        assertEquals(-1, o.splits());
+        assertTrue(o.stats());
+        assertFalse(o.textIndex());
+        assertFalse(o.resume());
+        assertEquals(0, o.maxRate());
+        assertEquals("tripatha-loader-t_part0of1.progress", o.progressFile().toString());
+        assertEquals("tripatha-loader-t_e10-500_part1of2.progress", parse("load", "--table-prefix", "t_", "--entities", "1000",
+                "--start-entity", "10", "--end-entity", "500", "--part", "1", "--parts", "2").progressFile().toString());
+        assertEquals("root", o.user());
+    }
+
+    @Test
+    void sizesAndDurations() {
+        final LoaderOptions o = parse("load", "--table-prefix=t_", "--entities", "1.5M", "--commit-interval", "250ms",
+                "--max-latency=2m", "--writer-timeout", "1h", "--report-interval", "7", "--max-rate", "20k",
+                "--durability", "flush", "--splits", "15");
+        assertEquals(1_500_000, o.genConfig().entities());
+        assertEquals(250, o.commitIntervalMs());
+        assertEquals(120_000, o.maxLatencyMs());
+        assertEquals(3_600_000, o.writerTimeoutMs());
+        assertEquals(7_000, o.reportIntervalMs());
+        assertEquals(20_000, o.maxRate());
+        assertEquals(Durability.FLUSH, o.durability());
+        assertEquals(15, o.splits());
+        assertEquals(2_000_000_000L, parse("dry-run", "--entities", "2B").genConfig().entities());
+    }
+
+    @Test
+    void triplesMapToAStableEntityCount() {
+        final LoaderOptions a = parse("dry-run", "--triples", "3M");
+        final LoaderOptions b = parse("dry-run", "--triples", "3M");
+        assertEquals(a.genConfig().entities(), b.genConfig().entities());
+        final double triples = a.genConfig().entities() * LoaderOptions.triplesPerEntity(a.genConfig());
+        assertEquals(3_000_000, triples, 30_000);
+    }
+
+    @Test
+    void rdf12FractionIsPartOfTheDataset() {
+        final LoaderOptions plain = parse("load", "--table-prefix", "t_", "--entities", "1000");
+        assertEquals(0, plain.genConfig().rdf12Fraction());
+        assertFalse(plain.datasetArgs().contains("rdf12"));
+
+        final LoaderOptions modern = parse("load", "--table-prefix", "t_", "--entities", "1000", "--rdf12-fraction", "0.2");
+        assertEquals(0.2, modern.genConfig().rdf12Fraction());
+        assertTrue(modern.datasetArgs().contains("--rdf12-fraction 0.2"), modern.datasetArgs());
+        assertFalse(plain.genConfig().fingerprint().equals(modern.genConfig().fingerprint()));
+        // More triples per entity, so fewer entities for the same number of triples.
+        assertTrue(parse("dry-run", "--triples", "3M", "--rdf12-fraction", "0.5").genConfig().entities()
+                < parse("dry-run", "--triples", "3M").genConfig().entities());
+        assertThrows(IllegalArgumentException.class,
+                () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--rdf12-fraction", "2").genConfig());
+    }
+
+    @Test
+    void passwordOnlyFromTheEnvironment() {
+        final IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--password", "x"));
+        assertTrue(e.getMessage().contains("TRIPATHA_ACCUMULO_PASSWORD"));
+        final LoaderOptions o = LoaderOptions.parse(new String[] {"load", "--table-prefix", "t_", "--entities", "10"},
+                Map.of("TRIPATHA_ACCUMULO_PASSWORD", "pw", "TRIPATHA_ACCUMULO_ZOOKEEPERS", "zk:2181", "TRIPATHA_ACCUMULO_USER", "loader"));
+        assertEquals("pw", o.password());
+        assertEquals("zk:2181", o.zookeepers());
+        assertEquals("loader", o.user());
+        assertNull(o.instance());
+    }
+
+    @Test
+    void rejectsBadArguments() {
+        assertThrows(IllegalArgumentException.class, () -> parse("frobnicate"));
+        assertThrows(IllegalArgumentException.class, () -> parse("load", "--entities", "10"));
+        assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_"));
+        assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--bogus", "1"));
+        assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_", "--entities", "10", "stray"));
+        assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_", "--entities", "lots"));
+        assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--part", "2", "--parts", "2"));
+        assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--threads", "0"));
+        assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--resume=maybe"));
+        assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--class-weights", "Person"));
+        assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--threads"));
+    }
+
+    @Test
+    void checkNeedsNoStore() {
+        assertEquals(LoaderOptions.Command.CHECK, parse("check").command);
+        assertEquals("t_", parse("check", "--table-prefix", "t_").tablePrefix());
+    }
+
+    @Test
+    void hbaseDefaults() {
+        final LoaderOptions o = parse("check", "--backend", "HBase");
+        assertEquals("hbase", o.backend());
+        final Properties s = o.hbaseSettings();
+        assertEquals("coprocessor", s.getProperty("hbase.counters"));
+        assertEquals("tripatha_labels", s.getProperty("hbase.labels-table"));
+        assertEquals("tripatha_labels", o.hbaseLabelsTable());
+        assertNull(s.getProperty("hbase.user"));
+        assertNull(s.getProperty("hbase.site"));
+        assertEquals("accumulo", parse("check").backend());
+        assertEquals("hbase", LoaderOptions.parse(new String[] {"check"}, Map.of("TRIPATHA_BACKEND", "hbase")).backend());
+        assertEquals("accumulo", LoaderOptions.parse(new String[] {"check", "--backend", "accumulo"},
+                Map.of("TRIPATHA_BACKEND", "hbase")).backend());
+        assertEquals("accumulo", LoaderOptions.parse(new String[] {"check"}, Map.of("TRIPATHA_BACKEND", " ")).backend());
+        // Accumulo never reads the HBase settings, even broken ones.
+        assertEquals("tripatha_labels", LoaderOptions.parse(new String[] {"labels", "--labels", "A"},
+                Map.of("TRIPATHA_HBASE_CONF", "not a pair")).hbaseLabelsTable());
+    }
+
+    @Test
+    void hbasePropertiesSelectHBaseAndOptionsWin(@TempDir final Path dir) throws IOException {
+        final Path file = dir.resolve("hbase.properties");
+        Files.writeString(file, """
+                # written by configure.sh
+                hbase.conf.hbase.zookeeper.quorum=zk1,zk2
+                hbase.conf.hbase.zookeeper.property.clientPort=2181
+                hbase.user=tripatha
+                hbase.counters=increment
+                hbase.counters.jar=hdfs:///tripatha/coprocessor.jar
+                hbase.labels-table=my_labels
+                """, StandardCharsets.ISO_8859_1);
+        final LoaderOptions o = LoaderOptions.parse(new String[] {"check", "--hbase-properties", file.toString()},
+                Map.of("TRIPATHA_BACKEND", "accumulo", "TRIPATHA_HBASE_USER", "from-env", "TRIPATHA_HBASE_SITE", "/etc/hbase/conf/hbase-site.xml"));
+        assertEquals("hbase", o.backend());
+        final Properties s = o.hbaseSettings();
+        assertEquals("zk1,zk2", s.getProperty("hbase.conf.hbase.zookeeper.quorum"));
+        assertEquals("tripatha", s.getProperty("hbase.user"));
+        assertEquals("increment", s.getProperty("hbase.counters"));
+        assertEquals("hdfs:///tripatha/coprocessor.jar", s.getProperty("hbase.counters.jar"));
+        assertEquals("my_labels", o.hbaseLabelsTable());
+        // What the file doesn't set still comes from the environment.
+        assertEquals("/etc/hbase/conf/hbase-site.xml", s.getProperty("hbase.site"));
+
+        final Properties over = parse("check", "--hbase-properties", file.toString(), "--hbase-user", "other",
+                "--hbase-counters", "coprocessor", "--hbase-conf", "hbase.zookeeper.quorum=zk3", "--hbase-labels-table", "l2",
+                "--hbase-counters-jar=").hbaseSettings();
+        assertEquals("other", over.getProperty("hbase.user"));
+        assertEquals("coprocessor", over.getProperty("hbase.counters"));
+        assertEquals("zk3", over.getProperty("hbase.conf.hbase.zookeeper.quorum"));
+        assertEquals("2181", over.getProperty("hbase.conf.hbase.zookeeper.property.clientPort"));
+        assertEquals("l2", over.getProperty("hbase.labels-table"));
+        assertNull(over.getProperty("hbase.counters.jar"));
+
+        // An empty --hbase-user connects as the process user, for the labels command run as a superuser.
+        assertNull(parse("labels", "--labels", "A", "--hbase-properties", file.toString(), "--hbase-user=")
+                .hbaseSettings().getProperty("hbase.user"));
+        // The settings are a copy: the store factory may change its own.
+        o.hbaseSettings().setProperty("hbase.check-labels", "false");
+        assertNull(o.hbaseSettings().getProperty("hbase.check-labels"));
+
+        // configure.sh writes anything outside printable ASCII as \\uXXXX escapes.
+        final Path escaped = dir.resolve("escaped.properties");
+        Files.writeString(escaped, "hbase.user=\\u004a\\u006f\\u0073\\u00e9\n", StandardCharsets.ISO_8859_1);
+        assertEquals("José", parse("check", "--hbase-properties", escaped.toString()).hbaseSettings().getProperty("hbase.user"));
+    }
+
+    @Test
+    void rocksdbIsSelectedByItsDirectory() {
+        final LoaderOptions byPath = parse("check", "--rocksdb-path", "/data/tripatha");
+        assertEquals("rocksdb", byPath.backend());
+        assertEquals(Path.of("/data/tripatha"), byPath.rocksdbPath());
+
+        final LoaderOptions byEnv = LoaderOptions.parse(new String[] {"check"},
+                Map.of("TRIPATHA_BACKEND", "rocksdb", "TRIPATHA_ROCKSDB_PATH", "/env/tripatha"));
+        assertEquals("rocksdb", byEnv.backend());
+        assertEquals(Path.of("/env/tripatha"), byEnv.rocksdbPath());
+
+        // The option wins over the environment, and --backend over both.
+        assertEquals(Path.of("/data/tripatha"), LoaderOptions.parse(new String[] {"check", "--rocksdb-path", "/data/tripatha"},
+                Map.of("TRIPATHA_ROCKSDB_PATH", "/env/tripatha")).rocksdbPath());
+        assertEquals("accumulo", LoaderOptions.parse(new String[] {"check", "--backend", "accumulo"},
+                Map.of("TRIPATHA_BACKEND", "rocksdb")).backend());
+
+        final IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--backend", "rocksdb"));
+        assertTrue(e.getMessage().contains("--rocksdb-path"), e.getMessage());
+        // A dry run needs no store.
+        assertEquals("rocksdb", parse("dry-run", "--backend", "rocksdb", "--entities", "10").backend());
+    }
+
+    @Test
+    void rejectsBadHBaseSettings(@TempDir final Path dir) throws IOException {
+        final Path file = dir.resolve("hbase.properties");
+        Files.writeString(file, "hbase.conf.hbase.zookeeper.quorum=zk1\n");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> parse("check", "--backend", "accumulo", "--hbase-properties", file.toString()));
+        assertTrue(e.getMessage().contains("--hbase-properties"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--backend", "cassandra"));
+        assertTrue(e.getMessage().contains("accumulo, hbase or rocksdb"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--hbase-properties", dir.resolve("none").toString()));
+        assertTrue(e.getMessage().contains("can't read"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class,
+                () -> parse("check", "--hbase-properties", file.toString(), "--hbase-counters", "sometimes"));
+        assertTrue(e.getMessage().contains("coprocessor or increment"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--backend", "hbase", "--hbase-conf", "quorum"));
+        assertTrue(e.getMessage().contains("key=value"), e.getMessage());
+
+        // A client setting without its hbase.conf. prefix would be ignored, so it is refused.
+        final Path typo = dir.resolve("typo.properties");
+        Files.writeString(typo, "hbase.zookeeper.quorum=zk1\n");
+        e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--hbase-properties", typo.toString()));
+        assertTrue(e.getMessage().contains("hbase.conf.hbase.zookeeper.quorum"), e.getMessage());
+        // dry-run never connects, so it doesn't read the file.
+        assertEquals("hbase", parse("dry-run", "--entities", "10", "--hbase-properties", typo.toString()).backend());
+    }
+
+    @Test
+    void dropNeedsTheExactPrefix() {
+        assertThrows(IllegalArgumentException.class, () -> parse("drop", "--table-prefix", "t_"));
+        assertThrows(IllegalArgumentException.class, () -> parse("drop", "--table-prefix", "t_", "--confirm", "t"));
+        assertEquals(LoaderOptions.Command.DROP, parse("drop", "--table-prefix", "t_", "--confirm", "t_").command);
+    }
+
+    @Test
+    void partsCoverTheRangeWithoutGapsOrOverlap() {
+        for (int parts = 1; parts <= 7; parts++) {
+            long next = 10;
+            for (int part = 0; part < parts; part++) {
+                final long[] r = parse("load", "--table-prefix", "t_", "--entities", "1001", "--start-entity", "10",
+                        "--end-entity", "900", "--part", Integer.toString(part), "--parts", Integer.toString(parts)).partRange();
+                assertEquals(next, r[0]);
+                assertTrue(r[1] >= r[0]);
+                next = r[1];
+            }
+            assertEquals(900, next);
+        }
+        // --end-entity beyond the dataset stops at its end.
+        assertEquals(1001, parse("load", "--table-prefix", "t_", "--entities", "1001", "--end-entity", "5000").partRange()[1]);
+    }
+
+    @Test
+    void datasetArgumentsReproduceTheDataset() {
+        final LoaderOptions o = parse("prepare", "--table-prefix", "t_", "--triples", "2M", "--seed", "7", "--labels", "A,B",
+                "--graphs", "3", "--text-index", "--text-predicates", "rdfs:label,o:email", "--class-weights", "Person=500",
+                "--stats", "off", "--threads", "3");
+        final List<String> args = new ArrayList<>(List.of("load"));
+        args.addAll(List.of(o.datasetArgs().split(" ")));
+        final LoaderOptions again = LoaderOptions.parse(args.toArray(new String[0]), Map.of());
+        assertEquals(o.genConfig(), again.genConfig());
+        assertEquals(o.genConfig().fingerprint(), again.genConfig().fingerprint());
+        assertEquals(List.of("http://www.w3.org/2000/01/rdf-schema#label", o.genConfig().ontology("email")), again.textPredicates());
+        assertTrue(again.textIndex());
+        assertFalse(again.geoIndex());
+        assertFalse(again.stats());
+        assertEquals(8, again.threads(), "load settings are not part of the dataset");
+    }
+
+    @Test
+    void mainReportsUsageAndArgumentErrors() {
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        final ByteArrayOutputStream err = new ByteArrayOutputStream();
+        final PrintStream o = new PrintStream(out, true, StandardCharsets.UTF_8);
+        final PrintStream e = new PrintStream(err, true, StandardCharsets.UTF_8);
+        assertEquals(0, LoaderMain.run(new String[] {"--help"}, Map.of(), o, e));
+        assertTrue(out.toString(StandardCharsets.UTF_8).contains("Commands:"));
+        assertEquals(0, LoaderMain.run(new String[] {"load", "--help"}, Map.of(), o, e));
+        assertEquals(2, LoaderMain.run(new String[] {"load", "--entities", "5"}, Map.of(), o, e));
+        assertTrue(err.toString(StandardCharsets.UTF_8).contains("--table-prefix is required"));
+        err.reset();
+        assertEquals(2, LoaderMain.run(new String[] {"load", "--table-prefix", "t_", "--entities", "5"}, Map.of(), o, e));
+        assertTrue(err.toString(StandardCharsets.UTF_8).contains("--zookeepers"), err.toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void dryRunReportsCostsAndPrintsStatements() {
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        final int code = LoaderMain.run(new String[] {"dry-run", "--entities", "3000", "--threads", "2", "--print", "5",
+            "--text-index", "--geo-index", "--labels", "A"}, Map.of(), new PrintStream(out, true, StandardCharsets.UTF_8),
+                System.err);
+        assertEquals(0, code);
+        final String text = out.toString(StandardCharsets.UTF_8);
+        final List<String> quads = text.lines().filter(l -> l.startsWith("<urn:tripatha-gen:")).toList();
+        assertEquals(5, quads.size(), text);
+        assertTrue(quads.stream().allMatch(l -> l.contains(" .")), text);
+        for (final String table : List.of("spo", "po", "osp", "eval", "text", "geo", "total")) {
+            assertTrue(text.lines().anyMatch(l -> l.startsWith(table + " ")), table + " missing in\n" + text);
+        }
+        assertTrue(text.contains("triples/s"), text);
+    }
+}

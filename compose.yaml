@@ -1,27 +1,27 @@
-# Try rya-ng out: the SPARQL endpoint and its query page on a throwaway in-process cluster.
+# Try Tripatha out: the SPARQL endpoint and its query page on a throwaway in-process cluster.
 #
 #   docker compose up --build          # then open http://localhost:8080/
-#   RYA_BACKEND=hbase docker compose up --build
-#   RYA_BACKEND=rocksdb docker compose up --build
+#   TRIPATHA_BACKEND=hbase docker compose up --build
+#   TRIPATHA_BACKEND=rocksdb docker compose up --build
 #
 # The first build downloads the dependencies and takes several minutes. On accumulo and hbase the
 # data lives in an in-process cluster and is lost when the container stops. On rocksdb it is kept
-# in the rya-data volume (docker compose down -v deletes it). The page's Examples menu loads
+# in the tripatha-data volume (docker compose down -v deletes it). The page's Examples menu loads
 # sample data.
 services:
-  rya:
+  tripatha:
     build: .
-    image: rya-ng-dev
+    image: tripatha-dev
     ports:
-      - "${RYA_PORT:-8080}:8080"
+      - "${TRIPATHA_PORT:-8080}:8080"
     environment:
       # accumulo (default), hbase or rocksdb
-      RYA_BACKEND: ${RYA_BACKEND:-accumulo}
+      TRIPATHA_BACKEND: ${TRIPATHA_BACKEND:-accumulo}
       # Both search indexes, so the text and geo examples use them.
-      RYA_TEXTINDEX: "true"
-      RYA_GEOINDEX: "true"
+      TRIPATHA_TEXTINDEX: "true"
+      TRIPATHA_GEOINDEX: "true"
     volumes:
-      - rya-data:/var/lib/rya-ng
+      - tripatha-data:/var/lib/tripatha
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS 'http://localhost:8080/sparql?query=ASK%20%7B%7D' > /dev/null"]
       interval: 10s
@@ -30,4 +30,4 @@ services:
       start_period: 60s
 
 volumes:
-  rya-data:
+  tripatha-data:

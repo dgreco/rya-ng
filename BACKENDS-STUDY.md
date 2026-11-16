@@ -23,11 +23,11 @@ A third backend, an embedded RocksDB database, was added on 2026-11-16: see sect
 ## 0. Implementation status
 
 **Built, phases 0 to 4:**
-- **The SPI and the Accumulo provider** (phase 1): `rya.store`, `rya.accumulo`, `rya.test`. The 409 tests of `main` pass unchanged.
-- **The HBase provider** (phase 2): `rya.hbase`, with the cell mapping of 3.2, the label rules of 4.2 and region-grouped batched reads.
-- **Counters** (phase 3): `rya.hbase.coprocessor`, in both counter modes.
-- **The endpoint and the loader** (phase 4): `rya.backend` and `rya.hbase.*`, `--backend` and `--hbase-*`, the loader's `labels` command, both wizards (the loader's writes a file for `--hbase-properties`), and `DevServer`.
-- **Tests:** the store, Sail, loader and endpoint ITs run on either backend (`-Drya.test.backend=hbase`). New tests: `QualifierOrderTest`, `RangeParityIT`, `LabelParityIT`, `CounterIT`, `HBaseLabelsIT`, `StoreProviderIT`, and a parity test of the neutral visibility parser against Accumulo's.
+- **The SPI and the Accumulo provider** (phase 1): `tripatha.store`, `tripatha.accumulo`, `tripatha.test`. The 409 tests of `main` pass unchanged.
+- **The HBase provider** (phase 2): `tripatha.hbase`, with the cell mapping of 3.2, the label rules of 4.2 and region-grouped batched reads.
+- **Counters** (phase 3): `tripatha.hbase.coprocessor`, in both counter modes.
+- **The endpoint and the loader** (phase 4): `tripatha.backend` and `tripatha.hbase.*`, `--backend` and `--hbase-*`, the loader's `labels` command, both wizards (the loader's writes a file for `--hbase-properties`), and `DevServer`.
+- **Tests:** the store, Sail, loader and endpoint ITs run on either backend (`-Dtripatha.test.backend=hbase`). New tests: `QualifierOrderTest`, `RangeParityIT`, `LabelParityIT`, `CounterIT`, `HBaseLabelsIT`, `StoreProviderIT`, and a parity test of the neutral visibility parser against Accumulo's.
 
 **Different from the plan:**
 - **Tracing.** The Accumulo trace proxies were kept, so traces on Accumulo are unchanged. HBase reports through `TracedScans` and its writer, with the same events. A `Store` decorator would have changed the events on Accumulo.
@@ -36,10 +36,10 @@ A third backend, an embedded RocksDB database, was added on 2026-11-16: see sect
 - **The coprocessor's timestamps.** Each delta's timestamp is taken atomically, with a monotonic per-region clock read inside the update. Puts take shared row locks, so two batches can stamp the same cell at once, which section 3.8 didn't foresee. `CounterIT` found this too.
 - **Label checks.**
   - **Startup probe:** a store refuses to open when, asking for no labels, it sees a label canary. That means its account is a superuser, or the cluster doesn't enforce labels. Phase 0 showed both cases.
-  - **Endpoint canaries:** on HBase the endpoint refuses to start when a label of `rya.sparql.authorizations` has no canary visible to it.
+  - **Endpoint canaries:** on HBase the endpoint refuses to start when a label of `tripatha.sparql.authorizations` has no canary visible to it.
   - **Label administration** opens the store with `hbase.check-labels=false`, because it needs a superuser.
 - **Read-only HBase accounts.** There is no test that one can open a store, because the test cluster runs without `AccessController`. Accumulo has one.
-- **Accumulo rejects some empty reads.** It rejects a cell range outside the fetched columns instead of returning nothing, so the Accumulo provider drops such ranges before reading. `RangeParityIT` found this; rya-ng itself never asks for one.
+- **Accumulo rejects some empty reads.** It rejects a cell range outside the fetched columns instead of returning nothing, so the Accumulo provider drops such ranges before reading. `RangeParityIT` found this; Tripatha itself never asks for one.
 - **Finding an HBase 3 cluster.** The HBase 3 client looks for the masters (`hbase.client.bootstrap.servers`, by default `localhost:16000`) rather than ZooKeeper. Given only a ZooKeeper quorum and no site file, the provider switches to ZooKeeper discovery itself.
 - **Long lookups on HBase.** A lookup of a literal too long to have been stored (a row over 32,767 bytes) reads nothing, as on Accumulo, instead of failing.
 - **Test cluster fixes:**
@@ -64,13 +64,13 @@ The loader's executable jar ran the same way, from its own process against an HB
 - **Kerberos and TLS** against a real HBase cluster. The client settings pass through (`hbase.site`, `hbase.conf.*`), but they are untested.
 - **The loader's `dry-run`** still sizes cells as Accumulo sends them.
 - **Data copy between backends** (section 5.4) is not built.
-- **Gaps in the superuser check.** The startup probe needs label canaries, which exist only after a label was registered through rya-ng (the loader's `labels` command). Until then a store opens with a warning. A superuser with labels registered outside rya-ng would then read labelled cells while asking for none.
+- **Gaps in the superuser check.** The startup probe needs label canaries, which exist only after a label was registered through Tripatha (the loader's `labels` command). Until then a store opens with a warning. A superuser with labels registered outside Tripatha would then read labelled cells while asking for none.
 - **The counter mode isn't recorded in `ns`,** as 3.8 planned. Writers read it from the table descriptor, and an account that may not read descriptors uses its configured mode, so every writer of a store must be configured alike.
 - **Unheld labels in embedded use.** Through the embedded Sail or DAO, labels the account doesn't hold make HBase return fewer rows instead of failing. Only the endpoint checks its labels at startup.
 
 ## 1. Summary
 
-**Yes, the design works: rya-ng can run on HBase with the same functionality, with one size limit to decide on.** Every Accumulo feature rya-ng uses has an HBase counterpart, natively or with a small amount of rya-ng code:
+**Yes, the design works: Tripatha can run on HBase with the same functionality, with one size limit to decide on.** Every Accumulo feature Tripatha uses has an HBase counterpart, natively or with a small amount of Tripatha code:
 - **Mechanical:** most features map one to one (section 3.1).
 - **Labels work differently in HBase, so they need four rules:**
   - The label goes in the qualifier as well as in the tag. In HBase a label isn't part of the cell's key: two copies of a statement under different labels would collapse into one, and a client can't read a cell's label back.
@@ -79,17 +79,17 @@ The loader's executable jar ran the same way, from its own process against an HB
   - Labels must be registered in HBase before they are used.
 - **Batched lookups** need a client-side replacement for Accumulo's `BatchScanner`: ranges grouped by region and scanned in parallel.
 - **Statistics counters** need server-side code to match Accumulo's write-only combiner. That code is a small coprocessor jar installed on the region servers. HBase's native increments work without it, but each one locks its row, reads the old value and syncs the write-ahead log on its own. That is far slower than the batched writes Accumulo does.
-- **One gap:** HBase caps a row key at 32,767 bytes, against Accumulo's 1 MB per key. rya-ng stores whole literals in its rows, so literals over about 32 KB fit on Accumulo and not on HBase.
+- **One gap:** HBase caps a row key at 32,767 bytes, against Accumulo's 1 MB per key. Tripatha stores whole literals in its rows, so literals over about 32 KB fit on Accumulo and not on HBase.
 
 **The blocking unknown is the runtime, not the design.**
-- No HBase release officially supports JDK 25, which rya-ng requires (HBASE-29728 is open).
+- No HBase release officially supports JDK 25, which Tripatha requires (HBASE-29728 is open).
 - HBase builds against Hadoop 3.4.3, and nobody has tested it with the Hadoop 3.5.0 client this build forces.
 - The client only has to run on JDK 25, since the HBase servers can stay on JDK 17 or 21. The in-process mini cluster used by the tests would run HBase and HDFS servers on JDK 25, which is riskier.
 - Phase 0 (section 8) is a spike that settles this before any other work starts, with a fallback for the tests: an HBase cluster in a container, outside the test JVM.
 
 **Pluggable backends** come from cutting at the cell level:
-- **One shared module (`rya.store`)** holds a small storage SPI and all the logic that is the same everywhere: the DAO, the query engine, statistics, indexes and tracing, moved out of `rya.accumulo`.
-- **Thin providers**, one per backend, are found with `ServiceLoader` and chosen by one `rya.backend` setting.
+- **One shared module (`tripatha.store`)** holds a small storage SPI and all the logic that is the same everywhere: the DAO, the query engine, statistics, indexes and tracing, moved out of `tripatha.accumulo`.
+- **Thin providers**, one per backend, are found with `ServiceLoader` and chosen by one `tripatha.backend` setting.
 - **Capability flags** make a backend that lacks a feature (for example Bigtable, without labels) refuse the settings it can't honour, instead of degrading silently.
 
 **"No speed penalty" is two claims:**
@@ -101,8 +101,8 @@ The loader's executable jar ran the same way, from its own process against an HB
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
 | D1 | Literals whose rows would exceed HBase's row limit | (a) reject them on HBase with a clear error, and add a check that finds them in an Accumulo store; (b) a new out-of-row encoding for long values | (a). (b) changes the stored encoding and ARCH.md invariants 1–2 for both backends |
-| D2 | Counter mode on HBase | (a) the rya-ng coprocessor (parity, but a jar on the region servers); (b) native `Increment` (nothing to install, slower writes) | (a) by default, (b) where coprocessors aren't allowed. The mode is fixed per store |
-| D3 | HBase labels must be registered before use | (a) operators register them, with a rya-ng admin command that also grants rya-ng's reserved label and writes the label canaries (4.2), and writes with unknown labels fail with a clear error; (b) privileged writers (loader `prepare`, rebuild) register what they write | (a) for the endpoint, (b) for the loader |
+| D2 | Counter mode on HBase | (a) the Tripatha coprocessor (parity, but a jar on the region servers); (b) native `Increment` (nothing to install, slower writes) | (a) by default, (b) where coprocessors aren't allowed. The mode is fixed per store |
+| D3 | HBase labels must be registered before use | (a) operators register them, with a Tripatha admin command that also grants Tripatha's reserved label and writes the label canaries (4.2), and writes with unknown labels fail with a clear error; (b) privileged writers (loader `prepare`, rebuild) register what they write | (a) for the endpoint, (b) for the loader |
 | D4 | HBase release line | 3.0.x (GA since 2026-08; JDK 17+, Hadoop 3 only, async client underneath) or 2.6.x (its `-hadoop3` artifacts; the plain ones pull in Hadoop 2.10) | 3.0.0, with the plain `hbase-client` in main code and `hbase-testing-util` in tests, both on Hadoop 3.5.0: the pair phase 0 ran on JDK 25. The shaded clients would duplicate `org.apache.hadoop.hbase.client` classes next to the test jars, and the plain client avoids the shaded-client DNS bug (HBASE-30211). Decided by phase 0 (section 8) |
 | D5 | Bigtable or other HBase-API stores later | design the capability flags now, or not | design them now (cheap), implement later. Bigtable has no labels and no coprocessors, and caps rows at 4 KB, so it would be a reduced mode |
 | D6 | Packaging | one endpoint and loader jar with both providers, or one per backend | one jar; check its size in phase 0 |
@@ -115,7 +115,7 @@ The loader's executable jar ran the same way, from its own process against an HB
 
 | Section | Content |
 |---|---|
-| 2 | what rya-ng uses from Accumulo |
+| 2 | what Tripatha uses from Accumulo |
 | 3 | the mapping, feature by feature |
 | 4 | security |
 | 5 | the pluggable design |
@@ -126,11 +126,11 @@ The loader's executable jar ran the same way, from its own process against an HB
 
 ---
 
-## 2. What rya-ng asks of Accumulo today
+## 2. What Tripatha asks of Accumulo today
 
-The Accumulo API is used in 22 files of `rya.accumulo`, 9 of `rya.loader`, 1 of `rya.sail` (`RyaAccumuloSailFactory`) and 2 of `rya.sparql`. `rya.api` has none: its `TripleRow` (row, family, qualifier, visibility, timestamp, value) is already a backend-neutral cell. `rya.sail` reaches Accumulo-specific *rya* types in 10 files (`AccumuloRyaDAO`, `AccumuloRdfConfiguration`, `AccumuloTrace`, the index classes), but no Accumulo API.
+The Accumulo API is used in 22 files of `tripatha.accumulo`, 9 of `tripatha.loader`, 1 of `tripatha.sail` (`RyaAccumuloSailFactory`) and 2 of `tripatha.sparql`. `tripatha.api` has none: its `TripleRow` (row, family, qualifier, visibility, timestamp, value) is already a backend-neutral cell. `tripatha.sail` reaches Accumulo-specific *tripatha* types in 10 files (`AccumuloRyaDAO`, `AccumuloRdfConfiguration`, `AccumuloTrace`, the index classes), but no Accumulo API.
 
-Every Accumulo feature rya-ng depends on, and where:
+Every Accumulo feature Tripatha depends on, and where:
 
 | # | Accumulo feature | Used for | Where |
 |---|---|---|---|
@@ -155,13 +155,13 @@ Every Accumulo feature rya-ng depends on, and where:
 | A19 | Security ops: `whoami`, user auths, grant auths, system permissions | index rebuild/verify (full user auths), loader `check`/`prepare`, tests | `IndexManager`, `IndexVerifier`, loader, `AccumuloITBase` |
 | A20 | `ColumnVisibility` parser | validating `visibility=` on the endpoint; `VisibilitySimplifier` (unused in main code) | `SparqlController` |
 | A21 | `Durability` per writer | loader `--durability` | `LoaderOptions` |
-| A22 | Client properties file, password from `RYA_ACCUMULO_PASSWORD` | endpoint, loader, `configure.sh` | `AccumuloClients` |
+| A22 | Client properties file, password from `TRIPATHA_ACCUMULO_PASSWORD` | endpoint, loader, `configure.sh` | `AccumuloClients` |
 | A23 | Instance info: tablet server count | loader `check`, split planning | loader |
-| A24 | `MiniAccumuloCluster` | all 30 `*IT` classes, `DevServer` | `rya.test.accumulo` |
+| A24 | `MiniAccumuloCluster` | all 30 `*IT` classes, `DevServer` | `tripatha.test.accumulo` |
 | A25 | Dynamic proxies over the client API | tracing | `trace/TracingProxies` |
 
 Two properties of the current code constrain any mapping, beyond the features themselves:
-- **Row bytes are load-bearing.** Ranges, split points, `BatchLookup`'s exact matching and the loader's `SplitPlanner` all work on the row bytes built in `rya.api`. A port that keeps rows byte-identical keeps all of that code unchanged.
+- **Row bytes are load-bearing.** Ranges, split points, `BatchLookup`'s exact matching and the loader's `SplitPlanner` all work on the row bytes built in `tripatha.api`. A port that keeps rows byte-identical keeps all of that code unchanged.
 - **Order inside a row is load-bearing too.** `IndexSearcher.withoutAdjacentRepeats` relies on cells that differ only in their label being adjacent, which holds because Accumulo sorts by (cf, cq, cv). Whatever replaces cf/cq/cv must sort the same way.
 
 ---
@@ -183,7 +183,7 @@ Two properties of the current code constrain any mapping, beyond the features th
 | A9 | `RegExFilter` | `RowFilter` / `QualifierFilter` with `RegexStringComparator`, anchored, UTF-8, no flags (3.6) | native |
 | A10 | `TimestampFilter` | `Scan.setTimeRange` (also skips whole files by their time range) | native, better |
 | A11 | arbitrary scan iterators | none: Accumulo-only capability | gap, unused in main code |
-| A12 | `SummingCombiner` | counter deltas written as plain puts and summed by a rya-ng `RegionObserver`, or native `Increment` (3.8) | server jar, or much slower writes |
+| A12 | `SummingCombiner` | counter deltas written as plain puts and summed by a Tripatha `RegionObserver`, or native `Increment` (3.8) | server jar, or much slower writes |
 | A13 | `MultiTableBatchWriter` | one buffered mutator per table, all flushed concurrently (3.7) | client-side |
 | A14 | exact `putDelete` | `Delete.addColumns(family, qualifier, ts)` carrying the cell's own label, which HBase requires (3.9) | native |
 | A15 | `BatchDeleter` | parallel scan plus exact deletes, which is what `BatchDeleter` does inside (3.9) | client-side, same work |
@@ -203,7 +203,7 @@ The two hard items are the counters (A12) and the batch scanner (A7). Labels (A3
 ### 3.2 The cell mapping
 
 HBase differs from Accumulo in three ways that matter here:
-- **Families are declared** in the table schema, and HBase advises only a few per table. rya-ng uses the column family for the graph IRI, an open set.
+- **Families are declared** in the table schema, and HBase advises only a few per table. Tripatha uses the column family for the graph IRI, an open set.
 - **A label is a tag, not part of the key.** Two cells that differ only by label have the same coordinates (row, family, qualifier, timestamp):
   - With equal timestamps they are the same cell. HBase's own code says so ("2 cells with same ts and diff vis tags only one of them is returned", in `VisibilityScanDeleteTracker`), and a compaction keeps only one. The loader writes every cell of a dataset with one fixed timestamp, so this would hit every statement stored under two labels.
   - With different timestamps they are versions of one cell. A newer version the reader may not see still counts against the version limit, so it hides an older version the reader may see.
@@ -216,7 +216,7 @@ HBase differs from Accumulo in three ways that matter here:
 So every table uses one family, `c`, and an encoded qualifier:
 
 ```
-HBase row        = the rya-ng row, byte for byte
+HBase row        = the Tripatha row, byte for byte
 HBase family     = c
 HBase qualifier  = cf 00 cq 00 cv
 HBase timestamp  = the cell's timestamp
@@ -279,7 +279,7 @@ HBase advises at most two or three families per table, which rules out one famil
 
 | Accumulo | HBase |
 |---|---|
-| `createScanner(table, auths)` | `Scan` on `AsyncTable` or `Table`, with `setAuthorizations(...)` always set, and rya-ng's reserved label when there are none (4.2) |
+| `createScanner(table, auths)` | `Scan` on `AsyncTable` or `Table`, with `setAuthorizations(...)` always set, and Tripatha's reserved label when there are none (4.2) |
 | `setRange(new Range(start, end))`, both ends inclusive | `withStartRow(start, true).withStopRow(end, true)` |
 | `Range.prefix(p)` | `withStartRow(p).withStopRow(next(p), false)`, or `setStartStopRowForPrefixScan(p)` |
 | `Range.exact(row)` | `Get(row)` (one call, row bloom filter) |
@@ -294,7 +294,7 @@ The cost of a graph-restricted scan is the same on both. Without a locality grou
 
 **A paused reader.** Results are streamed, so a slow HTTP client can pause a scan for a long time. HBase handles that in both lines:
 - **2.x:** the synchronous scanner reopens itself from the last row returned when its 60-second lease has expired.
-- **3.0:** the scanner renews its lease while it waits. It then holds a server-side scanner until it is closed, so every rya-ng iterator must close its scanner in a `finally`, which the code already does.
+- **3.0:** the scanner renews its lease while it waits. It then holds a server-side scanner until it is closed, so every Tripatha iterator must close its scanner in a `finally`, which the code already does.
 
 Neither keeps one snapshot across the pause, and neither does Accumulo's scanner without isolation, so results behave the same. `SlowConsumerIT` guards the behaviour.
 
@@ -373,9 +373,9 @@ This is the one place where HBase lacks a built-in equivalent.
 
   The loader sums counters per block, which reduces their number but not the per-increment cost. **This option should be kept only as a fallback.**
 
-**Option B: write-only counters, summed by a rya-ng coprocessor** (recommended). This is the counterpart of Accumulo's combiner:
+**Option B: write-only counters, summed by a Tripatha coprocessor** (recommended). This is the counterpart of Accumulo's combiner:
 1. **Writes are plain puts.** The client writes each delta as a `Put` carrying the counter's label, so deltas are batched like every other write, take only the shared row lock, and are never read first.
-2. **Unique timestamps.** On `eval`, a `RegionObserver` from the `rya.hbase.coprocessor` jar gives each delta a timestamp in `prePut`, in milliseconds. Uniqueness is only needed per counter cell (row and qualifier), so the timestamp is `max(now, last timestamp given to this cell + 1, floor)`:
+2. **Unique timestamps.** On `eval`, a `RegionObserver` from the `tripatha.hbase.coprocessor` jar gives each delta a timestamp in `prePut`, in milliseconds. Uniqueness is only needed per counter cell (row and qualifier), so the timestamp is `max(now, last timestamp given to this cell + 1, floor)`:
    - **The per-cell memory:** "last" comes from a small in-memory map per region. An entry is dropped once the clock has passed it, so the map only holds cells written in the last millisecond or so.
    - **The floor:** it is the newest timestamp in the region's store files, read once at region open. It covers cells moved from another server.
    - **What this gives:** timestamps stay at the clock except for a cell written more than once per millisecond, and that cell catches up as soon as its rate drops. So concurrent deltas never collide, and the client's label is left untouched.
@@ -387,7 +387,7 @@ This is the one place where HBase lacks a built-in equivalent.
    - **Partial batches:** the scanner wrapper keeps a running sum across `next()` batches. A hot counter can have more un-summed versions in the memstore than one response may carry (2 MB by default), so a qualifier's versions can arrive split over two batches. Emitting a sum per batch would return two partial counts.
 4. **Summed flushes and full compactions.** `preFlush` and `preCompact` fold the versions the same way:
    - The wrapped scanner implements `Shipper`, so blocks are released.
-   - Partial compactions are not folded, because a delete marker in a file left out could then be bypassed. That is the hazard the Accumulo `Combiner` javadoc warns about, and rya-ng's current combiner setting does not avoid it (see "Side findings" in section 1).
+   - Partial compactions are not folded, because a delete marker in a file left out could then be bypassed. That is the hazard the Accumulo `Combiner` javadoc warns about, and Tripatha's current combiner setting does not avoid it (see "Side findings" in section 1).
    - In-memory compaction is off on `eval`, for the same reason.
 5. **Deletes work as on Accumulo.** The deleter reads the summed cell, then deletes that column at its timestamp and older, carrying its label. That removes every delta.
 
@@ -397,11 +397,11 @@ HBase's example module has a `WriteHeavyIncrementObserver` on a similar idea (HB
 - it doesn't sum scans;
 - retries double-count.
 
-rya-ng's coprocessor is small (an estimated 300 to 500 lines) but has to be written and tested for this purpose.
+Tripatha's coprocessor is small (an estimated 300 to 500 lines) but has to be written and tested for this purpose.
 
 **What a retry does.** A retried delta write can be counted twice. Accumulo's blind writes have the same property, and counters are approximate by design.
 
-**The counter mode is fixed per store and recorded in `ns`** (row `rya`, family `counters`):
+**The counter mode is fixed per store and recorded in `ns`** (row `tripatha`, family `counters`):
 - Option B needs the coprocessor for correctness, not only for speed. Without it, deltas written in the same millisecond have the same key, and all but one are lost.
 - The two modes also store different things: one cell per counter for A, many versions for B.
 
@@ -446,11 +446,11 @@ So every writer must agree on the mode, and `init()` checks that the table match
 
 ### 3.11 Connection and configuration
 
-- **Connecting.** `ConnectionFactory.createAsyncConnection(conf)`, with `conf` built from one or more `hbase-site.xml` files (`rya.hbase.site`) plus overrides. The cluster is found through ZooKeeper or through the RPC-based connection registry (bootstrap servers).
+- **Connecting.** `ConnectionFactory.createAsyncConnection(conf)`, with `conf` built from one or more `hbase-site.xml` files (`tripatha.hbase.site`) plus overrides. The cluster is found through ZooKeeper or through the RPC-based connection registry (bootstrap servers).
 - **Authentication.** HBase clients authenticate with SIMPLE (an asserted user name, so not a security boundary) or Kerberos (principal and keytab). Delegation tokens are issued only to clients that already authenticated.
   - **No password.** HBase has no password authentication. The pluggable SASL example that adds one still needs Kerberos on the servers, and OAuth support was never released.
   - **TLS:** HBase 2.6 and 3.0 support TLS, including client certificates, but a certificate doesn't become the HBase user.
-  - **Effect on rya-ng:** `RYA_ACCUMULO_PASSWORD` has no HBase counterpart. `configure.sh` asks for a principal and keytab, plus optional TLS trust and key stores, and still never writes a secret.
+  - **Effect on Tripatha:** `TRIPATHA_ACCUMULO_PASSWORD` has no HBase counterpart. `configure.sh` asks for a principal and keytab, plus optional TLS trust and key stores, and still never writes a secret.
 - **Artifacts.** Use the shaded client that leaves Hadoop to the caller (`hbase-shaded-client-byo-hadoop`), with the Hadoop client 3.5.0 the root POM already forces:
   - **Fewer conflicts:** there is no second Hadoop version on the classpath, and HBase's relocated dependencies (protobuf, Netty, Guava) stay away from Spring Boot and Accumulo.
   - **The DNS bug:** it is also the workaround for HBASE-30211. On Java 18 and later, the regular shaded client and shaded testing artifacts of all current releases break DNS resolution for the whole JVM; the fix ships only in 2.5.17, 2.6.8 and 3.0.1, none of them released yet.
@@ -463,9 +463,9 @@ So every writer must agree on the mode, and `init()` checks that the table match
 
 - **Row size.**
   - **The two limits:**
-    - Accumulo limits a key (row, family, qualifier and label together) to 1 MB. That is `DefaultKeySizeConstraint`, which every table rya-ng creates gets by default (checked in the 2.1.6 sources).
+    - Accumulo limits a key (row, family, qualifier and label together) to 1 MB. That is `DefaultKeySizeConstraint`, which every table Tripatha creates gets by default (checked in the 2.1.6 sources).
     - HBase limits a row key to 32,767 bytes. A `Put` with a longer row throws `IllegalArgumentException` in its constructor, before anything is sent.
-  - **Where rya-ng puts long values:** whole literals go in rows. The encoded object goes in `spo`/`po`/`osp`, and the lexical value in `eval`'s `o`, `po` and `so` rows.
+  - **Where Tripatha puts long values:** whole literals go in rows. The encoded object goes in `spo`/`po`/`osp`, and the lexical value in `eval`'s `o`, `po` and `so` rows.
   - **The gap:** a literal over about 32 KB, such as a long text or a detailed WKT polygon, can be stored on Accumulo but not on HBase. This is the one functional gap, and a decision for you (D1 in section 1).
   - **RDF 1.2 triple terms** are objects too, so a whole term, with the terms nested inside it, is part of its statement's rows. A term is about as long as its three parts together, plus a few bytes per level of nesting (each level doubles the escape bytes of the innermost object). Terms made of IRIs and short literals are far from either limit; a term that holds a long literal, or very deep nesting, meets the same 32 KB gap on HBase.
   - **What the provider must do at least:** build every cell of a statement before buffering any of them, so that an over-long row rejects the whole statement with a clear error. Otherwise the statement tables and the counters would be left half-written.
@@ -475,7 +475,7 @@ So every writer must agree on the mode, and `init()` checks that the table match
 
 ## 4. Labels and authorizations on HBase
 
-rya-ng's security model (ARCH.md §16) must hold unchanged: every derived cell carries the statement's label, and every read uses the connection's authorizations.
+Tripatha's security model (ARCH.md §16) must hold unchanged: every derived cell carries the statement's label, and every read uses the connection's authorizations.
 
 ### 4.1 Enabling labels
 
@@ -483,7 +483,7 @@ HBase enforces labels with the `VisibilityController` coprocessor, listed in bot
 
 **`hbase.security.authorization=true` is required too.** Phase 0 showed that without it the controller loads, labels can be registered, and every reader still sees every cell, under any authorizations.
 
-So the provider doesn't trust the configuration: when a store opens with labels, it runs a **negative probe**. It reads the `labels` table (3.3) with only the reserved label `rya.none`. Any labelled canary it can see means labels aren't enforced for this account, either because of the setting above or because the account is a superuser, and the store refuses to open.
+So the provider doesn't trust the configuration: when a store opens with labels, it runs a **negative probe**. It reads the `labels` table (3.3) with only the reserved label `tripatha.none`. Any labelled canary it can see means labels aren't enforced for this account, either because of the setting above or because the account is a superuser, and the store refuses to open.
 
 ### 4.2 Reading
 
@@ -497,13 +497,13 @@ HBase's default rules for a read's labels differ from Accumulo's in every case t
 | reading one's own labels | allowed | not available to normal users: phase 0 saw `getAuths` return an empty list, not an error, so it can't even be used as a check |
 
 The provider restores Accumulo's behaviour with four rules:
-1. **Never send an empty set.** For "unlabelled cells only", send rya-ng's reserved label `rya.none`. It is registered once and granted to every account that reads, and is never put on a cell.
+1. **Never send an empty set.** For "unlabelled cells only", send Tripatha's reserved label `tripatha.none`. It is registered once and granted to every account that reads, and is never put on a cell.
    - **Why it works:** the requested set is then non-empty and held, so HBase keeps it, and only unlabelled cells match. Confirmed in phase 0.
    - **Why not an unheld label:** HBase would drop it to the same effect, but it logs a WARN on the region server for every such read.
    - **Why not a server-side scan-label generator:** it would be cleaner, but it is a cluster-wide setting that would change behaviour for every other HBase application on the cluster.
 2. **Use non-superuser accounts.** Every account that reads with labels must be a non-superuser without `system`: the endpoint, the loader's `verify`, and the tests. HBase's process user is always a superuser, so this holds for the mini cluster too.
 3. **Check held labels at start-up, since HBase won't reject unheld ones.**
-   - **The check:** when a label is registered through rya-ng (D3), rya-ng also writes one *canary* cell under that label, in a small `labels` table of its own (3.3). `purge` doesn't touch that table, so the canaries survive it. At start-up, the endpoint reads the canaries of `rya.sparql.authorizations`, and refuses to start if one is missing: either the account doesn't hold that label, or the label wasn't registered.
+   - **The check:** when a label is registered through Tripatha (D3), Tripatha also writes one *canary* cell under that label, in a small `labels` table of its own (3.3). `purge` doesn't touch that table, so the canaries survive it. At start-up, the endpoint reads the canaries of `tripatha.sparql.authorizations`, and refuses to start if one is missing: either the account doesn't hold that label, or the label wasn't registered.
    - **Why it's enough:** per request, the endpoint already rejects `auths=` outside the configured set with 403. So the chain user labels ⊇ configured ⊇ requested holds as on Accumulo, and a deployment error fails at start-up instead of silently returning fewer rows.
 4. **Full-label reads send no labels.** Index rebuilds and `IndexVerifier` read with "all of the user's labels", which on HBase is exactly an empty set. They must not compute the set with `getAuths`, which returns nothing for a normal user.
 
@@ -528,13 +528,13 @@ Labels are read back from the qualifier (3.2), never from tags.
 - **Mixing `&` and `|` without parentheses:** Accumulo rejects `a&b|c`. HBase accepts it and evaluates left to right, with no precedence.
 - **Empty expressions:** HBase rejects an empty expression, so unlabelled cells get no `CellVisibility` at all.
 
-rya-ng must accept exactly the same expressions on both backends, so:
+Tripatha must accept exactly the same expressions on both backends, so:
 - validation (`SparqlController`'s `visibility=` check and the DAO) parses Accumulo's grammar on both;
 - the HBase provider writes the parsed expression back fully parenthesised, quoting labels with `CellVisibility.quote` where needed;
 - the qualifier stores the expression exactly as the statement gives it, as Accumulo stores it.
 
 **A parser that doesn't need `accumulo-core`.** `accumulo-core` is a heavy dependency for the HBase build. Apache's standalone `accumulo-access` library parses and evaluates the same syntax with no dependencies, but has only beta releases so far: `org.apache.accumulo:accumulo-access-core:1.0.0-beta3`, Java 11.
-- **Recommendation:** a small parser of the Accumulo grammar in `rya.store`, about 200 lines.
+- **Recommendation:** a small parser of the Accumulo grammar in `tripatha.store`, about 200 lines.
 - **Its test:** it is checked against `ColumnVisibility` on random expressions in the Accumulo provider's tests.
 - **Later:** switch to `accumulo-access` once it is released as GA.
 
@@ -550,7 +550,7 @@ Normalising expressions (as `ColumnVisibility.flatten` does) isn't needed: HBase
 | permissions | system and table permissions | `AccessController` grants: READ, WRITE, EXEC, CREATE, ADMIN |
 
 Account roles:
-- **A read-only endpoint account** needs READ on the rya-ng tables. It must not be a superuser (4.2).
+- **A read-only endpoint account** needs READ on the Tripatha tables. It must not be a superuser (4.2).
 - **Writers** need WRITE.
 - **The account that runs `prepare`** needs CREATE, plus superuser rights to register labels and to grant them.
 - **The loader's `check`** reports which of these the account has. The checks are partial: a normal user can't read its own labels.
@@ -566,7 +566,7 @@ Account roles:
 | Cut point | What each backend implements | Verdict |
 |---|---|---|
 | Above the DAO | `RyaDAO`, `RdfEvalStatsDAO`, `RyaQueryEngine`, `IndexSearcher`, `GraphSizes`… | **No.** About 2,500 lines of backend-independent logic would exist twice: `deleteMatches`, counter batching, stale-marker clean-up, the index lifecycle, `IndexSearcher`'s text planning. So would the invariants of ARCH.md §20. |
-| **At the cell level** | a small storage SPI shaped like what rya-ng does: labelled cells, ranges, multi-range scans, a multi-table writer, counters, admin, security | **Yes.** Everything above it is written once. Each SPI call maps to exactly one native operation, so the layer adds no round trips. |
+| **At the cell level** | a small storage SPI shaped like what Tripatha does: labelled cells, ranges, multi-range scans, a multi-table writer, counters, admin, security | **Yes.** Everything above it is written once. Each SPI call maps to exactly one native operation, so the layer adds no round trips. |
 | Plain byte key/value | `get`/`put`/`scan` on bytes | **No.** Labels, columns, server-side filters and counters would all be emulated on the client, which costs speed and, for labels, security. |
 
 ### 5.2 The SPI
@@ -574,7 +574,7 @@ Account roles:
 A sketch, to fix the shape. Names are provisional.
 
 ```java
-// module rya.store, package io.github.dgreco.rya.store.spi
+// module tripatha.store, package org.tripatha.store.spi
 public interface StoreProvider {                      // found with java.util.ServiceLoader
     String id();                                      // "accumulo", "hbase"
     Store open(StoreSettings settings);               // or wrap a client the caller owns
@@ -606,8 +606,8 @@ public interface CellWriter extends AutoCloseable {
 ```
 
 Design rules:
-- **The logical model is rya-ng's, not a backend's.** A `Cell` has the five key parts rya-ng uses (row, family, qualifier, label, timestamp), and `TripleRow` converts to it one to one. Each provider maps it to its physical model (section 3.2 for HBase).
-- **Ranges carry explicit inclusive flags.** Accumulo's `Range(Text, Text)` includes both end rows. rya-ng's ranges end at `start + FF`, inclusive. `GraphSizes` uses an inclusive start and no end. HBase stop rows are exclusive unless asked otherwise. An implicit convention here would lose or add boundary rows.
+- **The logical model is Tripatha's, not a backend's.** A `Cell` has the five key parts Tripatha uses (row, family, qualifier, label, timestamp), and `TripleRow` converts to it one to one. Each provider maps it to its physical model (section 3.2 for HBase).
+- **Ranges carry explicit inclusive flags.** Accumulo's `Range(Text, Text)` includes both end rows. Tripatha's ranges end at `start + FF`, inclusive. `GraphSizes` uses an inclusive start and no end. HBase stop rows are exclusive unless asked otherwise. An implicit convention here would lose or add boundary rows.
 - **Counters are an operation, not a put.** `addToCounter` lets Accumulo write decimal text for its combiner, and lets HBase choose its own strategy (section 3.8).
 - **`TableKind`** (`STATEMENTS`, `INDEX`, `COUNTERS`, `METADATA`) lets a provider choose physical settings per table: the combiner on counters, bloom filters, block encoding.
 - **Capabilities** declare what a provider does natively:
@@ -615,7 +615,7 @@ Design rules:
   | Capability | Accumulo | HBase | Bigtable via the HBase API (possible later) |
   |---|---|---|---|
   | `LABELS` (cell visibility enforced on the server) | yes | yes, with `VisibilityController` | no: cell visibility and tags aren't supported |
-  | `SERVER_COMBINE` (write-only counters) | yes | yes, with the rya-ng coprocessor | no: no coprocessors; increments only, not batched |
+  | `SERVER_COMBINE` (write-only counters) | yes | yes, with the Tripatha coprocessor | no: no coprocessors; increments only, not batched |
   | `SERVER_REGEX` (row and qualifier regex filters) | yes (Java regex) | yes (Java regex) | RE2 only, so patterns behave differently |
   | `SCAN_ITERATORS` (arbitrary `IteratorSetting`s) | yes | no | no |
   | `MAX_ROW_BYTES` | 1 MB per key | 32,767 | 4 KB |
@@ -626,20 +626,20 @@ Design rules:
 
 | Module | Today | After |
 |---|---|---|
-| `rya.api` | model and encodings | unchanged |
-| `rya.store` (new) | — | the SPI, plus the shared logic moved out of `rya.accumulo`: the DAO (`AccumuloRyaDAO` becomes `RyaStoreDAO`), query engine, statistics DAO, `GraphSizes`, the index package, the trace package (`AccumuloTrace` becomes `StoreTrace`), and a neutral `StoreRdfConfiguration` |
-| `rya.accumulo` | everything | the Accumulo provider only: cell mapping, writer, scanners, deleter, combiner setup, security, `AccumuloClients` |
-| `rya.hbase` (new) | — | the HBase provider |
-| `rya.hbase.coprocessor` (new) | — | the jar installed on the region servers: the counter combiner. Depends only on `hbase-server`, provided |
-| `rya.sail` | depends on `rya.accumulo` | depends on `rya.store`. `RyaSailFactory.createSail(Store, conf)`; `RyaAccumuloSailFactory` stays as a convenience |
-| `rya.sparql`, `rya.loader` | Accumulo client | a `backend` setting; both providers on the classpath |
-| `rya.test` (from `rya.test.accumulo`) | `MiniAccumuloCluster` singleton | a neutral `StoreITBase` (unique table prefix, grant labels, clean-up), one cluster singleton per backend |
+| `tripatha.api` | model and encodings | unchanged |
+| `tripatha.store` (new) | — | the SPI, plus the shared logic moved out of `tripatha.accumulo`: the DAO (`AccumuloRyaDAO` becomes `RyaStoreDAO`), query engine, statistics DAO, `GraphSizes`, the index package, the trace package (`AccumuloTrace` becomes `StoreTrace`), and a neutral `StoreRdfConfiguration` |
+| `tripatha.accumulo` | everything | the Accumulo provider only: cell mapping, writer, scanners, deleter, combiner setup, security, `AccumuloClients` |
+| `tripatha.hbase` (new) | — | the HBase provider |
+| `tripatha.hbase.coprocessor` (new) | — | the jar installed on the region servers: the counter combiner. Depends only on `hbase-server`, provided |
+| `tripatha.sail` | depends on `tripatha.accumulo` | depends on `tripatha.store`. `RyaSailFactory.createSail(Store, conf)`; `RyaAccumuloSailFactory` stays as a convenience |
+| `tripatha.sparql`, `tripatha.loader` | Accumulo client | a `backend` setting; both providers on the classpath |
+| `tripatha.test` (from `tripatha.test.accumulo`) | `MiniAccumuloCluster` singleton | a neutral `StoreITBase` (unique table prefix, grant labels, clean-up), one cluster singleton per backend |
 
-The data flow stays `rya.api` → `rya.store` → `rya.sail` → `rya.sparql`, with the providers plugged in under `rya.store`.
+The data flow stays `tripatha.api` → `tripatha.store` → `tripatha.sail` → `tripatha.sparql`, with the providers plugged in under `tripatha.store`.
 
 ### 5.4 Configuration
 
-- **One setting picks the backend:** `rya.backend = accumulo | hbase`. It is a conf key, an endpoint property, a loader option and a `configure.sh` question.
+- **One setting picks the backend:** `tripatha.backend = accumulo | hbase`. It is a conf key, an endpoint property, a loader option and a `configure.sh` question.
 - **Neutral configuration:** `AccumuloRdfConfiguration` becomes `StoreRdfConfiguration`. The authorizations are already a `String[]` in `RdfCloudTripleStoreConfiguration`. `getAuthorizations()`, which returns the Accumulo type, leaves the neutral class.
 - **Backend-only settings** are namespaced: `accumulo.client-properties`, `hbase.site` (one or more `hbase-site.xml` files), `hbase.counters`. `setAdditionalIterators` becomes an Accumulo-only option (`SCAN_ITERATORS`); only `AccumuloRyaDAOIT` uses it.
 - **Table names:** the prefix rule (`<prefix><suffix>`) works on both. HBase also allows `namespace:table`, so `hbase.namespace` can be an option.
@@ -665,9 +665,9 @@ The data flow stays `rya.api` → `rya.store` → `rya.sail` → `rya.sparql`, w
 
 ## 6. Tests
 
-**One suite, two backends.** The ITs run against the backend named by `-Drya.test.backend` (`accumulo` by default). The existing flags keep working on both: `-Drya.test.joinBatchSize=2`, `-Drya.join-batch-size=2` and `-Drya.test.indexes=true`.
+**One suite, two backends.** The ITs run against the backend named by `-Dtripatha.test.backend` (`accumulo` by default). The existing flags keep working on both: `-Dtripatha.test.joinBatchSize=2`, `-Dtripatha.join-batch-size=2` and `-Dtripatha.test.indexes=true`.
 
-**What already runs on either backend.** 22 of the 30 `*IT` classes use no Accumulo API. They reach the store only through `RyaSailITBase`/`IndexITBase`, the DAO, the Sail or the endpoint. They do name rya's Accumulo-named types (`AccumuloRdfConfiguration`, `AccumuloRyaDAO`), which phase 1 renames mechanically, so they run on HBase once `StoreITBase` replaces `AccumuloITBase`. The other 8 read or write Accumulo directly and need porting:
+**What already runs on either backend.** 22 of the 30 `*IT` classes use no Accumulo API. They reach the store only through `RyaSailITBase`/`IndexITBase`, the DAO, the Sail or the endpoint. They do name tripatha's Accumulo-named types (`AccumuloRdfConfiguration`, `AccumuloRyaDAO`), which phase 1 renames mechanically, so they run on HBase once `StoreITBase` replaces `AccumuloITBase`. The other 8 read or write Accumulo directly and need porting:
 - `AccumuloITBaseIT`
 - `AccumuloRyaDAOIT`
 - `AccumuloStatsAndGraphsIT`
@@ -685,7 +685,7 @@ Their direct reads become SPI scans. The assertions that only make sense on Accu
 |---|---|
 | `QualifierOrderTest` (unit, property-based) | for random (cf, cq, cv) triples, the encoded HBase qualifiers sort exactly like Accumulo `Key`s, and decode back |
 | `RangeParityIT` | the same cells and the same `KeyRange` set give the same rows on both providers. Covers inclusive and exclusive ends, `FF` ends, empty and unbounded starts, and ranges across region and tablet boundaries |
-| `LabelParityIT` | one statement under two labels, with the same timestamp; readers with A, B, A+B and no labels (the reserved `rya.none` label); deleting one label's copy; graph markers; expressions mixing AND and OR; start-up refusal when the canary of a configured label is missing |
+| `LabelParityIT` | one statement under two labels, with the same timestamp; readers with A, B, A+B and no labels (the reserved `tripatha.none` label); deleting one label's copy; graph markers; expressions mixing AND and OR; start-up refusal when the canary of a configured label is missing |
 | `CounterIT` | N concurrent writers adding +1 and −1; a hot counter whose versions exceed one response; forced flushes and major compactions; drop-everything deletes; a read-only reader; the counter mode recorded in `ns` |
 | `SlowConsumerIT` | a result stream paused longer than the scanner lease still returns every row once |
 | `LoaderIT` on HBase | compares counters as logical sums, not physical cells |
@@ -694,7 +694,7 @@ Their direct reads become SPI scans. The assertions that only make sense on Accu
 - **What it runs:** the mini cluster runs with `VisibilityController` on, as in production.
 - **Who the tests run as:** the process user is always an HBase superuser, and superusers see every cell. So `StoreITBase` gives each test two connections:
   - an admin connection for set-up (tables, labels, grants);
-  - a connection as a normal test user (`User.createUserForTesting`), which every rya-ng object uses.
+  - a connection as a normal test user (`User.createUserForTesting`), which every Tripatha object uses.
 
   `grantAuthorizations(...)` registers the labels and grants them to that user. Without this split, visibility tests would pass for the wrong reason.
 - **The JVM:** the in-process mini cluster also starts an in-process HDFS by default, both on JDK 25, which no HBase release supports. Phase 0 tries it, also with a local-filesystem root instead of HDFS. If it fails, the ITs use an HBase cluster in a container (Testcontainers) on JDK 17 or 21, with only the client in the test JVM.
@@ -727,7 +727,7 @@ Their direct reads become SPI scans. The assertions that only make sense on Accu
 ### 7.2 Benchmarks
 
 Run on one fixed cluster, the same machines for both backends:
-- **Load:** `rya.loader` with a fixed dataset of 100 M triples and the same split plan. Report triples/s, with and without indexes.
+- **Load:** `tripatha.loader` with a fixed dataset of 100 M triples and the same split plan. Report triples/s, with and without indexes.
 - **Writes:** a SPARQL `INSERT DATA` of one statement and of 1,000 statements, at concurrency 1 and 16. Report p50 and p99.
 - **Queries:** a fixed suite over the loader's dataset, cold and warm cache. It covers:
   - point lookups;
@@ -762,9 +762,9 @@ In a throwaway branch:
    - start-up time.
 
    Try a local-filesystem root instead of an in-process HDFS. If the mini cluster doesn't work, set up the containerised cluster for the ITs (section 6).
-3. **The endpoint classpath.** Check that the shaded client coexists with Spring Boot 4 and Logback in `rya.sparql`, and with `accumulo-core` in the same JVM, and that DNS resolution still works (HBASE-30211).
+3. **The endpoint classpath.** Check that the shaded client coexists with Spring Boot 4 and Logback in `tripatha.sparql`, and with `accumulo-core` in the same JVM, and that DNS resolution still works (HBASE-30211).
 4. **Label semantics**, with small tests:
-   - the reserved `rya.none` label for "unlabelled only";
+   - the reserved `tripatha.none` label for "unlabelled only";
    - the canary check;
    - deletes carrying labels;
    - two labels on one key.
@@ -785,17 +785,17 @@ In a throwaway branch:
   - Readers are created with `User.createUserForTesting` and `runAs`.
 - **The cost.** Start-up takes about 6 s with labels on. Creating the six tables takes about 4 s, and deleting them about 2.6 s, which teardown doesn't need to wait for.
 - **Labels, as predicted in section 4, with two corrections.**
-  - **Confirmed:** superusers see every cell; empty or null authorizations mean every held label; `rya.none` returns only unlabelled cells; unheld labels are dropped silently; two labels on one key collapse into one cell; a delete must carry the cell's label, and reordered expressions match; unregistered labels are rejected on write; `checkauths` is off by default.
+  - **Confirmed:** superusers see every cell; empty or null authorizations mean every held label; `tripatha.none` returns only unlabelled cells; unheld labels are dropped silently; two labels on one key collapse into one cell; a delete must carry the cell's label, and reordered expressions match; unregistered labels are rejected on write; `checkauths` is off by default.
   - **Correction 1:** labels aren't enforced at all without `hbase.security.authorization=true` (4.1).
   - **Correction 2:** `addLabels` and `setAuths` report failures, such as `AccessDeniedException`, inside the response rather than by throwing, so every per-label result must be checked. `getAuths` called by a normal user returned an empty list rather than failing (4.2).
 - **The client artifact.** `hbase-client` in main code, `hbase-testing-util` in tests (D4).
 
 ### Phase 1: the SPI, on Accumulo only (no behaviour change)
 
-1. Create `rya.store` with the SPI. Move the DAO, query engine, statistics, `GraphSizes`, indexes and trace into it.
+1. Create `tripatha.store` with the SPI. Move the DAO, query engine, statistics, `GraphSizes`, indexes and trace into it.
 2. Write the Accumulo provider. Turn `AccumuloRdfConfiguration` into `StoreRdfConfiguration`.
 3. Replace the trace proxies with the `Store` decorator.
-4. Replace `rya.test.accumulo` with `rya.test` plus the MAC singleton.
+4. Replace `tripatha.test.accumulo` with `tripatha.test` plus the MAC singleton.
 
 **Exit:**
 - all 30 ITs green;
@@ -831,7 +831,7 @@ In a throwaway branch:
    - `prepare` creates pre-split tables;
    - writer options map onto the HBase client.
 3. Label administration (D3): a command that registers labels in HBase and writes their canaries. The endpoint's start-up canary check (4.2).
-4. The endpoint: `rya.backend` and `rya.hbase.*` settings.
+4. The endpoint: `tripatha.backend` and `tripatha.hbase.*` settings.
 5. `configure.sh`: a backend question, and Kerberos and TLS settings in place of the password.
 6. A `DevServer` variant on an HBase mini cluster.
 7. Port the remaining 8 ITs.
@@ -851,7 +851,7 @@ In a throwaway branch:
 
 ## 9. Sources
 
-**rya-ng.** `ARCH.md` and the code at `860fa66`, in particular:
+**Tripatha.** `ARCH.md` and the code at `860fa66`, in particular:
 - `AccumuloRyaDAO`, `AccumuloRyaQueryEngine`, `RyaStatementKeyValueIterator`;
 - `EvalStatsMutations`, `AccumuloRdfEvalStatsDAO`, `GraphSizes`;
 - `IndexKeys`, `IndexSearcher`, `IndexManager`;
@@ -895,11 +895,11 @@ Status: built on the `rocksdb-backend` branch on 2026-11-16, after a spike that 
 
 ### 10.1 What it is for
 
-A store in a local directory, for one machine and one process: trying rya-ng out with data that survives a restart, small deployments, and running the integration tests without a cluster. It is not a replacement for Accumulo or HBase: there is no replication, and one process at a time can open the directory.
+A store in a local directory, for one machine and one process: trying Tripatha out with data that survives a restart, small deployments, and running the integration tests without a cluster. It is not a replacement for Accumulo or HBase: there is no replication, and one process at a time can open the directory.
 
 ### 10.2 The mapping
 
-| What rya-ng asks for | RocksDB |
+| What Tripatha asks for | RocksDB |
 |---|---|
 | A table | A column family of one database. Its `TableKind` is a record in the default column family. |
 | A cell's key (row, family, qualifier, visibility) | One key: `esc(row) 00 01 family 00 qualifier 00 visibility`, where `esc` writes a `00` byte as `00 FF`. This is the byte-stuffing section 3.2 names as the alternative to HBase's layout. |
@@ -945,7 +945,7 @@ A store in a local directory, for one machine and one process: trying rya-ng out
 
 ### 10.5 Tests
 
-The store, Sail, loader and endpoint ITs run on it unchanged with `-Drya.test.backend=rocksdb`, except `LoaderIT`, which asserts splits and granted labels only on the backends that have them. The backend's own tests are `RocksCodecTest` (key order, decoding, range bounds) and `RocksStoreTest` (reopening, shared database, atomic flush, timestamped deletes, labels, concurrent counters, emptying a table under a scanner). All of them together take about two minutes, against about 25 on HBase.
+The store, Sail, loader and endpoint ITs run on it unchanged with `-Dtripatha.test.backend=rocksdb`, except `LoaderIT`, which asserts splits and granted labels only on the backends that have them. The backend's own tests are `RocksCodecTest` (key order, decoding, range bounds) and `RocksStoreTest` (reopening, shared database, atomic flush, timestamped deletes, labels, concurrent counters, emptying a table under a scanner). All of them together take about two minutes, against about 25 on HBase.
 
 ### 10.6 Not done
 

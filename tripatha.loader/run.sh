@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# Copyright 2026 David Greco
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Runs the loader, building it first if needed:
+#
+#   tripatha.loader/run.sh [--build] <command> [options]      (run.sh --help for the options)
+#
+# Connection to Accumulo (the default backend): --accumulo-properties FILE (tripatha.loader/configure.sh writes one),
+# or these environment variables:
+#   TRIPATHA_ACCUMULO_ZOOKEEPERS, TRIPATHA_ACCUMULO_INSTANCE, TRIPATHA_ACCUMULO_USER, TRIPATHA_ACCUMULO_PASSWORD
+# (or --zookeepers, --instance and --user; the password is only read from the environment).
+#
+# Connection to HBase: --hbase-properties FILE (tripatha.loader/configure.sh writes one), or --backend hbase
+#   (or TRIPATHA_BACKEND=hbase) plus --hbase-site FILES or
+#   --hbase-conf 'hbase.zookeeper.quorum=zk1,zk2;hbase.zookeeper.property.clientPort=2181'
+#   (or TRIPATHA_HBASE_SITE, TRIPATHA_HBASE_CONF, TRIPATHA_HBASE_USER). Options win over the file.
+#
+# Other environment variables:
+#   LOADER_HEAP        Java heap (default 6g)
+#   LOADER_JAVA_OPTS   extra JVM options
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+JAR="$HERE/target/tripatha.loader-1.0.0-SNAPSHOT.jar"
+
+build=false
+if [ "${1:-}" = "--build" ]; then
+  build=true
+  shift
+fi
+
+if $build || [ ! -f "$JAR" ]; then
+  echo "Building the loader..." >&2
+  (cd "$ROOT" && mvn -B -q -pl tripatha.loader -am package -DskipTests)
+fi
+
+java_bin="java"
+if [ -n "${JAVA_HOME:-}" ]; then
+  java_bin="$JAVA_HOME/bin/java"
+fi
+
+java_opts=()
+if [ "$(uname -s)" = Darwin ]; then
+  # macOS can take seconds to resolve *.local names over IPv6.
+  java_opts+=(-Djava.net.preferIPv4Stack=true)
+  # Keep the Mac awake while the loader runs: exec keeps this PID, so caffeinate follows the JVM.
+  if command -v caffeinate >/dev/null 2>&1; then
+    caffeinate -i -w $$ &
+  fi
+fi
+# These two silence JDK warnings about Hadoop's use of Unsafe and native code.
+java_opts+=(--sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED "-Xmx${LOADER_HEAP:-6g}")
+
+# shellcheck disable=SC2086 # LOADER_JAVA_OPTS is a list of options
+exec "$java_bin" "${java_opts[@]}" ${LOADER_JAVA_OPTS:-} -jar "$JAR" "$@"

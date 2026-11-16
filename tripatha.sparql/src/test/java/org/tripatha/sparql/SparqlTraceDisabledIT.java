@@ -1,0 +1,61 @@
+/*
+ * Copyright 2026 David Greco
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.tripatha.sparql;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.UUID;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+
+import org.tripatha.test.TestBackends;
+
+/** With tripatha.sparql.allow-trace=false, neither side of a trace is accepted. */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+public class SparqlTraceDisabledIT {
+    private static final String PREFIX = "traceoff" + UUID.randomUUID().toString().substring(0, 8) + "_";
+
+    @LocalServerPort
+    private int port;
+
+    @DynamicPropertySource
+    static void store(final DynamicPropertyRegistry registry) {
+        // The backend of -Dtripatha.test.backend, reached as the test account.
+        TestBackends.current().endpointProperties().forEach((key, value) -> registry.add(key, () -> value));
+        registry.add("tripatha.table-prefix", () -> PREFIX);
+        registry.add("tripatha.sparql.allow-trace", () -> "false");
+    }
+
+    @Test
+    void tracingIsRefused() throws Exception {
+        final HttpClient http = HttpClient.newHttpClient();
+        final String id = UUID.randomUUID().toString();
+        assertEquals(403, http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/sparql/trace/" + id)).GET().build(),
+                HttpResponse.BodyHandlers.ofString()).statusCode());
+        assertEquals(403, http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/sparql?query=ASK%7B%7D&trace=" + id))
+                .GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+        assertEquals(200, http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/sparql?query=ASK%7B%7D")).GET().build(),
+                HttpResponse.BodyHandlers.ofString()).statusCode());
+    }
+}
