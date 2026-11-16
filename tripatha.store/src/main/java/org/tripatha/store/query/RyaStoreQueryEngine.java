@@ -34,6 +34,7 @@ import com.google.common.base.Preconditions;
 
 import org.tripatha.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import org.tripatha.api.RdfCloudTripleStoreUtils;
+import org.tripatha.api.domain.RyaAnyTypeRange;
 import org.tripatha.api.domain.RyaIRI;
 import org.tripatha.api.domain.RyaRange;
 import org.tripatha.api.domain.RyaStatement;
@@ -225,8 +226,8 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
     }
 
     private static byte[] objectTypeInfo(final RyaType object) throws Exception {
-        if (object == null) {
-            return null;
+        if (object == null || object instanceof RyaAnyTypeRange) {
+            return null; // no object, or a range of any type: no type check
         }
         final RyaType typed = object instanceof RyaRange ? ((RyaRange) object).getStart() : object;
         return RyaContext.getInstance().serializeType(typed)[1];

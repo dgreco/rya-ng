@@ -50,6 +50,7 @@ import org.tripatha.store.RyaStoreEvalStatsDAO;
 import org.tripatha.store.RyaStoreDAO;
 import org.tripatha.store.index.IndexCatalog;
 import org.tripatha.api.RdfCloudTripleStoreConfiguration;
+import org.tripatha.api.domain.RyaAnyTypeRange;
 import org.tripatha.api.domain.RyaIRI;
 import org.tripatha.api.domain.RyaStatement;
 import org.tripatha.api.domain.StatementMetadata;
@@ -549,6 +550,22 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 // U+10FFFF: no text sorts after its UTF-8.
                 return inGraphs(contexts, graph -> new RyaStatement(null, p, new RyaTypeRange(new RyaType(RyaSchema.TRIPLE_TERM, prefix),
                         new RyaType(RyaSchema.TRIPLE_TERM, prefix + "\uDBFF\uDFFF")), RdfToRyaConversions.convertResource(graph)));
+            }
+        }
+
+        /**
+         * The statements with this predicate (any, if {@code null}) whose object's data starts with
+         * {@code prefix}, whatever the object's type: the range of {@code po} (or {@code osp}) that
+         * holds them. Only for a caller that checks each object itself, as a {@code STRSTARTS}
+         * filter does.
+         */
+        public CloseableIteration<? extends Statement> getStatementsWithObjectPrefix(final IRI predicate, final String prefix,
+                final Resource... contexts) throws QueryEvaluationException {
+            storeLookups++;
+            final RyaIRI p = predicate == null ? null : RdfToRyaConversions.convertIRI(predicate);
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "STRSTARTS: only objects starting with \"" + prefix + "\" are read")) {
+                return inGraphs(contexts, graph -> new RyaStatement(null, p, RyaAnyTypeRange.startingWith(prefix),
+                        RdfToRyaConversions.convertResource(graph)));
             }
         }
 

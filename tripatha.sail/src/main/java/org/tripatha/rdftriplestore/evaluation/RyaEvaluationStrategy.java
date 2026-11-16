@@ -185,13 +185,20 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
                 || sp instanceof FixedStatementPattern || sp instanceof TransitivePropertySP) {
             return null;
         }
-        // An indexed pattern, or one read as a range of triple terms, is a plain store lookup
-        // only once its subject or object is bound.
-        if ((sp instanceof IndexedStatementPattern || TripleTermRangeSource.prefixFor(sp) != null)
+        // An indexed pattern, or one read as a range of triple terms or of object prefixes, is a
+        // plain store lookup only once its subject or object is bound.
+        if ((sp instanceof IndexedStatementPattern || TripleTermRangeSource.prefixFor(sp) != null
+                || objectPrefix(sp) != null)
                 && !(boundByLeft(node, sp.getSubjectVar()) || boundByLeft(node, sp.getObjectVar()))) {
             return null;
         }
         return sp;
+    }
+
+    /** The prefix a {@code STRSTARTS} filter requires of the pattern's object, when prefix ranges are on. */
+    private String objectPrefix(final StatementPattern sp) {
+        return tripleSource instanceof StoreTripleSource<?> source && source.getConf().isPrefixRanges()
+                ? ObjectPrefixSource.prefixFor(sp) : null;
     }
 
     private static boolean boundByLeft(final Join node, final Var var) {
@@ -236,6 +243,10 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
             final String termPrefix = TripleTermRangeSource.prefixFor(node);
             if (termPrefix != null) {
                 return new StatementPatternQueryEvaluationStep(node, context, new TripleTermRangeSource(source, termPrefix));
+            }
+            final String objectPrefix = objectPrefix(node);
+            if (objectPrefix != null) {
+                return new StatementPatternQueryEvaluationStep(node, context, new ObjectPrefixSource(source, objectPrefix));
             }
         }
         return super.prepare(node, context);

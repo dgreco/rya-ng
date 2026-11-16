@@ -934,6 +934,7 @@ flowchart TD
 | `FixedStatementPattern` | matched against its in-memory list of ontology statements ([section 14](#14-inference)) |
 | `TripleRef` (a triple-term pattern) | `TripleRefStep` ([section 12.7](#127-triple-terms)) |
 | a `StatementPattern` whose object is a triple term with a constant subject | RDF4J's `StatementPatternQueryEvaluationStep`, reading through a `TripleTermRangeSource` ([section 12.7](#127-triple-terms)) |
+| a `StatementPattern` whose object a `STRSTARTS` filter constrains | RDF4J's `StatementPatternQueryEvaluationStep`, reading through an `ObjectPrefixSource` ([section 12.8](#128-strstarts-as-a-prefix-range)) |
 | `TransitivePropertySP` | the closure computed by `InferenceEngine.findTransitiveProperty` when one end is bound; otherwise a plain lookup |
 | any other node | RDF4J's default |
 
@@ -981,6 +982,28 @@ RDF4J's own step for `TripleRef` lists every triple term in the store. Tripatha 
 5. **Otherwise the store is asked** (`StoreTripleSource.tripleTerms`): the terms that are objects of some statement, read as the range of all triple terms, deduplicated, and descended into for nested patterns.
 
 The statistics count a triple term like any other object, and estimate a `TripleRef` high, so join ordering starts from the other patterns. Inference ignores triple terms.
+
+### 12.8 `STRSTARTS` as a prefix range
+
+`?p :sku ?s FILTER(STRSTARTS(?s, "SKU-AB"))` would read every `:sku` statement for the filter to keep a few. `ObjectPrefixSource` reads only the statements whose object starts with the prefix instead.
+
+**When it applies** (`ObjectPrefixSource.prefixFor`):
+- **The pattern:** its subject and object are variables, and its predicate is an IRI (a range of `po`) or a variable (a range of `osp`).
+- **The filter:** a `Filter` above the pattern, reached through joins and filters only, so it applies to every row the pattern contributes to. Not across an `OPTIONAL`, a `UNION` or a subquery.
+- **The condition:** it has a conjunct `STRSTARTS(?o, "constant")` on the pattern's object, with a non-empty constant.
+- **The settings:** `query.prefixranges` is on, which is the default.
+
+**Why the answers can't change:**
+- **The filter stays** and decides every row; the range only skips rows it would reject.
+- **Every match is inside the range.** `STRSTARTS(?o, "abc")` is true only for a string or language-tagged string starting with `abc`. Both are stored as their text first: `abc-1`, or `abc-2@en` for a language-tagged one.
+- **Everything else fails anyway.** For numbers, dates, booleans, IRIs and triple terms the function is an error, which a filter treats as false.
+- **No type check.** The range is a `RyaAnyTypeRange`, for which `RyaStoreQueryEngine` adds none, so both kinds of string are read in one scan.
+
+**Not `STRSTARTS(STR(?o), …)`.** `STR` of the number 42 is `"42"`, but numbers, dates and booleans are stored in encodings of their own, outside that range.
+
+**At run time,** when the pattern's subject or object is bound (in a join, for example), the lookup is already narrow and goes to the store as usual. In a batched join such a pattern is batched only once its subject or object is bound, like an indexed pattern.
+
+**Tests:** `ObjectPrefixIT` compares every query with the setting on and off.
 
 ---
 

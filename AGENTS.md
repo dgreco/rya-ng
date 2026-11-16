@@ -153,6 +153,10 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
   - `TripleRefStep` unifies a bound term in memory, and otherwise asks `StoreTripleSource.tripleTerms`. RDF4J's own step lists the whole store and casts subjects to `Resource`.
   - `TripleTermRangeSource` makes a statement pattern whose object is a term with a constant subject read only that prefix range. The `TripleRef` still checks every result.
   - Run `TripleTermIT` on every backend, and with the batch-size and index switches above, after touching any of this.
+- **`STRSTARTS` as a prefix range** (`ObjectPrefixSource`, ARCH.md 12.8):
+  - **When:** a pattern `?s <p> ?o` (or `?s ?p ?o`) under joins and filters only, with a filter conjunct `STRSTARTS(?o, "constant")`.
+  - **What it does:** the pattern reads only the objects starting with the prefix, as a `RyaAnyTypeRange` (no object-type check) on `po` or `osp`. The filter stays, and `query.prefixranges` turns this off.
+  - **Never extend it to `STR(?o)`:** numbers, dates and booleans are stored in their own encodings, outside the text range.
 - **Inference nodes:** `RyaEvaluationStrategy.prepare(StatementPattern)` handles the two node types inference produces. `FixedStatementPattern` is matched from in-memory ontology statements; `TransitivePropertySP` goes through `InferenceEngine.findTransitiveProperty`.
 - **`InferenceEngine`:** loads the ontology into memory (`ValueGraph` for the subClassOf/subPropertyOf hierarchies) and reloads it on a timer. Ontology changes are invisible until the next `refreshGraph()`; tests call it explicitly.
 - **Wiring:** `RyaSailFactory` builds DAO + stats + inference + sail from a `Store` and a `StoreRdfConfiguration`. The caller owns the store.

@@ -56,6 +56,8 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
      * (their attributes) in one batch per window of driver rows, instead of one per join.
      */
     public static final String CONF_JOIN_ENTITY_PREFETCH = "query.join.entityprefetch";
+    /** Narrow a pattern's scan to the prefix a {@code STRSTARTS} filter requires of its object (default true). */
+    public static final String CONF_QUERY_PREFIX_RANGES = "query.prefixranges";
     /** Maintain the full-text index (table {@code <prefix>text}). */
     public static final String CONF_INDEX_TEXT = "index.text";
     /** Predicates whose text literals are indexed; empty means every text literal. */
@@ -728,5 +730,14 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setJoinEntityPrefetch(final boolean enabled) {
         setBoolean(CONF_JOIN_ENTITY_PREFETCH, enabled);
+    }
+
+    /** Whether a {@code STRSTARTS} filter on a pattern's object narrows the pattern's scan to the prefix. */
+    public boolean isPrefixRanges() {
+        return getBoolean(CONF_QUERY_PREFIX_RANGES, true);
+    }
+
+    public void setPrefixRanges(final boolean enabled) {
+        setBoolean(CONF_QUERY_PREFIX_RANGES, enabled);
     }
 }
