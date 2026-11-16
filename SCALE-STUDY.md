@@ -98,6 +98,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | D9 | Dictionary encoding | (a) decide after M5, on the criteria of section 6.5; (b) start now | (a) | |
 | D10 | Disks | NVMe SSD, HDD | NVMe for interactive use: at 1T most lookups miss the cache, and each miss is one read | |
 | D11 | IRI prefix codes in the stored keys | (a) decide after M9, on the criteria of section 6.9; (b) start now; (c) never | (a), and M9 says **not now**: −4 to −5 % on disk is far below the bar. The cache gain (−25 to −35 %) is worth revisiting if a cluster shows lookups bound by cache misses (M3) | |
+| D12 | Datatype markers for O14 (section 6.7) | (a) write them on every add from now on, flag new stores, rebuild old stores with O5; (b) no markers, so no O14 | (a) if range filters on numbers and dates matter to the workload. They cost one more `eval` cell per single-statement insert, cover new stores only until a rebuild, and forbid writes from older versions into flagged stores | |
 
 **Where to read what:**
 
@@ -132,9 +133,9 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O10 | **HBase bulk build:** label ordinals in the files, counter timestamps per import | R4, R10 | as O3, on HBase | O3, M6 | later | Deferred (2026-11-16: internal optimizations first) |
 | O11 | **Dictionary encoding**, only if M5 says go (section 6.5) | R1 | to be measured | M5, D9 | later | Not started |
 | O12 | **An analytics engine and pushdown**, only if D1 (b) (section 6.6) | R2 | whole-store analytics | D1 | later | Not started |
-| O13 | **`STRSTARTS` as a prefix range:** a filter `STRSTARTS(?o, "abc")` (or `STRSTARTS(STR(?o), …)`) on a pattern's object narrows its scan to the prefix `abc` of the object's data; the filter stays (section 6.7) | R2 | a scan of the matching prefix instead of the predicate's whole range | M8 | 1 | Not started |
+| O13 | **`STRSTARTS` as a prefix range:** a filter `STRSTARTS(?o, "abc")` on a pattern's object narrows its scan to the objects whose data starts with `abc`, with no type check; the filter stays. Not `STRSTARTS(STR(?o), …)`: numbers, dates and booleans aren't stored as their text (section 6.7, ARCH.md 12.8) | R2 | measured (M8): `prefix` 92 → 0.7 ms on RocksDB and 72 → 2.2 ms on Accumulo, 133,579 → 522 cells. `query.prefixranges` turns it off | M8 | 1 | Built on branch `loader-skip-singleton-counters`; green on Accumulo, HBase and RocksDB (also with batch size 2 and indexes) |
 | O14 | **Comparisons as value ranges:** `<`, `<=`, `>`, `>=` on a pattern's numeric or date object narrow its scan to the value range, one range per stored type; the filter stays. Needs a record of the datatypes each predicate's objects use (section 6.7) | R2 | the same, for numbers and dates | M8 | 1 | Not started |
-| O15 | **Adaptive batch windows in batched joins:** the first window is 64 left rows, doubling up to `query.join.batchsize`, as entity prefetch does (section 6.8) | R2 | the first result after one small fetch; `LIMIT` queries make fewer lookups | M8 | 1 | Not started |
+| O15 | **Adaptive batch windows in batched joins:** the first window is 64 left rows, doubling up to `query.join.batchsize`, as entity prefetch does (section 6.8) | R2 | measured (M8, section 4.6): `chain-limit` 114 → 19 ms on Accumulo and 6.9 → 0.7 ms on RocksDB (1,003 → 67 ranges); `type-limit` 164 → 40 ms and 22.6 → 1.6 ms (2,004 → 260 ranges). No cost on large joins: `chain` −7 % with 16 batch scans instead of 13 | M8 | 1 | Built on branch `loader-skip-singleton-counters`; green on Accumulo, HBase and RocksDB (also with batch size 2 and indexes) |
 | O16 | **More lookups in flight:** batched joins and entity prefetch keep the next window's fetch running while the current one is joined, and more than one when the store has several servers (section 6.8) | R2 | on the test cluster joins wait on storage 94 to 97 % of the time (4.6), so overlap with the join's own work gains little there. Several fetches in flight pay on a cluster with several servers | M8, O15 | 1 | Not started |
 | O17 | **Less work per looked-up row:** `BatchLookup` matches on the row's encoded object instead of encoding every result again, and allocates less per row (section 6.8) | R2 | small: Tripatha's own code is about 7 % of the client's CPU in the Accumulo joins (4.6). Only if a later profile says otherwise | M8 | 1 | Not started |
 | O18 | **IRI prefix codes**, only if M9 says go (section 6.9) | R1 | measured (M9): −4 to −5 % on disk, −25 to −35 % in the block cache, −44 to −57 % of the key bytes a writer sends, no clear change in scan and decode time | M9, D11 | 2 | Deferred (2026-11-16: below the bar on disk; revisit after M3, see 6.9) |
@@ -323,6 +324,18 @@ Measured with `tripatha.loader/bench.sh` on 2026-11-16, before any of the query 
   - `RocksCodec.cell` rebuilds every key a byte at a time through `ByteArrayOutputStream.write`, a synchronized method: 40 to 63 % of the CPU in `prefix`, `range-date`, `count-class` and `type-limit` (O19).
   - `RocksScan.accepts` matches the object-type check as a regular expression with three `.*` groups, against a new `String` per cell: 44 % of `count-class` (O20). Accumulo runs the same expression in the tablet server, where this profile can't see it.
 - **Loading on the test cluster** ran at 13k triples/s (13 minutes for 10M), against about 80k/s on RocksDB.
+
+**Noise.** The first RocksDB baseline ran straight after the load and its compaction. A later run on the settled store was 20 to 30 % faster on queries whose work hadn't changed: the same ranges and cells, and the single `lookup` 3.3 → 0.7 ms. Two consequences:
+- **Reference:** RocksDB comparisons use that later run (`rocksdb-20261116-172927`).
+- **Evidence:** each change is judged first on ranges and cells, which are exact, and on latency only where the change is well beyond that noise.
+
+On Accumulo the unchanged queries moved by −4 to −16 % between runs.
+
+| After O15 | RocksDB p50 | Accumulo p50 | Ranges | Cells |
+|---|---|---|---|---|
+| `chain-limit` | 0.7 ms (was 6.9) | 19 ms (was 114) | 67 (was 1,003) | 209 (was 2,871) |
+| `type-limit` | 1.6 ms (was 22.6) | 40 ms (was 164) | 260 (was 2,004) | 561 (was 13,126) |
+| `chain` | 24 ms | 339 ms (was 365) | 4,822 | 6,940 |
 
 ---
 
@@ -681,10 +694,35 @@ A spike measures it before any product change: offline, on a 1B-triple sample, w
 - So no extra knowledge is needed.
 
 **O14, comparisons.** `<`, `<=`, `>` and `>=` against a constant, and two of them for a between.
-- **Numeric types:** SPARQL compares across them, so the scan is one range per numeric type, each bound encoded by that type's resolver. Types whose encoding sorts by value: `xsd:int`, `xsd:integer`, `xsd:long`, `xsd:short`, `xsd:byte`, `xsd:double`, `xsd:float`.
-- **What's unsafe:** `xsd:decimal` and other custom datatypes store their lexical text, which doesn't sort numerically. A predicate with such values can't be narrowed safely.
-- **Datatype markers:** so O14 needs to know which datatypes a predicate's objects use. That is a small record per predicate, datatype and label, written once per `add` call like the graph markers and read with the query's labels. A deleted statement leaves its marker, which is safe: a superset only narrows less.
-- **Dates:** `xsd:dateTime` values are stored as UTC milliseconds. A value without a time zone compares within ±14 hours, so the range is widened by that much.
+- **Numeric types:** SPARQL compares across them, so the scan is one range per numeric type the predicate uses, each bound encoded by that type's resolver.
+- **Types whose stored data sorts like the value:** `xsd:int`, `xsd:integer`, `xsd:long`, `xsd:short`, `xsd:byte`, `xsd:double`, `xsd:float`, and `xsd:dateTime` (UTC milliseconds).
+- **Unsafe:** `xsd:decimal` and other custom datatypes store their lexical text, which doesn't sort numerically. A predicate with any such value is never narrowed.
+
+**What O14 must know:** the datatypes a predicate's objects use, without ever missing one, since a missed type would lose answers. Neither of the obvious sources will do:
+- the statistics counters, because they can be turned off (`--stats off`, `tripatha.stats=false`), and a store written partly with them off would undercount;
+- the row layout, because the type is the last part of a `po` row, after the subject, so the types of a predicate aren't grouped anywhere.
+
+**The design (2026-11-16): datatype markers.**
+- **Where:** one cell per predicate, datatype and label in `eval`:
+  - row: the predicate;
+  - family: `t`;
+  - qualifier: the datatype IRI;
+  - visibility: the statement's label;
+  - value: a counter delta, so it works with every backend's summing.
+- **When written:** by every `add`, once per call and key, as graph markers are, and whether or not statistics are on.
+- **Deletes never remove them.** A marker for a type with no values left only makes O14 narrow less.
+- **Cost:** one more `eval` cell per single-statement insert, and nearly nothing for bulk adds. That is about 45 predicates × 1 or 2 datatypes per call on the loader's data.
+- **Reading:** one exact row per predicate, with the query's labels, so a reader learns only the types of statements it may see.
+- **Old stores:**
+  - Markers are complete only for a store written by code that maintains them. So `init()` writes a flag in `ns` (row `tripatha`, family `datatypes`) only when it creates the store.
+  - Stores created earlier have no flag, and O14 stays off for them until a rebuild writes their markers (with O5).
+  - A writer older than O14 must not write to a store that has the flag.
+- **When a range is used:** only when every datatype the markers report is one of the order-preserving types above, and comparable with the constant (numeric with numeric, `dateTime` with `dateTime`). Otherwise the pattern reads its whole range, as today.
+- **Bounds:** computed in each type's own domain, as a superset; the filter decides the edges. Examples:
+  - `?x > 3.5` on `xsd:long` starts at 3;
+  - a constant outside a type's range gives that type an empty range or its full range.
+- **Dates:** a `dateTime` without a time zone was stored in the writing machine's zone, so date ranges are widened by 14 hours each way.
+- **The setting:** `query.valueranges` turns it off. The test compares every query with it on and off.
 
 **Where it fits:**
 - An optimizer after `IndexSearchOptimizer` marks the pattern with its ranges.
@@ -796,11 +834,11 @@ Re-ordered on 2026-11-16: internal optimizations first, load work deferred. Each
 
 ### Phase 1: the join path and filters as key ranges
 
-In this order, each measured on M8 before and after (on RocksDB and on the Accumulo test cluster):
-1. **O15**, adaptive windows;
-2. **O13**, `STRSTARTS` as a prefix range;
-3. **O14**, comparisons as value ranges, with datatype markers;
-4. **O21**, one range per subject;
+In this order, each measured on M8 before and after (on RocksDB and on the Accumulo test cluster). Re-ordered on 2026-11-16, with O21 before O14:
+1. **O15**, adaptive windows: built, measured;
+2. **O13**, `STRSTARTS` as a prefix range: built, measured;
+3. **O21**, one range per subject: next. It is read-side only and works on existing stores;
+4. **O14**, comparisons as value ranges, after D12 (the datatype markers);
 5. **O16**, more lookups in flight;
 6. **O20**, the type check without a regex, and **O19**, RocksDB key decoding. These are small, and can go in at any point;
 7. **O7**, parallel reads of one large range;
