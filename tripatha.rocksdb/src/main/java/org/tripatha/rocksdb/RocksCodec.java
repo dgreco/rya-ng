@@ -15,7 +15,6 @@
  */
 package org.tripatha.rocksdb;
 
-import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
@@ -53,17 +52,16 @@ final class RocksCodec {
         checkNoZero(family, "column family");
         checkNoZero(qualifier, "column qualifier");
         checkNoZero(visibility, "visibility");
-        final ByteArrayOutputStream out = new ByteArrayOutputStream(row.length + family.length + qualifier.length
-                + visibility.length + 8);
-        escape(row, out);
-        out.write(0);
-        out.write(1);
-        out.writeBytes(family);
-        out.write(0);
-        out.writeBytes(qualifier);
-        out.write(0);
-        out.writeBytes(visibility);
-        return out.toByteArray();
+        final byte[] out = new byte[escapedLength(row) + 2 + family.length + 1 + qualifier.length + 1 + visibility.length];
+        int pos = escape(row, out, 0);
+        out[pos++] = 0;
+        out[pos++] = 1;
+        pos = append(family, out, pos);
+        out[pos++] = 0;
+        pos = append(qualifier, out, pos);
+        out[pos++] = 0;
+        append(visibility, out, pos);
+        return out;
     }
 
     private static void checkNoZero(final byte[] part, final String what) {
@@ -74,22 +72,47 @@ final class RocksCodec {
         }
     }
 
-    private static void escape(final byte[] row, final ByteArrayOutputStream out) {
+    /** The length of a row once escaped: each {@code 00} becomes {@code 00 FF}. */
+    private static int escapedLength(final byte[] row) {
+        int length = row.length;
         for (final byte b : row) {
-            out.write(b);
             if (b == 0) {
-                out.write(0xff);
+                length++;
             }
         }
+        return length;
+    }
+
+    /** Writes the escaped row at {@code pos}, copying the runs between {@code 00} bytes whole; returns the next position. */
+    private static int escape(final byte[] row, final byte[] out, int pos) {
+        int from = 0;
+        for (int i = 0; i < row.length; i++) {
+            if (row[i] == 0) {
+                pos = copy(row, from, i + 1, out, pos);
+                out[pos++] = (byte) 0xff;
+                from = i + 1;
+            }
+        }
+        return copy(row, from, row.length, out, pos);
+    }
+
+    private static int append(final byte[] part, final byte[] out, final int pos) {
+        System.arraycopy(part, 0, out, pos, part.length);
+        return pos + part.length;
+    }
+
+    private static int copy(final byte[] from, final int start, final int end, final byte[] out, final int pos) {
+        System.arraycopy(from, start, out, pos, end - start);
+        return pos + end - start;
     }
 
     private static byte[] escaped(final byte[] row, final int... suffix) {
-        final ByteArrayOutputStream out = new ByteArrayOutputStream(row.length + 4);
-        escape(row, out);
+        final byte[] out = new byte[escapedLength(row) + suffix.length];
+        int pos = escape(row, out, 0);
         for (final int b : suffix) {
-            out.write(b);
+            out[pos++] = (byte) b;
         }
-        return out.toByteArray();
+        return out;
     }
 
     /** The value of a statement, index or metadata cell. */
@@ -121,28 +144,45 @@ final class RocksCodec {
      *        its value is the sum as stored
      */
     static Cell cell(final byte[] key, final byte[] stored, final boolean counter) {
-        final ByteArrayOutputStream row = new ByteArrayOutputStream(key.length);
-        int i = 0;
-        while (true) {
-            final byte b = key[i++];
-            if (b != 0) {
-                row.write(b);
-            } else if (key[i++] == 1) {
-                break;
+        // The row ends at 00 01; before that, a 00 and the byte after it (FF) stand for one 00.
+        int end = 0;
+        int zeros = 0;
+        while (key[end] != 0 || key[end + 1] != 1) {
+            if (key[end] == 0) {
+                zeros++;
+                end += 2;
             } else {
-                row.write(0);
+                end++;
             }
         }
+        final byte[] row = zeros == 0 ? Arrays.copyOf(key, end) : unescape(key, end, zeros);
+        final int i = end + 2;
         final int familyEnd = indexOfZero(key, i);
         final int qualifierEnd = indexOfZero(key, familyEnd + 1);
         final byte[] family = Arrays.copyOfRange(key, i, familyEnd);
         final byte[] qualifier = Arrays.copyOfRange(key, familyEnd + 1, qualifierEnd);
         final byte[] visibility = Arrays.copyOfRange(key, qualifierEnd + 1, key.length);
         if (counter) {
-            return new Cell(row.toByteArray(), family, qualifier, visibility, 0, stored);
+            return new Cell(row, family, qualifier, visibility, 0, stored);
         }
-        return new Cell(row.toByteArray(), family, qualifier, visibility, timestamp(stored),
+        return new Cell(row, family, qualifier, visibility, timestamp(stored),
                 stored.length == TIMESTAMP_BYTES ? EMPTY : Arrays.copyOfRange(stored, TIMESTAMP_BYTES, stored.length));
+    }
+
+    /** The row in {@code key[0, end)}, which holds {@code zeros} escaped {@code 00} bytes, copied run by run. */
+    private static byte[] unescape(final byte[] key, final int end, final int zeros) {
+        final byte[] row = new byte[end - zeros];
+        int pos = 0;
+        int from = 0;
+        for (int i = 0; i < end; i++) {
+            if (key[i] == 0) {
+                pos = copy(key, from, i + 1, row, pos);
+                i++; // the escape byte
+                from = i + 1;
+            }
+        }
+        copy(key, from, end, row, pos);
+        return row;
     }
 
     private static int indexOfZero(final byte[] key, final int from) {
@@ -181,14 +221,14 @@ final class RocksCodec {
     private static byte[] cellPrefix(final KeyRange range, final int last) {
         checkNoZero(range.family(), "column family");
         checkNoZero(range.qualifier(), "column qualifier");
-        final ByteArrayOutputStream out = new ByteArrayOutputStream();
-        escape(range.start(), out);
-        out.write(0);
-        out.write(1);
-        out.writeBytes(range.family());
-        out.write(0);
-        out.writeBytes(range.qualifier());
-        out.write(last);
-        return out.toByteArray();
+        final byte[] out = new byte[escapedLength(range.start()) + 2 + range.family().length + 1 + range.qualifier().length + 1];
+        int pos = escape(range.start(), out, 0);
+        out[pos++] = 0;
+        out[pos++] = 1;
+        pos = append(range.family(), out, pos);
+        out[pos++] = 0;
+        pos = append(range.qualifier(), out, pos);
+        out[pos] = (byte) last;
+        return out;
     }
 }
