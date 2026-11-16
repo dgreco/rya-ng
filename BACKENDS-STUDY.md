@@ -465,6 +465,7 @@ So every writer must agree on the mode, and `init()` checks that the table match
     - HBase limits a row key to 32,767 bytes. A `Put` with a longer row throws `IllegalArgumentException` in its constructor, before anything is sent.
   - **Where rya-ng puts long values:** whole literals go in rows. The encoded object goes in `spo`/`po`/`osp`, and the lexical value in `eval`'s `o`, `po` and `so` rows.
   - **The gap:** a literal over about 32 KB, such as a long text or a detailed WKT polygon, can be stored on Accumulo but not on HBase. This is the one functional gap, and a decision for you (D1 in section 1).
+  - **RDF 1.2 triple terms** are objects too, so a whole term, with the terms nested inside it, is part of its statement's rows. A term is about as long as its three parts together, plus a few bytes per level of nesting (each level doubles the escape bytes of the innermost object). Terms made of IRIs and short literals are far from either limit; a term that holds a long literal, or very deep nesting, meets the same 32 KB gap on HBase.
   - **What the provider must do at least:** build every cell of a statement before buffering any of them, so that an over-long row rejects the whole statement with a clear error. Otherwise the statement tables and the counters would be left half-written.
 - **Family names** are limited to 127 bytes. That isn't a concern, since there is one family, `c`. Qualifiers have no practical limit. A cell may be up to 10 MB by default.
 

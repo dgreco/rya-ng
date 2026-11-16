@@ -28,6 +28,7 @@ import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaIRIRange;
 import io.github.dgreco.rya.api.domain.RyaSchema;
 import io.github.dgreco.rya.api.domain.RyaStatement;
+import io.github.dgreco.rya.api.domain.RyaTripleTerm;
 import io.github.dgreco.rya.api.domain.RyaType;
 import io.github.dgreco.rya.api.domain.RyaTypeRange;
 import io.github.dgreco.rya.api.log.LogUtils;
@@ -36,6 +37,7 @@ import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Literal;
 import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.Statement;
+import org.eclipse.rdf4j.model.TripleTerm;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.model.util.Literals;
 import org.eclipse.rdf4j.model.vocabulary.RDF;
@@ -75,9 +77,14 @@ public class RdfToRyaConversions {
             return null;
         }
         if (literal.getDatatype() != null) {
+            if (RyaSchema.TRIPLE_TERM.equals(literal.getDatatype())) {
+                // Reserved: it is how a triple term's resolver is found, and such a literal would be written as one.
+                throw new UnsupportedValueException("Literals of the reserved datatype " + RyaSchema.TRIPLE_TERM + " cannot be stored");
+            }
             if (RDF.DIRLANGSTRING.equals(literal.getDatatype())) {
-                throw new UnsupportedValueException(
-                        "Literals with a base direction (rdf:dirLangString) cannot be stored: " + LogUtils.clean(literal.toString()));
+                // The RDF 1.2 tag as written, "ar--rtl": language and direction travel together.
+                final String language = literal.getLanguage().filter(Literals::isValidLanguageTag).orElse(UNDETERMINED_LANGUAGE);
+                return new RyaType(literal.getDatatype(), literal.stringValue(), language + literal.getBaseDirection());
             }
             if (Literals.isLanguageLiteral(literal)) {
                 final String language = literal.getLanguage().get();
@@ -99,8 +106,8 @@ public class RdfToRyaConversions {
      * {@code value}.
      * @param value the {@link Value} to convert.
      * @return the {@link RyaType} representation of the {@code value}.
-     * @throws UnsupportedValueException if the store has no encoding for the value, such as an
-     *         RDF 1.2 triple term. Returning {@code null} instead would turn it into a wildcard.
+     * @throws UnsupportedValueException if the store has no encoding for the value. Returning
+     *         {@code null} instead would turn it into a wildcard.
      */
     public static RyaType convertValue(final Value value) {
         if (value == null) {
@@ -108,6 +115,11 @@ public class RdfToRyaConversions {
         }
         if (value instanceof Resource) {
             return convertResource((Resource) value);
+        }
+        if (value instanceof TripleTerm) {
+            final TripleTerm term = (TripleTerm) value;
+            return new RyaTripleTerm(convertResource(term.getSubject()), convertIRI(term.getPredicate()),
+                    convertValue(term.getObject()));
         }
         if (value instanceof Literal) {
             return convertLiteral((Literal) value);
@@ -121,8 +133,7 @@ public class RdfToRyaConversions {
                 return new RyaTypeRange(convertLiteral((Literal) rv.getStart()), convertLiteral((Literal) rv.getEnd()));
             }
         }
-        throw new UnsupportedValueException((value.isTripleTerm() ? "Triple terms" : "Values of this kind")
-                + " cannot be stored or looked up: " + LogUtils.clean(value.toString()));
+        throw new UnsupportedValueException("Values of this kind cannot be stored or looked up: " + LogUtils.clean(value.toString()));
     }
 
     /**

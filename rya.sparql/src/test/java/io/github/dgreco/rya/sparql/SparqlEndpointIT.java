@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayInputStream;
 import java.io.StringReader;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -30,12 +31,26 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
 import io.github.dgreco.rya.test.TestBackends;
+import org.eclipse.rdf4j.model.BNode;
+import org.eclipse.rdf4j.model.Literal;
 import org.eclipse.rdf4j.model.Model;
+import org.eclipse.rdf4j.model.TripleTerm;
+import org.eclipse.rdf4j.model.Value;
+import org.eclipse.rdf4j.model.ValueFactory;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
+import org.eclipse.rdf4j.model.vocabulary.RDF;
+import org.eclipse.rdf4j.query.BindingSet;
+import org.eclipse.rdf4j.query.TupleQueryResult;
+import org.eclipse.rdf4j.query.resultio.QueryResultIO;
+import org.eclipse.rdf4j.query.resultio.TupleQueryResultFormat;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.eclipse.rdf4j.rio.RDFFormat;
 import org.eclipse.rdf4j.rio.Rio;
@@ -60,6 +75,8 @@ public class SparqlEndpointIT {
 
     @Autowired
     private SailRepository repository;
+
+    private static final TupleQueryResultFormat JSON = TupleQueryResultFormat.JSON;
 
     private final HttpClient http = HttpClient.newHttpClient();
 
@@ -120,19 +137,136 @@ public class SparqlEndpointIT {
     }
 
     @Test
-    void valuesTheStoreCannotEncodeAreRefused() throws Exception {
+    void tripleTermsAreExactValues() throws Exception {
         update("INSERT DATA { <urn:s> <urn:p> \"a\", \"b\" }");
 
-        // A triple term must not turn into "any object" and delete both statements.
-        final HttpResponse<String> delete = update("DELETE DATA { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>> }");
-        assertEquals(400, delete.statusCode(), delete.body());
-        assertTrue(delete.body().contains("Triple terms"), delete.body());
+        // A triple term is a value like any other: one that isn't there deletes nothing.
+        assertEquals(204, update("DELETE DATA { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>> }").statusCode());
         assertTrue(ask("ASK { <urn:s> <urn:p> \"a\", \"b\" }"));
 
-        assertEquals(400, update("INSERT DATA { <urn:s> <urn:q> <<( <urn:a> <urn:b> <urn:c> )>> }").statusCode());
-        final HttpResponse<String> directional = update("INSERT DATA { <urn:s> <urn:q> \"x\"@ar--rtl }");
-        assertEquals(400, directional.statusCode(), directional.body());
-        assertFalse(ask("ASK { <urn:s> <urn:q> ?o }"));
+        assertEquals(204, update("INSERT DATA { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>>, <<( <urn:a> <urn:b> \"c\" )>> }").statusCode());
+        final String count = "ASK { { SELECT (COUNT(?o) AS ?n) WHERE { <urn:s> <urn:p> ?o FILTER(isTRIPLE(?o)) } } FILTER(?n = %d) }";
+        assertTrue(ask(count.formatted(2)));
+        assertTrue(ask("ASK { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>> }"));
+        assertFalse(ask("ASK { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:d> )>> }"));
+        assertTrue(ask("ASK { ?s <urn:p> <<( <urn:a> ?p \"c\" )>> }"));
+        assertTrue(ask("ASK { <urn:s> <urn:p> ?o FILTER(isTRIPLE(?o) && SUBJECT(?o) = <urn:a> && OBJECT(?o) = <urn:c>) }"));
+
+        assertEquals(204, update("DELETE DATA { <urn:s> <urn:p> <<( <urn:a> <urn:b> <urn:c> )>> }").statusCode());
+        assertTrue(ask(count.formatted(1)));
+        assertTrue(ask("ASK { <urn:s> <urn:p> ?o FILTER(isTRIPLE(?o) && OBJECT(?o) = \"c\") }"));
+        assertTrue(ask("ASK { <urn:s> <urn:p> \"a\", \"b\" }"));
+    }
+
+    @Test
+    void baseDirectionLiterals() throws Exception {
+        assertEquals(204, update("INSERT DATA { <urn:s> <urn:p> \"x\"@ar--rtl, \"x\"@ar, \"x\"@ar--ltr }").statusCode());
+        assertTrue(ask("ASK { <urn:s> <urn:p> \"x\"@ar--rtl }"));
+        assertTrue(ask("ASK { <urn:s> <urn:p> ?o FILTER(LANGDIR(?o) = \"rtl\" && LANG(?o) = \"ar\") }"));
+
+        final HttpResponse<String> r = get("SELECT ?o WHERE { <urn:s> <urn:p> ?o FILTER(hasLANGDIR(?o)) }",
+                "application/sparql-results+xml");
+        assertEquals(200, r.statusCode(), r.body());
+        assertTrue(r.body().contains("rtl") && r.body().contains("ltr"), r.body());
+
+        // An exact delete removes only that direction.
+        assertEquals(204, update("DELETE DATA { <urn:s> <urn:p> \"x\"@ar--rtl }").statusCode());
+        assertFalse(ask("ASK { <urn:s> <urn:p> \"x\"@ar--rtl }"));
+        assertTrue(ask("ASK { <urn:s> <urn:p> \"x\"@ar--ltr }"));
+        assertTrue(ask("ASK { <urn:s> <urn:p> \"x\"@ar }"));
+    }
+
+    @Test
+    void annotatedStatementsAreInsertedQueriedAndDeleted() throws Exception {
+        assertEquals(204, update("INSERT DATA { <urn:a> <urn:knows> <urn:b> ~ <urn:r> {| <urn:since> 2020 ; <urn:source> <urn:web> |} . "
+                + "<urn:a> <urn:knows> <urn:c> {| <urn:since> 2021 |} }").statusCode());
+
+        assertEquals(Set.of("2020"), column(select("SELECT ?y WHERE { <urn:a> <urn:knows> <urn:b> {| <urn:since> ?y |} }", JSON), "y"));
+        assertEquals(Set.of("urn:b", "urn:c"), column(select("SELECT ?who WHERE { << <urn:a> <urn:knows> ?who >> <urn:since> ?y }", JSON), "who"));
+        assertEquals(Set.of("urn:r"), column(select("SELECT ?r WHERE { ?r rdf:reifies <<( <urn:a> <urn:knows> <urn:b> )>> }", JSON), "r"));
+        assertTrue(ask("ASK { <urn:a> <urn:knows> <urn:b>, <urn:c> }"));
+
+        // An exact delete of the reifying statement leaves the annotation's other statements and the asserted triple.
+        assertEquals(204, update("DELETE DATA { <urn:r> rdf:reifies <<( <urn:a> <urn:knows> <urn:b> )>> }").statusCode());
+        assertFalse(ask("ASK { <urn:a> <urn:knows> <urn:b> {| <urn:since> ?y |} }"));
+        assertTrue(ask("ASK { <urn:r> <urn:since> 2020 . <urn:a> <urn:knows> <urn:b> }"));
+        assertTrue(ask("ASK { <urn:a> <urn:knows> <urn:c> {| <urn:since> 2021 |} }"));
+
+        assertEquals(204, update("DELETE WHERE { ?r rdf:reifies <<( <urn:a> <urn:knows> <urn:c> )>> ; ?p ?o }").statusCode());
+        assertFalse(ask("ASK { ?r rdf:reifies ?t }"));
+    }
+
+    @Test
+    void tripleTermsAndDirectionsInEverySelectFormat() throws Exception {
+        assertEquals(204, update("INSERT DATA { <urn:r> rdf:reifies <<( <urn:a> <urn:says> <<( <urn:b> <urn:label> \"x\"@ar--rtl )>> )>> ; "
+                + "<urn:label> \"y\"@he--rtl, \"z\"@en--ltr, \"w\"@en }").statusCode());
+        final ValueFactory vf = SimpleValueFactory.getInstance();
+        final Value term = vf.createTripleTerm(vf.createIRI("urn:a"), vf.createIRI("urn:says"), vf.createTripleTerm(
+                vf.createIRI("urn:b"), vf.createIRI("urn:label"), vf.createLiteral("x", "ar", Literal.BaseDirection.RTL)));
+        final Set<Value> expected = Set.of(term, vf.createLiteral("y", "he", Literal.BaseDirection.RTL),
+                vf.createLiteral("z", "en", Literal.BaseDirection.LTR), vf.createLiteral("w", "en"));
+
+        final String query = "SELECT ?o WHERE { <urn:r> ?p ?o }";
+        for (final TupleQueryResultFormat format : List.of(JSON, TupleQueryResultFormat.SPARQL)) {
+            assertEquals(expected, values(select(query, format), "o"), format.getName());
+        }
+        // RDF4J's TSV reader can't read a nested triple term back, so the TSV text is compared.
+        final Set<String> tsv = Set.of(select(query, TupleQueryResultFormat.TSV).body().strip().split("\\R"));
+        assertEquals(Set.of("?o", "<<( <urn:a> <urn:says> <<( <urn:b> <urn:label> \"x\"@ar--rtl )>> )>>", "\"y\"@he--rtl",
+                "\"z\"@en--ltr", "\"w\"@en"), tsv);
+        final String json = get(query, JSON.getDefaultMIMEType()).body().replace(" ", "");
+        assertTrue(json.contains("\"its:dir\":\"rtl\"") && json.contains("\"its:dir\":\"ltr\""), json);
+        assertFalse(json.contains("--"), json);
+        assertTrue(json.contains("\"type\":\"triple\""), json);
+
+        // CSV has no types: IRIs and literals are bare values, inside a triple term too.
+        final Set<String> csv = Set.of(get(query, "text/csv").body().strip().split("\\R"));
+        assertEquals(Set.of("o", "\"<<( urn:a urn:says <<( urn:b urn:label \"\"x\"\" )>> )>>\"", "y", "z", "w"), csv);
+    }
+
+    @Test
+    void constructKeepsTripleTermsAndDirections() throws Exception {
+        assertEquals(204, update("INSERT DATA { <urn:a> <urn:knows> <urn:b> ~ <urn:r> {| <urn:note> \"x\"@ar--rtl |} }").statusCode());
+        final ValueFactory vf = SimpleValueFactory.getInstance();
+        final Value term = vf.createTripleTerm(vf.createIRI("urn:a"), vf.createIRI("urn:knows"), vf.createIRI("urn:b"));
+        for (final RDFFormat format : List.of(RDFFormat.TURTLE, RDFFormat.NTRIPLES, RDFFormat.NQUADS, RDFFormat.TRIG, RDFFormat.RDFXML)) {
+            final HttpResponse<String> r = get("CONSTRUCT WHERE { ?s ?p ?o }", format.getDefaultMIMEType());
+            assertEquals(200, r.statusCode(), r.body());
+            final Model model = Rio.parse(new StringReader(r.body()), "", format);
+            assertEquals(3, model.size(), format.getName() + "\n" + r.body());
+            assertTrue(model.contains(vf.createIRI("urn:r"), RDF.REIFIES, term), format.getName() + "\n" + r.body());
+            assertTrue(model.contains(vf.createIRI("urn:r"), vf.createIRI("urn:note"),
+                    vf.createLiteral("x", "ar", Literal.BaseDirection.RTL)), format.getName() + "\n" + r.body());
+        }
+    }
+
+    @Test
+    void blankNodesInsideTripleTermsComeBackAsBlankNodes() throws Exception {
+        update("INSERT DATA { <urn:s> <urn:p> <<( _:b <urn:q> <<( <urn:x> <urn:q> _:c )>> )>> . <urn:a> <urn:knows> <urn:b> {| <urn:since> 2020 |} }");
+        final HttpResponse<String> r = get("SELECT ?s ?o WHERE { ?s ?p ?o }", JSON.getDefaultMIMEType());
+        assertEquals(200, r.statusCode(), r.body());
+        assertFalse(r.body().contains("urn:rya-ng/bnode"), r.body());
+        final Set<Value> objects = values(r, "o");
+        final TripleTerm outer = (TripleTerm) objects.stream().filter(v -> v instanceof TripleTerm t
+                && t.getObject() instanceof TripleTerm).findFirst().orElseThrow();
+        assertTrue(outer.getSubject() instanceof BNode, outer.toString());
+        assertTrue(((TripleTerm) outer.getObject()).getObject() instanceof BNode, outer.toString());
+        // The anonymous reifier of an annotation is a blank node too.
+        assertTrue(values(r, "s").stream().anyMatch(v -> v instanceof BNode), r.body());
+
+        final HttpResponse<String> t = get("CONSTRUCT WHERE { ?s ?p ?o }", "application/n-triples");
+        assertFalse(t.body().contains("urn:rya-ng/bnode"), t.body());
+        assertTrue(t.body().contains("<<( _:"), t.body());
+    }
+
+    @Test
+    void labelsApplyToAnnotatedStatements() throws Exception {
+        assertEquals(204, post(SparqlController.SPARQL_UPDATE,
+                "INSERT DATA { <urn:a> <urn:knows> <urn:b> {| <urn:since> 2020 |} }", null, "visibility=A").statusCode());
+        final String annotated = "ASK { <urn:a> <urn:knows> <urn:b> {| <urn:since> 2020 |} }";
+        assertTrue(askWith(annotated, "A"));
+        assertFalse(askWith(annotated, "B"));
+        assertFalse(askWith("ASK { ?r rdf:reifies ?t }", "B"));
     }
 
     @Test
@@ -294,6 +428,36 @@ public class SparqlEndpointIT {
             b.header("Accept", accept);
         }
         return http.send(b.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> select(final String query, final TupleQueryResultFormat format) throws Exception {
+        final HttpResponse<String> r = get(query, format.getDefaultMIMEType());
+        assertEquals(200, r.statusCode(), r.body());
+        assertTrue(r.headers().firstValue("Content-Type").orElse("").startsWith(format.getDefaultMIMEType()), r.headers().toString());
+        return r;
+    }
+
+    /** The values of one variable, read back with RDF4J's parser for the response's format. */
+    private static Set<Value> values(final HttpResponse<String> response, final String variable) throws Exception {
+        final String type = response.headers().firstValue("Content-Type").orElseThrow().split(";")[0];
+        final TupleQueryResultFormat format = Stream.of(JSON, TupleQueryResultFormat.SPARQL, TupleQueryResultFormat.TSV)
+                .filter(f -> f.hasMIMEType(type)).findFirst().orElseThrow();
+        final Set<Value> values = new HashSet<>();
+        try (TupleQueryResult result = QueryResultIO.parseTuple(
+                new ByteArrayInputStream(response.body().getBytes(StandardCharsets.UTF_8)), format, null)) {
+            for (final BindingSet row : result) {
+                if (row.hasBinding(variable)) {
+                    values.add(row.getValue(variable));
+                }
+            }
+        }
+        return values;
+    }
+
+    private static Set<String> column(final HttpResponse<String> response, final String variable) throws Exception {
+        final Set<String> labels = new HashSet<>();
+        values(response, variable).forEach(v -> labels.add(v.stringValue()));
+        return labels;
     }
 
     private HttpResponse<String> form(final String body, final String accept) throws Exception {

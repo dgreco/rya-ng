@@ -21,6 +21,7 @@ package io.github.dgreco.rya.api.resolver;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaSchema;
 import io.github.dgreco.rya.api.domain.RyaStatement;
+import io.github.dgreco.rya.api.domain.RyaTripleTerm;
 import io.github.dgreco.rya.api.domain.RyaType;
 import io.github.dgreco.rya.api.utils.LiteralLanguageUtils;
 import org.eclipse.rdf4j.model.IRI;
@@ -79,9 +80,15 @@ public class RyaToRdfConversions {
                 return VF.createLiteral(data, LiteralLanguageUtils.UNDETERMINED_LANGUAGE);
             }
         } else if (RDF.DIRLANGSTRING.equals(ryaType.getDataType())) {
-            // Written before such literals were refused, without tag or direction. RDF4J rejects
-            // the datatype without them, which would fail every scan that reaches the row.
-            return VF.createLiteral(ryaType.getData());
+            final String tag = ryaType.getLanguage();
+            final int separator = LiteralLanguageUtils.directionSeparator(tag);
+            if (separator < 0) {
+                // Written before base directions were supported, without tag or direction. RDF4J
+                // rejects the datatype without them, which would fail every scan reaching the row.
+                return VF.createLiteral(ryaType.getData());
+            }
+            return VF.createLiteral(ryaType.getData(), tag.substring(0, separator),
+                    Literal.BaseDirection.fromString(tag.substring(separator)));
         }
         return VF.createLiteral(ryaType.getData(), ryaType.getDataType());
     }
@@ -105,7 +112,11 @@ public class RyaToRdfConversions {
     }
 
     public static Value convertValue(final RyaType ryaType) {
-        //assuming either IRI or Literal here
+        if (ryaType instanceof RyaTripleTerm) {
+            final RyaTripleTerm term = (RyaTripleTerm) ryaType;
+            return VF.createTripleTerm(convertResource(term.getSubject()), convertIRI(term.getPredicate()),
+                    convertValue(term.getObject()));
+        }
         return (ryaType instanceof RyaIRI || ryaType.getDataType().equals(XMLSchema.ANYURI)) ? toResource(ryaType.getData()) : convertLiteral(ryaType);
     }
 

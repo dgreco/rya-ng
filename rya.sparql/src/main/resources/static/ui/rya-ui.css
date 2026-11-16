@@ -173,6 +173,16 @@ html, body {
     }
 }
 
+/* RDF 1.2: triple terms in the results table, and SPARQL 1.2 syntax in the editor (rya-sparql12.js) */
+.yasr .rya-term-mark {
+    color: #64748b;
+    font-weight: 600;
+}
+
+.yasqe .CodeMirror .cm-rya-modern {
+    font-weight: 600;
+}
+
 /* Trace switch and side panel */
 
 .rya-check {

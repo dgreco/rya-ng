@@ -119,6 +119,7 @@ class IndexMaintenanceIT extends StoreITBase {
         return List.of(
                 st("urn:a", LABEL, new RyaType("Hello brave new World"), null, null, null),
                 st("urn:a", LABEL, new RyaType(RDF.LANGSTRING, "Ciao mondo", "it"), G1, null, null),
+                st("urn:d", LABEL, new RyaType(RDF.DIRLANGSTRING, "שלום עולם", "he--rtl"), G1, null, null),
                 st("urn:b", COMMENT, new RyaType("hello again"), G2, null, "A"),
                 st("urn:b", COMMENT, new RyaType("hello again"), G2, null, "B"),
                 st("urn:c", LABEL, new RyaType("twin"), null, "q1", null),

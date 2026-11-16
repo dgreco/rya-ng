@@ -19,6 +19,7 @@ package io.github.dgreco.rya.api.resolver;
  * under the License.
  */
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -110,6 +111,30 @@ public class TypeEncodingDelimiterTest {
         final RyaType out = context.deserialize(context.serialize(in));
         assertEquals("bonjour", out.getData());
         assertEquals("fr", out.getLanguage());
+    }
+
+    @Test
+    public void directionalStringRoundTrips() throws Exception {
+        final RyaContext context = RyaContext.getInstance();
+        for (final String tag : new String[] {"ar--rtl", "en-GB--ltr"}) {
+            final RyaType in = new RyaType(RDF.DIRLANGSTRING, "user@example.org", tag);
+            assertNoDelimiter(context.serializeType(in)[0], "dirLangString");
+            final RyaType out = context.deserialize(context.serialize(in));
+            assertEquals(RDF.DIRLANGSTRING, out.getDataType());
+            assertEquals("user@example.org", out.getData());
+            assertEquals(tag, out.getLanguage());
+        }
+    }
+
+    /** Older versions stored such literals without tag or direction; those rows must still be deletable. */
+    @Test
+    public void directionalRowWrittenWithoutTagEncodesBackToItsBytes() throws Exception {
+        final RyaContext context = RyaContext.getInstance();
+        final byte[] stored = context.serialize(new RyaType(RDF.DIRLANGSTRING, "user@example.org"));
+        final RyaType read = context.deserialize(stored);
+        assertEquals("user@example.org", read.getData());
+        assertEquals(null, read.getLanguage());
+        assertArrayEquals(stored, context.serialize(read));
     }
 
     @Test

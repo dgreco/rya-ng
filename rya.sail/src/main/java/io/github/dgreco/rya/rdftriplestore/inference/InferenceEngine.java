@@ -1175,7 +1175,8 @@ public class InferenceEngine {
             subjIter = queryDao(subj, OWL.SAMEAS, null, contxts);
             while (subjIter.hasNext()){
                 final Statement st = subjIter.next();
-                if (!currentSameAs.contains(st.getObject())){
+                // A literal or a triple term can be the object of owl:sameAs, and is the same as nothing here.
+                if (st.getObject() instanceof Resource && !currentSameAs.contains(st.getObject())){
                     final Resource castedObj = (Resource) st.getObject();
                     currentSameAs.add(castedObj);
                     findSameAsChaining(castedObj, currentSameAs, contxts);
@@ -1219,7 +1220,8 @@ public class InferenceEngine {
                 sts.add(VF.createStatement((goUp) ? (st.getSubject()) : (Resource) (core), prop, (!goUp) ? (st.getObject()) : (core)));
                 if (goUp) {
                     chainTransitiveProperty(null, prop, st.getSubject(), core, sts, goUp, contxts);
-                } else {
+                } else if (st.getObject() instanceof Resource) {
+                    // Only a resource can be the subject of a further step.
                     chainTransitiveProperty((Resource) st.getObject(), prop, null, core, sts, goUp, contxts);
                 }
             }

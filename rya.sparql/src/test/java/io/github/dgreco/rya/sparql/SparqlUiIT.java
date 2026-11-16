@@ -73,6 +73,7 @@ class SparqlUiIT {
                 Map.entry("/vendor/leaflet/images/marker-icon.png", "image/png"),
                 Map.entry("/vendor/yasgui-chart-plugin/yasgui-chart-plugin.min.js", "javascript"),
                 Map.entry("/vendor/yasgui-chart-plugin/yasgui-chart-plugin.min.css", "text/css"),
+                Map.entry("/ui/rya-sparql12.js", "javascript"),
                 Map.entry("/ui/wkt.js", "javascript"),
                 Map.entry("/ui/rya-map.js", "javascript"),
                 Map.entry("/ui/rya-trace.js", "javascript"),

@@ -27,7 +27,7 @@ under the License.
 
     <artifactId>rya.sparql</artifactId>
     <name>rya-ng SPARQL Endpoint</name>
-    <description>SPARQL 1.1 Protocol endpoint (query and update) over a Rya store on Accumulo.</description>
+    <description>SPARQL Protocol endpoint (SPARQL 1.1 and 1.2 query and update) over a Rya store on Accumulo or HBase.</description>
 
     <properties>
         <!-- Web UI packages from npm, with the hex SHA-512 of each tarball (see the antrun execution). -->

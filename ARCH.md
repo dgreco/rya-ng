@@ -379,7 +379,7 @@ Inside rya-ng, a statement is a `RyaStatement` (`rya.api`):
 |---|---|---|
 | `subject` | `RyaIRI` | subject IRI (blank nodes are turned into IRIs, see below) |
 | `predicate` | `RyaIRI` | predicate IRI |
-| `object` | `RyaType` | object: `RyaIRI` for an IRI, plain `RyaType` for a literal |
+| `object` | `RyaType` | object: `RyaIRI` for an IRI, plain `RyaType` for a literal, `RyaTripleTerm` for an RDF 1.2 triple term |
 | `context` | `RyaIRI` or `null` | named graph; `null` is the default graph |
 | `qualifier` | `String` | an extra column qualifier inherited from Apache Rya; normally `null` |
 | `columnVisibility` | `byte[]` | the Accumulo visibility label of the statement |
@@ -389,6 +389,10 @@ Inside rya-ng, a statement is a `RyaStatement` (`rya.api`):
 A `RyaType` holds three strings: the data (the lexical form), the datatype IRI, and the language tag. `RyaIRI` is a `RyaType` with datatype `xsd:anyURI`.
 
 `RdfToRyaConversions` and `RyaToRdfConversions` translate between RDF4J values and Rya types.
+
+**RDF 1.2 values.**
+- A **triple term** (`<<( s p o )>>`) is a `RyaTripleTerm`: a `RyaType` with the reserved datatype `RyaSchema.TRIPLE_TERM`, whose data is the term's encoded form ([section 7.3](#73-value-encoding)). It is immutable and can only be an object. Its own object can be another triple term. A literal that claims the reserved datatype is refused.
+- A **literal with a base direction** (`"..."@ar--rtl`) has the datatype `rdf:dirLangString`, and its language field holds the tag with the direction (`ar--rtl`).
 
 **Blank nodes become IRIs.** `_:b1` is stored as the IRI `urn:rya-ng/bnode/2012/07#b1` (`RyaSchema.BNODE_NAMESPACE`), and the Sail returns it as that IRI. The inference engine relies on this: it casts these values to `IRI` throughout. Only the endpoint turns them back into blank nodes, and only in its output (`BlankNodeOutput`, [section 17](#17-the-sparql-endpoint)).
 
@@ -472,9 +476,15 @@ The object's bytes come from a **type resolver** (`RyaContext` picks one by data
 | `xsd:float` | `FloatRyaTypeResolver` | 11 | |
 | `xsd:short` | `ShortRyaTypeResolver` | 12 | |
 | `xsd:int` | `IntRyaTypeResolver` | 13 | `42` → `8000002a` |
+| triple term | `TripleTermResolver` | 14 | `<<( <urn:a> <urn:b> <urn:c> )>>` → `02 urn:a 02 urn:b 02 urn:c 03 05 03 06` |
 
 A few consequences:
 - **Language-tagged literals** go through the custom resolver: `"ciao"@it` is stored as `ciao@it 01 http://www.w3.org/1999/02/22-rdf-syntax-ns#langString 01 08`. `geo:wktLiteral` values are stored the same way, with their own datatype IRI.
+- **Literals with a base direction** are stored the same way, with the direction in the tag: `"x"@ar--rtl` is `x@ar--rtl 01 http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString 01 08`.
+- **Triple terms** are `02 esc(subject) 02 esc(predicate) 02 esc(object)`, where the object is its own full encoding, marker included, so a nested term is the same layout applied again.
+  - `esc` replaces the four bytes that must not appear raw: `00` → `03 04`, `01` → `03 05`, `02` → `03 06`, `03` → `03 03`. IRIs and ordinary text contain none of them, so in practice only the inner object's `01` and marker are escaped (`03 05 03 06` in the example above). Each level of nesting doubles the escape bytes of the innermost object.
+  - The leading `02` keeps all triple terms together in the object order, and the inner subject comes first. The terms about one subject, or one subject and predicate, are therefore one range of `po` ([section 12.7](#127-triple-terms)).
+  - `EncodingCompatibilityTest` pins the exact bytes of every resolver and row layout, these included.
 - **`xsd:int` and `xsd:integer` are different values** with different markers (13 and 5), as they are in RDF.
 - **Ordering:** `-7 < 42 < 1000` and `7ffffffff9 < 800000012a < 8000000203e8` compare the same way, so values of one numeric type are sorted by value inside the tables.
 - **Time zones:** `xsd:dateTime` keeps the instant but not its offset. It reads back in UTC.
@@ -876,17 +886,19 @@ Results are lazy: Accumulo is scanned as the result writer asks for rows, so `LI
 
 ### 12.3 The optimizer pipeline
 
-`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with four Rya steps added (marked ★):
+`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with six Rya steps added (marked ★):
 
 ```mermaid
 flowchart TD
     o1["BindingAssigner<br/>BindingSetAssignmentInliner"] --> o2["★ TextQueryValidator<br/>rejects malformed constant text:matches queries"]
     o2 --> o3["ConstantOptimizer, RegexAsStringFunctionOptimizer,<br/>CompareOptimizer, ConjunctiveConstraintSplitter,<br/>DisjunctiveConstraintOptimizer, SameTermFilterOptimizer,<br/>UnionScopeChangeOptimizer, QueryModelNormalizer,<br/>ProjectionRemovalOptimizer"]
-    o3 --> o3b["★ GraphSizeOptimizer<br/>stats:approxSize patterns from the counters (section 11.4)"]
+    o3 --> o3a["★ TripleTermOptimizer.fold<br/>constant triple terms become values (section 12.7)"]
+    o3a --> o3b["★ GraphSizeOptimizer<br/>stats:approxSize patterns from the counters (section 11.4)"]
     o3b --> o4["★ InferenceOptimizer<br/>15 OWL/RDFS rewrites (section 14)"]
     o4 --> o5["★ IndexSearchOptimizer<br/>text and geo patterns (section 15)<br/>only when the store has indexes"]
     o5 --> o6["QueryJoinOptimizer<br/>join order from Rya statistics (section 11)"]
-    o6 --> o7["IterativeEvaluationOptimizer, FilterOptimizer,<br/>FilterInValuesOptimizer, FilterOptimizer,<br/>OrderLimitOptimizer"]
+    o6 --> o6b["★ TripleTermOptimizer.order<br/>each triple-term pattern right after what binds its term (section 12.7)"]
+    o6b --> o7["IterativeEvaluationOptimizer, FilterOptimizer,<br/>FilterInValuesOptimizer, FilterOptimizer,<br/>OrderLimitOptimizer"]
 ```
 
 **Where the Rya steps sit:**
@@ -896,7 +908,7 @@ flowchart TD
 
 ### 12.4 The evaluation strategy
 
-`RyaEvaluationStrategy` extends RDF4J's `DefaultEvaluationStrategy` and changes three `prepare` methods (`Join`, `LeftJoin`, `StatementPattern`):
+`RyaEvaluationStrategy` extends RDF4J's `DefaultEvaluationStrategy` and changes four `prepare` methods (`Join`, `LeftJoin`, `StatementPattern`, `TripleRef`):
 
 | Node | Step used |
 |---|---|
@@ -904,6 +916,8 @@ flowchart TD
 | `Join` whose right side is a plain statement pattern (optionally under filters) | `BatchedJoinStep` ([section 13](#13-batched-joins)); otherwise RDF4J's own join |
 | `IndexedStatementPattern` | RDF4J's `StatementPatternQueryEvaluationStep`, reading through an `IndexTripleSource` ([section 15](#15-text-and-geo-search)) |
 | `FixedStatementPattern` | matched against its in-memory list of ontology statements ([section 14](#14-inference)) |
+| `TripleRef` (a triple-term pattern) | `TripleRefStep` ([section 12.7](#127-triple-terms)) |
+| a `StatementPattern` whose object is a triple term with a constant subject | RDF4J's `StatementPatternQueryEvaluationStep`, reading through a `TripleTermRangeSource` ([section 12.7](#127-triple-terms)) |
 | `TransitivePropertySP` | the closure computed by `InferenceEngine.findTransitiveProperty` when one end is bound; otherwise a plain lookup |
 | any other node | RDF4J's default |
 
@@ -931,6 +945,26 @@ QueryRoot
 The join is set up as a batched join. With only one left row (`ex:bob`) there is nothing to batch, so that row's lookup goes straight to the store. With thousands of friends, the lookups would be fetched 1000 at a time.
 
 `query.printqueryplan=true` logs a plan like this.
+
+### 12.7 Triple terms
+
+RDF4J's parser turns a triple term in a pattern into a `TripleRef(s, p, o, ?t)` node, joined with the statement pattern that uses `?t` as its object. Annotations (`{| |}`) and reified triples (`<< >>`) are the same thing plus an `rdf:reifies` pattern. So `?claim rdf:reifies <<( ex:alice ?p ?o )>>` is:
+
+```
+Join
+├── TripleRef         ex:alice ?p ?o  →  ?t
+└── StatementPattern  ?claim rdf:reifies ?t
+```
+
+RDF4J's own step for `TripleRef` lists every triple term in the store. rya-ng replaces it:
+
+1. **Constant terms are folded** (`TripleTermOptimizer.fold`). A `TripleRef` whose parts are all constants becomes a one-row binding of `?t` to that term, which the statement pattern then looks up like any other object. Nested terms fold from the inside out. The term is bound through a row, not written into the pattern: RDF4J reuses a pattern's constant `Var` in a way that breaks its one-parent rule for triple terms.
+2. **The others are ordered** (`TripleTermOptimizer.order`, right after join ordering). Each `TripleRef` is moved to just after the first pattern that binds its `?t`. A `TripleRef` nothing else binds stays first.
+3. **A bound term is matched in memory** (`TripleRefStep`). With `?t` bound, the step unifies the term's parts with the pattern's, without reading anything.
+4. **A range replaces the full read** (`TripleTermRangeSource`). When the `TripleRef` has a constant subject and its statement pattern has no subject or object bound, that pattern reads only the objects that start with the term's encoded prefix: `02 esc(subject) 02`, plus `esc(predicate) 02` when the predicate is constant too. This is a range of `po`, or of `osp` when the pattern's predicate is unbound. The `TripleRef` after it still checks every result, so the range can only save reads. In a batched join such a pattern is batched only once its subject or object is bound, like an indexed pattern.
+5. **Otherwise the store is asked** (`StoreTripleSource.tripleTerms`): the terms that are objects of some statement, read as the range of all triple terms, deduplicated, and descended into for nested patterns.
+
+The statistics count a triple term like any other object, and estimate a `TripleRef` high, so join ordering starts from the other patterns. Inference ignores triple terms.
 
 ---
 
@@ -1400,6 +1434,7 @@ flowchart TD
 - **Time limit:** every query and update gets RDF4J's maximum execution time:
   - by default `rya.sparql.query-timeout` (120 s);
   - or the request's `timeout=` parameter, in whole seconds, up to `rya.sparql.max-query-timeout` (30 min by default; `0s` for no limit). The query page sends it from its **Timeout** field.
+- **RDF 1.2 output:** `BlankNodeOutput` restores blank nodes inside triple terms too. `DirectionJsonWriter` writes a literal's direction in SPARQL JSON as `"its:dir": "rtl"`, where RDF4J 6.1 writes `"--rtl"`.
 - **Errors:** `SparqlExceptionHandler` maps them to plain-text answers:
 
   | Status | Cause |
@@ -1415,6 +1450,10 @@ flowchart TD
 `src/main/resources/static/index.html` and `ui/` hold the browser page:
 - **`rya-ui.js`** sets up YASGUI on `/sparql`, with the Examples menu and header fields the browser remembers: **Authorizations** (sent as `auths=`), **Timeout** (sent as `timeout=`) and the **Trace** switch.
 - **`rya-trace.js`** is the resizable trace panel on the right ([section 17.5](#175-tracing-a-query)).
+- **`rya-sparql12.js`** adds RDF 1.2 to YASGUI 4, which knows SPARQL 1.1 only, by replacing a few of its methods at load time (YASGUI's files are not changed):
+  - `Yasqe.checkSyntax`: a small tokenizer of our own looks for SPARQL 1.2 syntax. A query that has some loses YASGUI's error marker, is highlighted by that tokenizer (a CodeMirror overlay), and gets its query-or-update kind from it. Other queries are left to YASGUI.
+  - YASR's response parser: triple terms in SPARQL JSON are turned into bindings the table can hold, and N-Triples is read by our own N-Triples 1.2 reader. `rya-ui.js` asks for graph results in Turtle, and in N-Triples when the query uses SPARQL 1.2 syntax. When a Turtle result holds RDF 1.2 values (RDF4J starts it with `@version "1.2"`, and only then), it remembers the query and runs it once more in N-Triples.
+  - The table plugin's cell renderer: triple terms as `<<( s p o )>>`, and the direction of directional literals.
 - **`rya-map.js`** draws `geo:wktLiteral` results on a map.
 - **`wkt.js`** turns WKT into GeoJSON.
 
@@ -1585,6 +1624,8 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 11. **New query nodes clone their `Var`s.** RDF4J 6 allows one parent per `Var`.
 12. **`init()` must not write to an existing store.** Read-only users must be able to open it.
 13. **One DAO, one writer thread.** Parallel writers use separate DAOs.
+14. **A triple term is never a constant `Var` of a statement pattern.** It is bound through a row (`TripleTermOptimizer.fold`); RDF4J's statement-pattern step would otherwise give one `Var` two parents.
+15. **A triple-term range only narrows.** The `TripleRef` that follows checks every result, as index searches are checked against `spo`.
 
 ---
 

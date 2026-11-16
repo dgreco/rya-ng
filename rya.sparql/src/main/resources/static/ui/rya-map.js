@@ -56,7 +56,7 @@
             const name = tr.insertCell();
             name.textContent = "?" + v;
             const cell = tr.insertCell();
-            cell.textContent = value.value + (value["xml:lang"] ? "@" + value["xml:lang"] : "");
+            cell.textContent = value.value + (value["xml:lang"] ? "@" + RyaSparql12.languageTag(value) : "");
         }
         return table.rows.length ? table : null;
     }

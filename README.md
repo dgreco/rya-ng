@@ -25,9 +25,10 @@ under the License. -->
 
 rya-ng is an RDF triple store on [Apache Accumulo](https://accumulo.apache.org/) or [Apache HBase](https://hbase.apache.org/). It has two parts:
 - an [RDF4J](https://rdf4j.org/) Sail you can embed;
-- a standalone [SPARQL 1.1 Protocol](https://www.w3.org/TR/sparql11-protocol/) endpoint for queries and updates.
+- a standalone [SPARQL Protocol](https://www.w3.org/TR/sparql11-protocol/) endpoint for queries and updates.
 
 It supports:
+- RDF 1.2 and SPARQL 1.2: triple terms, reified and annotated statements, and literals with a text direction (see [RDF 1.2](#rdf-12));
 - named graphs;
 - cell-level visibility labels and scan authorizations, with the same meaning on both backends;
 - optional query-time OWL/RDFS inference;
@@ -190,11 +191,13 @@ Open the server's root URL (for example `http://localhost:8080/`) for a query pa
 
 **Writing queries:**
 - Syntax highlighting, autocompletion and several query tabs, which the browser remembers.
-- An **Examples** menu with queries to load sample data (Rome landmarks), browse it, size the named graphs, and run text and geo searches.
+- An **Examples** menu with queries to load sample data (Rome landmarks), browse it, size the named graphs, run text and geo searches, and try RDF 1.2 annotations, triple terms and text directions.
+- SPARQL 1.2 syntax is accepted and highlighted. YASGUI itself checks SPARQL 1.1 only, so a query that uses 1.2 syntax is checked by the server when it runs, not while you type.
 - Every new tab starts with the `rdf:`, `rdfs:`, `xsd:`, `text:`, `geo:`, `geof:`, `uom:` and `stats:` prefixes.
 
 **Result tabs:**
-- **Table** and **Response**, as in YASGUI.
+- **Table** and **Response**, as in YASGUI. The table shows triple terms as `<<( s p o )>>` and marks a literal's text direction (`"..."@ar--rtl`).
+- `CONSTRUCT` and `DESCRIBE` results are fetched as Turtle. When a result holds triple terms or directions, the page fetches it again as N-Triples, which it can read with those in them, so that is what **Response** then shows. A query written in SPARQL 1.2 is fetched as N-Triples straight away.
 - **Map** draws every `geo:wktLiteral` in the results on an OpenStreetMap background. The background tiles need internet access; the rest of the page doesn't.
 - **Chart** shows bar, line and pie charts of numeric results.
 
@@ -207,7 +210,7 @@ The page's JavaScript and CSS are packaged into the jar at build time. Their lic
 
 ### Using it
 
-The endpoint is `/sparql` and follows the SPARQL 1.1 Protocol.
+The endpoint is `/sparql` and follows the SPARQL Protocol, for SPARQL 1.1 and 1.2 queries and updates.
 
 ```bash
 # update
@@ -228,6 +231,10 @@ Result formats are chosen from `Accept`:
 - **SELECT:** SPARQL JSON (default), SPARQL XML, CSV, TSV.
 - **ASK:** JSON (default), XML.
 - **CONSTRUCT/DESCRIBE:** Turtle (default), N-Triples, N-Quads, JSON-LD, RDF/XML, TriG.
+
+Every format carries triple terms and text directions, with these exceptions:
+- **CSV** has no types, as in SPARQL 1.1: a triple term is written as text, without the brackets around its IRIs.
+- **JSON-LD** has no triple terms: each is written as an IRI starting with `urn:rdf4j:tripleTerm:`. Text directions are kept.
 
 An unsupported `Accept` gets `406`. A malformed query or update gets `400`.
 
@@ -295,6 +302,46 @@ ORDER BY DESC(?statements)
 - **Approximate:**
   - a statement inserted twice counts twice;
   - a predicate used for the first time in the last 5 minutes may not be counted yet.
+
+## RDF 1.2
+
+rya-ng stores and queries RDF 1.2 data, on both backends:
+
+```sparql
+# An annotation says something about a statement. ~ names it; without ~ it is a blank node.
+INSERT DATA {
+  <urn:alice> <urn:knows> <urn:bob> ~ <urn:claim1> {| <urn:since> 2019 ; <urn:source> <urn:survey> |} .
+  <urn:bob> rdfs:label "بوب"@ar--rtl .          # a literal with a text direction
+}
+
+# The statements with their annotations
+SELECT ?who ?since WHERE { <urn:alice> <urn:knows> ?who {| <urn:since> ?since |} }
+
+# The same, written with a reified triple, and with the reifier
+SELECT ?who ?claim WHERE { << <urn:alice> <urn:knows> ?who ~ ?claim >> <urn:since> ?since }
+
+# Triple terms are values: <urn:claim1> rdf:reifies <<( <urn:alice> <urn:knows> <urn:bob> )>>
+SELECT ?claim ?term (OBJECT(?term) AS ?who) WHERE { ?claim rdf:reifies ?term FILTER(isTRIPLE(?term)) }
+```
+
+- **Triple terms** (`<<( s p o )>>`) are stored as object values, nested to any depth, and compared exactly: deleting one deletes that term only. `TRIPLE`, `SUBJECT`, `PREDICATE`, `OBJECT` and `isTRIPLE` work on them.
+- **Annotations and reified triples** are shorthand for `rdf:reifies` statements, in data and in patterns. Annotating a statement doesn't assert it twice, and deleting an annotation leaves the statement.
+- **Text direction:** `"..."@ar--rtl` and `"..."@ar` are different values. `LANGDIR`, `hasLANG`, `hasLANGDIR` and `STRLANGDIR` work on them.
+- **Speed:** a pattern with a triple term reads only what it needs. With the term's subject known (`?claim rdf:reifies <<( <urn:alice> ?p ?o )>>`), it reads just the range of terms about that subject; a [trace](#tracing-a-query) shows it.
+- **Existing stores** need no migration: RDF 1.1 data is stored exactly as before.
+- Visibility labels, named graphs, statistics and the search indexes treat these statements like any others.
+
+Limits:
+- A triple term can only be an object, as RDF 1.2 defines.
+- A triple term is part of its statement's row key, so each level of nesting makes the row longer. On HBase a row can't exceed 32,767 bytes.
+- An older rya-ng can't read a store that holds triple terms: its scans fail with "Bytes not deserializable" when they reach one.
+- Inference doesn't look inside triple terms.
+
+Some behaviour comes from RDF4J 6.1's SPARQL parser:
+- In a `WHERE` pattern, the reifier after `~` must be an IRI or a blank node; to get it as a variable, use the reified form (`<< s p o ~ ?r >>`). A `~ <reifier>` with no `{| |}` block after it is ignored there.
+- In a `WHERE` pattern, an annotation after a list of objects (`?s ?p ?a, ?b {| ... |}`) is refused, and only the first `{| |}` block of a statement is used.
+- `STR()` of a triple term returns a string instead of raising an error.
+- Turtle and TriG results write annotations as plain `rdf:reifies` statements, never as `{| |}`.
 
 ## Search
 
@@ -426,6 +473,7 @@ On HBase, wrap a connection the same way: `HBaseStore.wrap(connection, user)` (t
 
 - Writes are not transactional. Each update is applied immediately, and rollback does not undo it.
 - `xsd:dateTime` values are stored as UTC milliseconds, so the original time-zone offset is not kept.
+- Literals with the datatype `urn:rya-ng/2012/05#tripleTerm` are refused: rya-ng uses that IRI inside its row keys for triple terms.
 - Literals containing the control characters U+0000 or U+0001 are rejected, because those bytes separate the parts of a row key. Graph IRIs and statement qualifiers containing U+0000 are rejected too: on HBase that byte separates the column names.
 - `size()` and the list of named graphs scan the data. They cost time in proportion to the store or graph size.
 - Statistics are approximate, since re-inserting an existing statement counts it twice. They only affect join order.

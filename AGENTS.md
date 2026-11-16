@@ -100,6 +100,8 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
 
 - Row = s `0x00` p `0x00` objData `0x01` marker (column order differs per table).
 - Values are encoded by mango `LexiTypeEncoders`, one resolver per datatype (marker bytes in the `*RyaTypeResolver` classes; `xsd:int`=13 and `xsd:integer`=5 are separate).
+- **RDF 1.2:** a triple term is a `RyaTripleTerm` (reserved datatype `RyaSchema.TRIPLE_TERM`, marker 14, `TripleTermResolver`): `02 esc(s) 02 esc(p) 02 esc(o with its own marker)`, objects only, nested by applying the layout again. A literal with a base direction is an `rdf:dirLangString` whose language field is `ar--rtl`, stored by `CustomDatatypeResolver`.
+- `EncodingCompatibilityTest` pins the bytes of every resolver and row layout. A change that makes it fail changes what existing stores hold.
 - **Encoded values must never contain `0x00`/`0x01`.** `RyaTypeResolverImpl.checkNoReservedBytes` enforces this, and `TypeEncodingDelimiterTest` guards it. Do not switch to Accumulo lexicoders: they emit raw bytes.
 
 ### Query path (`rya.sail`)
@@ -122,6 +124,11 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
   - `IndexSearchOptimizer`, run after inference and before join ordering, swaps the statement patterns those filters cover for `IndexedStatementPattern`s. It leaves the filter in place.
   - `RyaEvaluationStrategy` runs those patterns with RDF4J's own `StatementPatternQueryEvaluationStep` over an `IndexTripleSource`. That source uses `IndexSearcher` when subject and object are unbound, and otherwise defers to the store.
   - `IndexSearcher` resolves every hit against spo with the query's conf, so the index can only cost time, never change results.
+- **Triple terms** (ARCH.md 12.7): RDF4J parses a triple term in a pattern as a `TripleRef` joined with the statement pattern that uses its variable; annotations and reified triples add an `rdf:reifies` pattern.
+  - `TripleTermOptimizer.fold` (after projection removal) turns all-constant `TripleRef`s into a one-row `BindingSetAssignment`; `order` (right after `QueryJoinOptimizer`) puts each remaining `TripleRef` just after the pattern that binds its variable.
+  - `TripleRefStep` unifies a bound term in memory, and otherwise asks `StoreTripleSource.tripleTerms`. RDF4J's own step lists the whole store and casts subjects to `Resource`.
+  - `TripleTermRangeSource` makes a statement pattern whose object is a term with a constant subject read only that prefix range. The `TripleRef` still checks every result.
+  - Run `TripleTermIT` on both backends, and with the batch-size and index switches above, after touching any of this.
 - **Inference nodes:** `RyaEvaluationStrategy.prepare(StatementPattern)` handles the two node types inference produces. `FixedStatementPattern` is matched from in-memory ontology statements; `TransitivePropertySP` goes through `InferenceEngine.findTransitiveProperty`.
 - **`InferenceEngine`:** loads the ontology into memory (`ValueGraph` for the subClassOf/subPropertyOf hierarchies) and reloads it on a timer. Ontology changes are invisible until the next `refreshGraph()`; tests call it explicitly.
 - **Wiring:** `RyaSailFactory` builds DAO + stats + inference + sail from a `Store` and a `StoreRdfConfiguration`. The caller owns the store.
@@ -132,7 +139,8 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
 
 ### Endpoint (`rya.sparql`)
 
-- `SparqlController` implements the SPARQL 1.1 Protocol at `/sparql`, with content negotiation in `ContentNegotiation` and errors mapped in `SparqlExceptionHandler`.
+- `SparqlController` implements the SPARQL Protocol at `/sparql` for SPARQL 1.1 and 1.2, with content negotiation in `ContentNegotiation` and errors mapped in `SparqlExceptionHandler`.
+- **RDF 1.2 output:** `BlankNodeOutput` recurses into triple terms. SELECT results in JSON go through `DirectionJsonWriter` (`"its:dir": "rtl"`; RDF4J 6.1 writes `"--rtl"`, which its own reader rejects). RDF4J's TSV reader can't read a nested triple term back, and JSON-LD writes triple terms as `urn:rdf4j:tripleTerm:` IRIs.
 - Settings are `RyaProperties` (`rya.*` in `application.yaml`). `rya.backend` picks the store (`RyaStoreConfiguration`); `rya.hbase.*` configures HBase (`conf[key]` for client settings). On HBase the endpoint refuses to start when its account can't read a label of `rya.sparql.authorizations` (their canaries).
 - A request's `timeout=` (seconds) replaces `rya.sparql.query-timeout`, up to `rya.sparql.max-query-timeout`; the query page sends it from its Timeout field.
 - **Tracing:** `trace=<id>` streams the request's storage operations as Server-Sent Events on `/sparql/trace/<id>` (`TraceController`, `TraceHub`), shown by `ui/rya-trace.js`.
@@ -140,7 +148,10 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
   - New code that reads should open `StoreTrace.reason(() -> "…")` around the read, so traces say why it scans.
   - A traced query must run exactly like an untraced one: never turn on RDF4J's result-size or time tracking for it (that disables batched joins). `QueryTraceIT` checks this.
   - Always close the scope in a `finally`: server threads are pooled.
-- **Query page** (`src/main/resources/static`): `index.html` plus `ui/` (our code: `rya-ui.js` sets up YASGUI on `sparql`, `rya-map.js` is the Map result tab, `wkt.js` turns WKT into GeoJSON).
+- **Query page** (`src/main/resources/static`): `index.html` plus `ui/` (our code: `rya-ui.js` sets up YASGUI on `sparql`, `rya-map.js` is the Map result tab, `wkt.js` turns WKT into GeoJSON, `rya-sparql12.js` adds SPARQL 1.2 editing and RDF 1.2 results).
+  - `rya-sparql12.js` replaces `Yasqe.prototype.checkSyntax`, YASR's response parser (`getParserFromContentType`, reached through a stand-in response) and the table plugin's `getCellContent`/`formatLiteral`. It must load before `rya-ui.js` creates YASGUI. A YASGUI upgrade has to recheck these hooks.
+  - Graph results are requested as Turtle (set in `queryBefore`). Only our N-Triples 1.2 reader understands triple terms, so a SPARQL 1.2 query is requested as N-Triples, and a query whose Turtle result starts with RDF4J's `@version "1.2"` line is run once more as N-Triples (`queryResponse`).
+  - CodeMirror overlays can't keep state, so the overlay's tokenizer starts fresh on each line.
   - Third-party files go to `static/vendor` at build time. The `maven-antrun-plugin` execution in `rya.sparql/pom.xml` downloads pinned npm tarballs into `~/.m2/repository/.cache/rya-ng-ui` and checks their SHA-512.
   - To upgrade one, change its `*.version` and `*.sha512` properties (the hex of npm's `integrity`), and regenerate `static/vendor/THIRD-PARTY-NOTICES.txt`.
   - `SparqlUiIT` checks that every asset is served. JavaScript isn't tested in the build; check UI changes in a browser.
@@ -153,6 +164,8 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
 ## Gotchas
 
 - **RDF4J 6 `Var` nodes may have only one parent** (assertion in `Var.setParentNode`; tests run with `-ea`). When building new query nodes from existing variables, clone them: the inference visitors use `AbstractInferVisitor.c(var)`.
+- **A triple term must never be a constant `Var` in a `StatementPattern`:** RDF4J's `StatementPatternQueryEvaluationStep` returns that same `Var` for it and trips the one-parent assertion. Bind it through a `BindingSetAssignment` row, as `TripleTermOptimizer.fold` does. Query bindings set from outside with a triple term value hit the same assertion under `-ea`.
+- **Eval counters are keyed on a value's data without its type,** so a triple term and a string with the same data share a counter.
 - **`null` context means different things.**
   - In a Rya `RyaStatement` pattern: any graph.
   - In RDF4J: the default graph.

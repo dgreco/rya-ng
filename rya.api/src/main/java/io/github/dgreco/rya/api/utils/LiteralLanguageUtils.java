@@ -69,7 +69,31 @@ public final class LiteralLanguageUtils {
             } else {
                 result = UNDETERMINED_LANGUAGE;
             }
+        } else if (RDF.DIRLANGSTRING.equals(dataType)) {
+            // Rows written before base directions were supported have no tag at all, and must
+            // encode back to the bytes they were read from: nothing is put in its place.
+            result = directionSeparator(language) < 0 ? null : language;
         }
         return result;
+    }
+
+    /**
+     * Finds the base direction in an RDF 1.2 language tag such as {@code ar--rtl}, which is how
+     * a {@code rdf:dirLangString} literal's language and direction are held and stored.
+     *
+     * @param tag a language tag, possibly with a direction. May be {@code null}.
+     * @return the index of the {@code --} before the direction, or -1 if {@code tag} is not a
+     *         valid language tag followed by {@code --ltr} or {@code --rtl}.
+     */
+    public static int directionSeparator(final String tag) {
+        if (tag == null) {
+            return -1;
+        }
+        final int separator = tag.length() - Literal.LTR_SUFFIX.length();
+        if (separator < 1 || !(tag.endsWith(Literal.LTR_SUFFIX) || tag.endsWith(Literal.RTL_SUFFIX))
+                || !Literals.isValidLanguageTag(tag.substring(0, separator))) {
+            return -1;
+        }
+        return separator;
     }
 }

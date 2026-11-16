@@ -19,6 +19,16 @@ package io.github.dgreco.rya.rdftriplestore;
  * under the License.
  */
 
+import java.util.function.Function;
+import org.eclipse.rdf4j.query.algebra.evaluation.NativeTripleTermSource;
+import org.eclipse.rdf4j.model.TripleTerm;
+import org.eclipse.rdf4j.common.iteration.LookAheadIteration;
+import java.util.HashSet;
+import io.github.dgreco.rya.api.domain.RyaType;
+import io.github.dgreco.rya.api.domain.RyaTypeRange;
+import io.github.dgreco.rya.api.domain.RyaSchema;
+import io.github.dgreco.rya.api.domain.RyaTripleTerm;
+import io.github.dgreco.rya.api.resolver.impl.TripleTermResolver;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
@@ -428,7 +438,7 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
      * Statement lookups for query evaluation, with RDF4J context semantics: no contexts means
      * every graph; a {@code null} context means the default graph only.
      */
-    public static class StoreTripleSource<C extends RdfCloudTripleStoreConfiguration> implements TripleSource {
+    public static class StoreTripleSource<C extends RdfCloudTripleStoreConfiguration> implements NativeTripleTermSource {
         private final C conf;
         private final RyaDAO<C> ryaDAO;
         /** Statements fetched ahead of time by batched joins; consulted before the store. */
@@ -523,21 +533,41 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 }
             }
             storeLookups++;
+            return inGraphs(contexts, graph -> pattern(subject, predicate, object, graph));
+        }
+
+        /**
+         * The statements whose object is a triple term starting with {@code prefix}
+         * ({@link TripleTermResolver#prefix}), such as the terms about one subject: one range scan
+         * of the predicate's objects, or of all objects without a predicate.
+         */
+        public CloseableIteration<? extends Statement> getStatementsAboutTripleTerms(final IRI predicate, final String prefix,
+                final Resource... contexts) throws QueryEvaluationException {
+            storeLookups++;
+            final RyaIRI p = RdfToRyaConversions.convertIRI(predicate);
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "triple terms: only statements about terms with the pattern's constant parts are read")) {
+                // U+10FFFF: no text sorts after its UTF-8.
+                return inGraphs(contexts, graph -> new RyaStatement(null, p, new RyaTypeRange(new RyaType(RyaSchema.TRIPLE_TERM, prefix),
+                        new RyaType(RyaSchema.TRIPLE_TERM, prefix + "\uDBFF\uDFFF")), RdfToRyaConversions.convertResource(graph)));
+            }
+        }
+
+        /** Runs a lookup with RDF4J's context semantics: no contexts means every graph; {@code null} the default graph only. */
+        private CloseableIteration<Statement> inGraphs(final Resource[] contexts, final Function<Resource, RyaStatement> pattern) {
             if (contexts == null || contexts.length == 0) {
-                return lookup(subject, predicate, object, null, false);
+                return lookup(pattern.apply(null), false);
             }
             final Resource[] graphs = distinct(contexts);
             if (graphs.length == 1) {
-                return lookup(subject, predicate, object, graphs[0], graphs[0] == null);
+                return lookup(pattern.apply(graphs[0]), graphs[0] == null);
             }
-            return new Concat(subject, predicate, object, graphs);
+            return new Concat(pattern, graphs);
         }
 
-        private CloseableIteration<Statement> lookup(final Resource subject, final IRI predicate, final Value object,
-                final Resource context, final boolean defaultGraphOnly) {
+        private CloseableIteration<Statement> lookup(final RyaStatement pattern, final boolean defaultGraphOnly) {
             final CloseableIteration<RyaStatement> found;
             try {
-                found = ryaDAO.getQueryEngine().query(pattern(subject, predicate, object, context), conf);
+                found = ryaDAO.getQueryEngine().query(pattern, conf);
             } catch (final RyaDAOException e) {
                 throw new QueryEvaluationException(e);
             }
@@ -558,6 +588,88 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                     return RyaToRdfConversions.convertStatement(st);
                 }
             };
+        }
+
+        /** Every triple term in the store, at any depth, that has these parts; {@code null} is a wildcard. */
+        @Override
+        public CloseableIteration<? extends TripleTerm> getTripleTerms(final Resource subject, final IRI predicate,
+                final Value object) throws QueryEvaluationException {
+            return tripleTerms(subject, predicate, object, false);
+        }
+
+        /**
+         * The distinct triple terms in the store with these parts ({@code null} is a wildcard):
+         * one range scan of the object order, where triple terms are together.
+         *
+         * @param topLevelOnly only terms that are objects of statements, not terms nested in
+         *        them. The scan is then narrowed to the terms about {@code subject}, if given;
+         *        nested terms can be inside a term about anything, so they need the whole range.
+         */
+        public CloseableIteration<TripleTerm> tripleTerms(final Resource subject, final IRI predicate, final Value object,
+                final boolean topLevelOnly) throws QueryEvaluationException {
+            final RyaIRI s = topLevelOnly ? RdfToRyaConversions.convertResource(subject) : null;
+            final RyaIRI p = s == null ? null : RdfToRyaConversions.convertIRI(predicate);
+            final String prefix = TripleTermResolver.prefix(s, p);
+            // U+10FFFF: no text sorts after its UTF-8.
+            final RyaStatement range = new RyaStatement(null, null, new RyaTypeRange(
+                    new RyaType(RyaSchema.TRIPLE_TERM, prefix), new RyaType(RyaSchema.TRIPLE_TERM, prefix + "\uDBFF\uDFFF")));
+            final CloseableIteration<RyaStatement> found;
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "triple terms: the pattern's term is not bound by another pattern, so "
+                    + (s == null ? "all stored triple terms are read" : "the stored triple terms about <" + s.getData() + "> are read"))) {
+                storeLookups++;
+                found = ryaDAO.getQueryEngine().query(range, conf);
+            } catch (final RyaDAOException e) {
+                throw new QueryEvaluationException(e);
+            }
+            return new LookAheadIteration<>() {
+                private final Deque<TripleTerm> next = new ArrayDeque<>();
+                private final Set<TripleTerm> nestedSeen = new HashSet<>();
+                private RyaType last;
+
+                @Override
+                protected TripleTerm getNextElement() {
+                    while (next.isEmpty() && found.hasNext()) {
+                        // The same term is the object of adjacent rows: once per statement, graph and label.
+                        final RyaType o = found.next().getObject();
+                        if (!(o instanceof RyaTripleTerm) || o.equals(last)) {
+                            continue;
+                        }
+                        last = o;
+                        TripleTerm term = (TripleTerm) RyaToRdfConversions.convertValue(o);
+                        offer(term);
+                        while (!topLevelOnly && term.getObject() instanceof TripleTerm nested) {
+                            // A nested term that is also an object of a statement comes from the scan itself.
+                            if (nestedSeen.add(nested) && !isStatementObject(nested)) {
+                                offer(nested);
+                            }
+                            term = nested;
+                        }
+                    }
+                    return next.poll();
+                }
+
+                private void offer(final TripleTerm term) {
+                    if ((subject == null || subject.equals(term.getSubject()))
+                            && (predicate == null || predicate.equals(term.getPredicate()))
+                            && (object == null || object.equals(term.getObject()))) {
+                        next.add(term);
+                    }
+                }
+
+                @Override
+                protected void handleClose() {
+                    found.close();
+                }
+            };
+        }
+
+        private boolean isStatementObject(final TripleTerm term) {
+            try (CloseableIteration<RyaStatement> it = ryaDAO.getQueryEngine()
+                    .query(new RyaStatement(null, null, RdfToRyaConversions.convertValue(term)), conf)) {
+                return it.hasNext();
+            } catch (final RyaDAOException e) {
+                throw new QueryEvaluationException(e);
+            }
         }
 
         @Override
@@ -595,16 +707,12 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
 
         /** Looks up each graph in turn. */
         private final class Concat implements CloseableIteration<Statement> {
-            private final Resource subject;
-            private final IRI predicate;
-            private final Value object;
+            private final Function<Resource, RyaStatement> pattern;
             private final Iterator<Resource> graphs;
             private CloseableIteration<Statement> current;
 
-            Concat(final Resource subject, final IRI predicate, final Value object, final Resource[] graphs) {
-                this.subject = subject;
-                this.predicate = predicate;
-                this.object = object;
+            Concat(final Function<Resource, RyaStatement> pattern, final Resource[] graphs) {
+                this.pattern = pattern;
                 this.graphs = Arrays.asList(graphs).iterator();
             }
 
@@ -619,7 +727,7 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                         return false;
                     }
                     final Resource g = graphs.next();
-                    current = lookup(subject, predicate, object, g, g == null);
+                    current = lookup(pattern.apply(g), g == null);
                 }
                 return true;
             }

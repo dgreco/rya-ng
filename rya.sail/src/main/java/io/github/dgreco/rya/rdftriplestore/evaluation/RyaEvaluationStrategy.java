@@ -45,6 +45,7 @@ import org.eclipse.rdf4j.query.algebra.Filter;
 import org.eclipse.rdf4j.query.algebra.Join;
 import org.eclipse.rdf4j.query.algebra.LeftJoin;
 import org.eclipse.rdf4j.query.algebra.StatementPattern;
+import org.eclipse.rdf4j.query.algebra.TripleRef;
 import org.eclipse.rdf4j.query.algebra.TupleExpr;
 import org.eclipse.rdf4j.query.algebra.Var;
 import org.eclipse.rdf4j.query.algebra.helpers.TupleExprs;
@@ -184,8 +185,9 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
                 || sp instanceof FixedStatementPattern || sp instanceof TransitivePropertySP) {
             return null;
         }
-        // An indexed pattern is a plain store lookup only once its subject or object is bound.
-        if (sp instanceof IndexedStatementPattern
+        // An indexed pattern, or one read as a range of triple terms, is a plain store lookup
+        // only once its subject or object is bound.
+        if ((sp instanceof IndexedStatementPattern || TripleTermRangeSource.prefixFor(sp) != null)
                 && !(boundByLeft(node, sp.getSubjectVar()) || boundByLeft(node, sp.getObjectVar()))) {
             return null;
         }
@@ -230,7 +232,20 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
                 }
             };
         }
+        if (tripleSource instanceof StoreTripleSource<?> source) {
+            final String termPrefix = TripleTermRangeSource.prefixFor(node);
+            if (termPrefix != null) {
+                return new StatementPatternQueryEvaluationStep(node, context, new TripleTermRangeSource(source, termPrefix));
+            }
+        }
         return super.prepare(node, context);
+    }
+
+    /** A triple term in a pattern: matched in memory when it is already bound, else read from the store. */
+    @Override
+    protected QueryEvaluationStep prepare(final TripleRef node, final QueryEvaluationContext context) {
+        return tripleSource instanceof StoreTripleSource<?> source ? new TripleRefStep(node, source, context)
+                : super.prepare(node, context);
     }
 
     /**

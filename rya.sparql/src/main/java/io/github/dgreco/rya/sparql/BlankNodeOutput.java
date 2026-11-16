@@ -25,6 +25,7 @@ import io.github.dgreco.rya.api.domain.RyaSchema;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.Statement;
+import org.eclipse.rdf4j.model.TripleTerm;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.model.ValueFactory;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
@@ -37,7 +38,7 @@ import org.eclipse.rdf4j.rio.helpers.RDFHandlerWrapper;
 
 /**
  * Rya stores blank nodes as IRIs in {@link RyaSchema#BNODE_NAMESPACE}. These wrappers turn
- * them back into blank nodes in the results the endpoint sends.
+ * them back into blank nodes in the results the endpoint sends, also inside triple terms.
  */
 final class BlankNodeOutput {
     private static final ValueFactory VF = SimpleValueFactory.getInstance();
@@ -49,6 +50,13 @@ final class BlankNodeOutput {
     static Value convert(final Value value) {
         if (value instanceof IRI && value.stringValue().startsWith(PREFIX)) {
             return VF.createBNode(value.stringValue().substring(PREFIX.length()));
+        }
+        if (value instanceof TripleTerm term) {
+            final Value subject = convert(term.getSubject());
+            final Value object = convert(term.getObject());
+            if (subject != term.getSubject() || object != term.getObject()) {
+                return VF.createTripleTerm((Resource) subject, term.getPredicate(), object);
+            }
         }
         return value;
     }

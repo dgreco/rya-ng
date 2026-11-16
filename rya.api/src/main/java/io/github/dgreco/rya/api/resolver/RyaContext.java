@@ -38,6 +38,7 @@ import io.github.dgreco.rya.api.resolver.impl.RyaTypeResolverImpl;
 import io.github.dgreco.rya.api.resolver.impl.RyaIRIResolver;
 import io.github.dgreco.rya.api.resolver.impl.ServiceBackedRyaTypeResolverMappings;
 import io.github.dgreco.rya.api.resolver.impl.ShortRyaTypeResolver;
+import io.github.dgreco.rya.api.resolver.impl.TripleTermResolver;
 import org.eclipse.rdf4j.model.IRI;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,6 +76,7 @@ public class RyaContext {
         addRyaTypeResolverMapping(new RyaTypeResolverMapping(new ByteRyaTypeResolver())); // byte
 
         addRyaTypeResolverMapping(new RyaTypeResolverMapping(new IntRyaTypeResolver())); // int
+        addRyaTypeResolverMapping(new RyaTypeResolverMapping(new TripleTermResolver())); // RDF 1.2 triple term
 
         //add service loaded mappings
         addRyaTypeResolverMappings(new ServiceBackedRyaTypeResolverMappings().getResolvers());
@@ -133,6 +135,12 @@ public class RyaContext {
     }
 
     public void addRyaTypeResolverMapping(final RyaTypeResolverMapping mapping) {
+        final RyaTypeResolver holder = byteToResolver.get(mapping.getMarkerByte());
+        if (holder != null && !uriToResolver.containsKey(mapping.getRyaDataType())) {
+            // Replacing it would make every stored value with this marker read as the new type.
+            throw new IllegalArgumentException("Type marker " + mapping.getMarkerByte() + " of [" + mapping.getRyaDataType()
+                    + "] is already used for [" + holder.getRyaDataType() + "]");
+        }
         if (!uriToResolver.containsKey(mapping.getRyaDataType())) {
             if (logger.isDebugEnabled()) {
                 logger.debug("addRyaTypeResolverMapping uri:[" + mapping.getRyaDataType() + "] byte:[" + mapping.getMarkerByte() + "] for mapping[" + mapping + "]");

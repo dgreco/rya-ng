@@ -37,6 +37,8 @@ public class RyaSchema {
     //datatypes
     public static final IRI NODE = RdfCloudTripleStoreConstants.VALUE_FACTORY.createIRI(NAMESPACE, "node");
     public static final IRI LANGUAGE = RdfCloudTripleStoreConstants.VALUE_FACTORY.createIRI(NAMESPACE, "lang");
+    /** The datatype of a {@link RyaTripleTerm}. It only selects the resolver: it is never stored, and no literal may use it. */
+    public static final IRI TRIPLE_TERM = RdfCloudTripleStoreConstants.VALUE_FACTORY.createIRI(NAMESPACE, "tripleTerm");
 
     //functions
     public static final IRI RANGE = RdfCloudTripleStoreConstants.VALUE_FACTORY.createIRI(NAMESPACE, "range");

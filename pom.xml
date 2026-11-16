@@ -26,7 +26,7 @@ under the License.
     <packaging>pom</packaging>
 
     <name>rya-ng</name>
-    <description>RDF triple store on Apache Accumulo, exposed as an RDF4J Sail and a SPARQL 1.1 endpoint. Derived from Apache Rya.</description>
+    <description>RDF 1.2 triple store on Apache Accumulo or HBase, exposed as an RDF4J Sail and a SPARQL endpoint. Derived from Apache Rya.</description>
     <url>https://github.com/dgreco/rya-ng</url>
     <licenses>
         <license>

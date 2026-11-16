@@ -90,6 +90,38 @@
                 + "  }\n}\n",
         },
         {
+            name: "RDF 1.2: load annotated sample data",
+            query: "# {| |} annotates a statement: it says something about the statement itself.\n"
+                + "# ~ names the annotation (its reifier); without it the reifier is a blank node.\n"
+                + "INSERT DATA {\n  GRAPH <" + SAMPLE_GRAPH + "> {\n"
+                + "    <urn:ex:colosseum> <urn:ex:builtBy> <urn:ex:vespasian> ~ <urn:ex:claim1>\n"
+                + "      {| <urn:ex:source> <urn:ex:suetonius> ; <urn:ex:certainty> 0.9 |} .\n"
+                + "    <urn:ex:pantheon> <urn:ex:builtBy> <urn:ex:agrippa>\n"
+                + "      {| <urn:ex:source> <urn:ex:inscription> ; <urn:ex:certainty> 0.4 |} .\n"
+                + "    <urn:ex:pantheon> <urn:ex:builtBy> <urn:ex:hadrian> {| <urn:ex:certainty> 0.8 |} .\n"
+                + "    # A language tag can carry a text direction.\n"
+                + "    <urn:ex:colosseum> rdfs:label \"\u0627\u0644\u0643\u0648\u0644\u0648\u0633\u064a\u0648\u0645\"@ar--rtl, \"\u05e7\u05d5\u05dc\u05d5\u05e1\u05d0\u05d5\u05dd\"@he--rtl, \"Colosseum\"@en--ltr .\n"
+                + "  }\n}\n",
+        },
+        {
+            name: "RDF 1.2: statements with their annotations",
+            query: "SELECT ?monument ?builder ?certainty ?source WHERE {\n"
+                + "  ?monument <urn:ex:builtBy> ?builder {| <urn:ex:certainty> ?certainty |} .\n"
+                + "  OPTIONAL { << ?monument <urn:ex:builtBy> ?builder >> <urn:ex:source> ?source }\n}\n"
+                + "ORDER BY DESC(?certainty)\n",
+        },
+        {
+            name: "RDF 1.2: triple terms and their parts",
+            query: "# A triple term is a value: here, what each annotation is about.\n"
+                + "SELECT ?reifier ?term (SUBJECT(?term) AS ?s) (PREDICATE(?term) AS ?p) (OBJECT(?term) AS ?o) WHERE {\n"
+                + "  ?reifier rdf:reifies ?term .\n  FILTER(isTRIPLE(?term))\n}\n",
+        },
+        {
+            name: "RDF 1.2: labels with a text direction",
+            query: "SELECT ?s ?label (LANG(?label) AS ?language) (LANGDIR(?label) AS ?direction) WHERE {\n"
+                + "  ?s rdfs:label ?label .\n  FILTER(hasLANGDIR(?label))\n}\n",
+        },
+        {
             name: "Remove sample data",
             query: "DROP SILENT GRAPH <" + SAMPLE_GRAPH + ">\n",
         },
@@ -169,6 +201,9 @@
     });
     window.ryaYasgui = yasgui;
 
+    /** Queries whose graph results turned out to hold RDF 1.2 values. */
+    const modernGraphQueries = new Set();
+
     // Fired synchronously before the request is built: put the current authorizations, timeout
     // and trace id on the tab, keeping any other request arguments set in the tab's settings.
     // A query run without the trace drops the tab's old trace, which no longer matches its results.
@@ -182,7 +217,26 @@
         } else {
             window.RyaTrace.drop(tab.getId());
         }
-        tab.setRequestConfig({ args: args });
+        // Graph results are asked in Turtle, unless they hold RDF 1.2 values: those the page reads
+        // itself, from N-Triples (see rya-sparql12.js). Set on every request, so that tabs
+        // remembered from an earlier version follow too.
+        const query = tab.getYasqe() ? tab.getYasqe().getValue() : "";
+        const modern = modernGraphQueries.has(query) || window.RyaSparql12.scan(query).modern;
+        tab.setRequestConfig({ args: args, acceptHeaderGraph: modern ? window.RyaSparql12.GRAPH_RESULTS : "text/turtle" });
+    });
+
+    // A SPARQL 1.1 query can still return RDF 1.2 values. Its Turtle can't be shown, so the query
+    // is remembered and run once more, in N-Triples. Fired before the tab holds the response.
+    yasgui.on("queryResponse", (instance, tab) => {
+        window.setTimeout(() => {
+            const results = tab.getYasr() && tab.getYasr().results;
+            const query = tab.getYasqe() ? tab.getYasqe().getValue() : "";
+            if (results && !modernGraphQueries.has(query)
+                    && window.RyaSparql12.isModernTurtle(results.getContentType(), results.getData())) {
+                modernGraphQueries.add(query);
+                tab.query().catch(() => {});
+            }
+        }, 0);
     });
 
     // Each tab keeps its own trace, and the panel shows the selected tab's. YASGUI fires
