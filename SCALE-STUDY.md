@@ -63,13 +63,15 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
 2. **A local join benchmark (M8).**
    - A fixed query suite over a generated store, with latencies, a profile, and scans and cells per query from the trace.
    - Every optimization below reports its effect on it, before and after.
-3. **Fewer lookups (O15, O21).** The baseline (4.6) shows joins on Accumulo waiting on storage 94 to 97 % of the time.
-   - O15: start batched joins with small windows, so `LIMIT` queries stop early. `chain-limit` asks for 1,003 ranges to return 10 rows.
-   - O21: one range per subject instead of one per link.
-4. **Filters as key ranges (O13, O14).**
-   - Values of one type are stored in value order, yet `range-date` reads 240,443 cells for 5 rows.
-   - Turn `STRSTARTS` and comparisons into bounded scans, keeping the filter for exactness, as the search indexes do.
-   - **Then:** more lookups in flight (O16), the type check without a regex (O20), RocksDB key decoding (O19), and parallel reads of one large range (O7). O17 only if a later profile asks for it.
+3. **Fewer lookups (O15): done.** Batched joins start with small windows, so `LIMIT` queries stop early: `chain-limit` went from 1,003 ranges to 67.
+   - O21 (one range per subject) was built and measured, and is **off by default**. It halved the ranges and read 4 times the cells: no gain on warm Accumulo, and 50 to 64 % slower on RocksDB.
+4. **Filters as key ranges (O13 done; O14 waits for D12).**
+   - O13: `STRSTARTS` reads only the matching prefix, so `prefix` reads 522 cells instead of 133,579.
+   - O14: comparisons on numbers and dates, which need the datatype markers of D12.
+   - **Next, while D12 waits:**
+     - the benchmark's two blind spots (M8): CPU and waiting are reported together, and runs are too noisy to compare;
+     - the type check without a regex (O20) and RocksDB key decoding (O19).
+   - **Then,** if the split profile supports them: more lookups in flight (O16), less client work per cell (O17), and parallel reads of one large range (O7).
 5. **IRI prefix codes: measured (M9), and deferred.**
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
@@ -136,12 +138,12 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O13 | **`STRSTARTS` as a prefix range:** a filter `STRSTARTS(?o, "abc")` on a pattern's object narrows its scan to the objects whose data starts with `abc`, with no type check; the filter stays. Not `STRSTARTS(STR(?o), …)`: numbers, dates and booleans aren't stored as their text (section 6.7, ARCH.md 12.8) | R2 | measured (M8): `prefix` 92 → 0.7 ms on RocksDB and 72 → 2.2 ms on Accumulo, 133,579 → 522 cells. `query.prefixranges` turns it off | M8 | 1 | Built on branch `loader-skip-singleton-counters`; green on Accumulo, HBase and RocksDB (also with batch size 2 and indexes) |
 | O14 | **Comparisons as value ranges:** `<`, `<=`, `>`, `>=` on a pattern's numeric or date object narrow its scan to the value range, one range per stored type; the filter stays. Needs a record of the datatypes each predicate's objects use (section 6.7) | R2 | the same, for numbers and dates | M8 | 1 | Not started |
 | O15 | **Adaptive batch windows in batched joins:** the first window is 64 left rows, doubling up to `query.join.batchsize`, as entity prefetch does (section 6.8) | R2 | measured (M8, section 4.6): `chain-limit` 114 → 19 ms on Accumulo and 6.9 → 0.7 ms on RocksDB (1,003 → 67 ranges); `type-limit` 164 → 40 ms and 22.6 → 1.6 ms (2,004 → 260 ranges). No cost on large joins: `chain` −7 % with 16 batch scans instead of 13 | M8 | 1 | Built on branch `loader-skip-singleton-counters`; green on Accumulo, HBase and RocksDB (also with batch size 2 and indexes) |
-| O16 | **More lookups in flight:** batched joins and entity prefetch keep the next window's fetch running while the current one is joined, and more than one when the store has several servers (section 6.8) | R2 | on the test cluster joins wait on storage 94 to 97 % of the time (4.6), so overlap with the join's own work gains little there. Several fetches in flight pay on a cluster with several servers | M8, O15 | 1 | Not started |
+| O16 | **More lookups in flight:** batched joins and entity prefetch keep the next window's fetch running while the current one is joined, and more than one when the store has several servers (section 6.8) | R2 | unproven: the baseline's "waiting on lookups" reading it rested on was contradicted by O21 (4.6). Decide after M8's profile split | M8 | 1 | Not started |
 | O17 | **Less work per looked-up row:** `BatchLookup` matches on the row's encoded object instead of encoding every result again, and allocates less per row (section 6.8) | R2 | small: Tripatha's own code is about 7 % of the client's CPU in the Accumulo joins (4.6). Only if a later profile says otherwise | M8 | 1 | Not started |
 | O18 | **IRI prefix codes**, only if M9 says go (section 6.9) | R1 | measured (M9): −4 to −5 % on disk, −25 to −35 % in the block cache, −44 to −57 % of the key bytes a writer sends, no clear change in scan and decode time | M9, D11 | 2 | Deferred (2026-11-16: below the bar on disk; revisit after M3, see 6.9) |
 | O19 | **RocksDB key decoding:** `RocksCodec.cell` copies the row's runs between escapes in bulk instead of writing it a byte at a time through a synchronized `ByteArrayOutputStream` | — | RocksDB only: 40 to 63 % of the CPU of scan-heavy queries (4.6) | — | 1 | Not started |
 | O20 | **The object-type check without a regular expression per cell.** It is "the row ends with `01` and the marker", today the expression `.*\x00.*\x00.*\x01<marker>` matched against a new `String`. A structured suffix in `ScanSpec` lets RocksDB compare bytes; Accumulo and HBase keep their server-side filter, given the simpler, equivalent `.*\x01<marker>` | R2 | RocksDB: 44 % of `count-class`. Accumulo: less tablet-server CPU on every type-checked scan | — | 1 | Not started |
-| O21 | **One range per subject:** when a window looks up two or more links of the same subject in `spo`, it reads the subject's range once and lets `BatchLookup`'s exact matching keep the cells asked for. A subject too large for the window falls back to one range per link (section 6.8) | R2 | `star-in` makes 2.4 ranges per driver row (4.6). One per subject roughly halves the seeks on Accumulo | M8 | 1 | Not started |
+| O21 | **One range per subject:** when a window looks up two or more links of the same subject in `spo`, it reads the subject's range once and lets `BatchLookup`'s exact matching keep the cells asked for. A batch whose subject ranges return more than 64 cells per subject plus 1,024 is re-read one range per link (section 6.8) | R2 | measured (M8): `star-in` 17,594 → 8,799 ranges but 25,445 → 103,265 cells; `star-optional` 7,601 → 2,537 ranges, 9,345 → 28,772 cells. Accumulo: no change beyond noise. RocksDB: +64 % and +49 %. So `query.join.subjectranges` is **off by default**. Untested hypothesis: on a cold cache a seek is a block read and the extra cells are in the same block (M3) | M8 | 1 | Built, off by default |
 
 ### 2.2 Measurements
 
@@ -151,12 +153,12 @@ All on a real cluster with NVMe disks, unless the row says otherwise.
 |---|---|---|---|
 | M1 | **Bytes on disk per table**, at 1B and 10B triples on Accumulo, and for a real dataset of at least 1B (D4). Replaces the README's test-load figure | section 4, cluster size, O3 | Not started |
 | M2 | **Ingest on the current write path:** triples/s against the number of servers, and the compaction backlog. Also BACKENDS-STUDY.md's benchmark B0, which never ran | D2, section 4.5 | Deferred (2026-11-16: load work later) |
-| M3 | **The query suite:** lookups, star and chain joins, entity prefetch, text, geo, `stats:approxSize`, inference. p50 and p99, cold and warm, with scans and cells per query from the trace | the 1T run's acceptance | Not started |
+| M3 | **The query suite:** lookups, star and chain joins, entity prefetch, text, geo, `stats:approxSize`, inference. p50 and p99, cold and warm, with scans and cells per query from the trace. Also `query.join.subjectranges` on and off, on a cold cache (O21) | the 1T run's acceptance | Not started |
 | M4 | **Single-client scan rates**, Scanner and BatchScanner | R2, O7, D1 | Not started |
 | M5 | **The dictionary spike,** offline, on a 1B-triple sample (section 6.5) | D9, O11 | Not started |
 | M6 | **Bulk spikes:**<br>• Accumulo RFiles with labels and counters, written from JDK 25 and imported into a live table (with a `LoadPlan`)<br>• RocksDB SST files with `merge` entries, ingested into a family that already has counters<br>• HBase HFiles with visibility tags through the expression resolver, and the same counter file imported twice in coprocessor mode<br>• Spark executors running `tripatha.api` code on JDK 25 | O3, O10, D5 | Deferred (2026-11-16: load work later) |
 | M7 | **Maintenance at 10B:** `DROP GRAPH` of a small and of a large graph, graph sizes, an index rebuild | O4, O5 | Not started |
-| M8 | **A local join benchmark,** no cluster needed: a fixed query suite over a generated store of about 10M triples, on RocksDB and the Accumulo test cluster. Star and chain joins, entity prefetch, OPTIONAL, `LIMIT`, value and prefix filters, text and geo. Reports p50 and p99, a profile of where the time goes, and scans and cells per query from the trace. Checked in, so each optimization reports before and after | O13 to O17 | Done: `tripatha.loader/bench.sh` (`JoinBench`); baseline in section 4.6 |
+| M8 | **A local join benchmark,** no cluster needed: a fixed query suite over a generated store of about 10M triples, on RocksDB and the Accumulo test cluster. Star and chain joins, entity prefetch, OPTIONAL, `LIMIT`, value and prefix filters, text and geo. Reports p50 and p99, a profile of where the time goes, and scans and cells per query from the trace. Checked in, so each optimization reports before and after | O13 to O17 | Done: `tripatha.loader/bench.sh` (`JoinBench`); baseline in section 4.6. Follow-ups: report CPU samples apart from threads blocked in native code, and compare settings back to back in one run (`--conf` variants) |
 | M9 | **IRI prefix codes, measured offline:** the generator's `spo`, `po` and `osp` rows written to RFiles as today and with prefix codes. Compares bytes sent, compressed size, and scan and decode time (section 6.9) | D11, O18 | Done 2026-11-16: results in section 6.9 |
 
 ### 2.3 Milestones
@@ -309,11 +311,11 @@ Measured with `tripatha.loader/bench.sh` on 2026-11-16, before any of the query 
 | `count-class` | 1 | 74 ms | 96 ms | 2 | 53,432 | 90 % |
 
 **What it shows:**
-- **On Accumulo, joins wait on lookups.**
-  - Batched joins, entity prefetch and geo resolution spend 94 to 97 % of their time in storage calls, about 70 µs per range on the test cluster.
-  - Tripatha's own code takes about 7 % of the client's CPU samples.
-  - So what pays is fewer ranges, and more of them in flight. Faster client code would gain little, which demotes O17.
-  - It also changes O16: overlapping a fetch with the join's CPU hides at most that CPU. What helps is several windows in flight, which only shows on a cluster with several tablet servers.
+- **On Accumulo, joins spend nearly all their time inside the scans.**
+  - Batched joins, entity prefetch and geo resolution spend 94 to 97 % of their time in storage calls.
+  - But that figure is time inside the scan iterator. It includes the client's own work on every cell that comes back (Thrift, Accumulo's key decoding, building statements) as well as the tablet server's seeks and reads.
+  - The baseline first read it as "waiting on lookups, so fewer ranges pay". O21 tested that: halving the ranges and reading 4 times the cells left latency unchanged. So the split between server seeks and per-cell work is unknown.
+  - The profile can't settle it yet, because it puts threads blocked on the network in with CPU (M8's follow-up). Until it can, O16 and O17 are unproven either way.
 - **`LIMIT` queries fetch a whole batch.** `chain-limit` asks for 1,003 ranges to return 10 rows, and `type-limit` 2,004 for 100. This is O15.
 - **Filters read whole ranges.**
   - `range-date` reads 240,443 cells for 5 rows, `prefix` 133,579 for 521, and `range-number` 26,917 for 387 (O13, O14).
@@ -767,6 +769,7 @@ Both are candidates. M8's profile decides whether they, the row decoding, or RDF
   - the window's `query.join.prefetchlimit`, as today: an overflowing window falls back to one lookup per key;
   - a per-subject cap: a subject whose range returns more than a few hundred cells stops being read whole, and its keys are asked for one by one.
 - **The gain:** the number of seeks, measured as ranges on M8. `star-in` makes 2.4 per driver row today.
+- **The result (2026-11-16):** ranges halved and cells read quadrupled. Warm Accumulo was no faster and RocksDB was 50 to 64 % slower, so it ships off by default (`query.join.subjectranges`). The case for it is untested: on a cold cache a seek is a block read, and a subject's other cells come in the same block.
 
 **Tests:** `BatchedJoinIT`, `EntityPrefetchIT` and `QueryTraceIT`, plus the whole IT suite with `-Dtripatha.test.joinBatchSize=2`.
 - For O16: a cancelled and a timed-out query, which leave no fetch running.
@@ -834,15 +837,15 @@ Re-ordered on 2026-11-16: internal optimizations first, load work deferred. Each
 
 ### Phase 1: the join path and filters as key ranges
 
-In this order, each measured on M8 before and after (on RocksDB and on the Accumulo test cluster). Re-ordered on 2026-11-16, with O21 before O14:
-1. **O15**, adaptive windows: built, measured;
-2. **O13**, `STRSTARTS` as a prefix range: built, measured;
-3. **O21**, one range per subject: next. It is read-side only and works on existing stores;
-4. **O14**, comparisons as value ranges, after D12 (the datatype markers);
-5. **O16**, more lookups in flight;
-6. **O20**, the type check without a regex, and **O19**, RocksDB key decoding. These are small, and can go in at any point;
-7. **O7**, parallel reads of one large range;
-8. **O17**, only if a profile asks for it.
+In this order, each measured on M8 before and after (on RocksDB and on the Accumulo test cluster):
+1. **O15**, adaptive windows: done;
+2. **O13**, `STRSTARTS` as a prefix range: done;
+3. **O21**, one range per subject: built and measured, off by default (no gain warm; to be tried cold, M3);
+4. **M8's follow-ups**: CPU apart from blocked threads, and settings compared back to back in one run;
+5. **O20**, the type check without a regex, and **O19**, RocksDB key decoding;
+6. **O14**, comparisons as value ranges, after D12 (the datatype markers);
+7. **O16** and **O17**, only if the split profile shows where the Accumulo joins' time goes;
+8. **O7**, parallel reads of one large range.
 
 **Exit:**
 - every change has an M8 report;
