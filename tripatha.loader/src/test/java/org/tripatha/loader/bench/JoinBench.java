@@ -231,7 +231,7 @@ public final class JoinBench {
         q.add(new Query("range-date", "a one-hour window of xsd:dateTime values",
                 "SELECT ?obs ?t WHERE { ?obs o:resultTime ?t FILTER(?t >= \"" + c.windowStart
                         + "\"^^xsd:dateTime && ?t < \"" + c.windowEnd + "\"^^xsd:dateTime) }"));
-        q.add(new Query("range-decimal", "a comparison on xsd:decimal values, stored as text",
+        q.add(new Query("range-double", "a comparison on xsd:double values",
                 "SELECT ?obs ?v WHERE { ?obs o:hasResult ?v FILTER(?v > 60) }"));
         q.add(new Query("prefix", "STRSTARTS on a predicate's string values",
                 "SELECT ?p ?s WHERE { ?p o:sku ?s FILTER(STRSTARTS(?s, \"" + c.skuPrefix + "\")) }"));
@@ -241,6 +241,25 @@ public final class JoinBench {
                 "SELECT ?g ?w WHERE { ?g geo:asWKT ?w FILTER(geof:sfWithin(?w, \"" + c.box + "\"^^geo:wktLiteral)) }"));
         q.add(new Query("count-class", "the size of a class, counted",
                 "SELECT (COUNT(*) AS ?n) WHERE { ?s a o:Sensor }"));
+        // M10: "all entities matching X" (SCALE-STUDY.md D1), stars whose objects are constants.
+        final String person = "?p o:worksFor <" + c.popularEmployer + "> ; o:nationality <" + c.topCountry + "> ";
+        final String product = "?x a o:Product ; o:category <" + c.topCategory + "> ; o:inStock true ";
+        q.add(new Query("class-2", "people of one nationality working for one employer: two constant lists",
+                "SELECT ?p WHERE { " + person + "}"));
+        q.add(new Query("class-3", "the same, of the class Person: one of the three lists is the whole class",
+                "SELECT ?p WHERE { " + person + "; a o:Person }"));
+        q.add(new Query("class-attrs", "class-3, with a label and an optional birth date per match",
+                "SELECT ?p ?n ?b WHERE { " + person + "; a o:Person ; rdfs:label ?n OPTIONAL { ?p o:birthDate ?b } }"));
+        q.add(new Query("class-large", "products of one category in stock: three long lists, a large answer",
+                "SELECT ?x WHERE { " + product + "}"));
+        q.add(new Query("class-count", "class-large, counted",
+                "SELECT (COUNT(*) AS ?n) WHERE { " + product + "}"));
+        q.add(new Query("class-value", "observations of one property above a value (xsd:double)",
+                "SELECT ?obs ?v WHERE { ?obs a o:Observation ; o:observedProperty <" + c.topProperty
+                        + "> ; o:hasResult ?v FILTER(?v > 60) }"));
+        q.add(new Query("class-value-int", "companies of one industry with at least 100 employees (xsd:integer)",
+                "SELECT ?co ?n WHERE { ?co a o:Company ; o:industry <" + c.topIndustry
+                        + "> ; o:numberOfEmployees ?n FILTER(?n >= 100) }"));
         final String prefixes = "PREFIX o: <" + generator.config().ontology("") + ">\n"
                 + "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
                 + "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
@@ -252,13 +271,18 @@ public final class JoinBench {
 
     /** Constants for the suite, from the first entities of the dataset. */
     private record Constants(String popularPerson, String popularEmployer, String popularManufacturer,
-            long populationThreshold, String windowStart, String windowEnd, String skuPrefix, String word, String box) {
+            long populationThreshold, String windowStart, String windowEnd, String skuPrefix, String word, String box,
+            String topCountry, String topCategory, String topProperty, String topIndustry) {
 
         static Constants pick(final EntityGenerator generator, final long sample) {
             final GenConfig c = generator.config();
             final Map<String, Integer> knows = new HashMap<>();
             final Map<String, Integer> employers = new HashMap<>();
             final Map<String, Integer> manufacturers = new HashMap<>();
+            final Map<String, Integer> countries = new HashMap<>();
+            final Map<String, Integer> categories = new HashMap<>();
+            final Map<String, Integer> properties = new HashMap<>();
+            final Map<String, Integer> industries = new HashMap<>();
             final List<Long> populations = new ArrayList<>();
             final List<String> skus = new ArrayList<>();
             Instant time = null;
@@ -274,6 +298,14 @@ public final class JoinBench {
                         employers.merge(v, 1, Integer::sum);
                     } else if (p.equals(c.ontology("manufacturer"))) {
                         manufacturers.merge(v, 1, Integer::sum);
+                    } else if (p.equals(c.ontology("nationality"))) {
+                        countries.merge(v, 1, Integer::sum);
+                    } else if (p.equals(c.ontology("category"))) {
+                        categories.merge(v, 1, Integer::sum);
+                    } else if (p.equals(c.ontology("observedProperty"))) {
+                        properties.merge(v, 1, Integer::sum);
+                    } else if (p.equals(c.ontology("industry"))) {
+                        industries.merge(v, 1, Integer::sum);
                     } else if (p.equals(c.ontology("population"))) {
                         populations.add(Long.parseLong(v));
                     } else if (p.equals(c.ontology("sku"))) {
@@ -300,7 +332,7 @@ public final class JoinBench {
                     lat - 1, lon + 1, lat + 1, lon - 1, lat + 1, lon - 1, lat - 1);
             return new Constants(top(knows), top(employers), top(manufacturers),
                     populations.get((int) (populations.size() * 0.99)), start.toString(), start.plus(Duration.ofHours(1)).toString(),
-                    skuPrefix(skus), word, box);
+                    skuPrefix(skus), word, box, top(countries), top(categories), top(properties), top(industries));
         }
 
         private static String top(final Map<String, Integer> counts) {

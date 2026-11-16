@@ -65,18 +65,19 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
    - Every optimization below reports its effect on it, before and after.
 3. **Fewer lookups (O15): done.** Batched joins start with small windows, so `LIMIT` queries stop early: `chain-limit` went from 1,003 ranges to 67.
    - O21 (one range per subject) was built and measured, and is **off by default**. It halved the ranges and read 4 times the cells: no gain on warm Accumulo, and 50 to 64 % slower on RocksDB.
-4. **Filters as key ranges (O13 done; O14 waits for D12).**
+4. **Filters as key ranges (O13 done; O14 after O22, D12 decided).**
    - O13: `STRSTARTS` reads only the matching prefix, so `prefix` reads 522 cells instead of 133,579.
-   - O14: comparisons on numbers and dates, which need the datatype markers of D12.
-   - **Next, while D12 waits:**
-     - the benchmark's two blind spots (M8): CPU and waiting are reported together, and runs are too noisy to compare;
-     - the type check without a regex (O20) and RocksDB key decoding (O19).
+   - O14: comparisons on numbers and dates, with the datatype markers of D12 and a storage-version check.
+   - **Done meanwhile:**
+     - the benchmark's two blind spots (M8): it now reports CPU apart from waiting, and compares settings within one run. It shows Accumulo joins are bound by the servers, not the client;
+     - the type check without a regex (O20) and RocksDB key decoding (O19): on RocksDB, range scans are 23 to 31 % faster and joins 13 to 19 %.
    - **Then,** if the split profile supports them: more lookups in flight (O16), less client work per cell (O17), and parallel reads of one large range (O7).
-5. **IRI prefix codes: measured (M9), and deferred.**
+5. **"All entities matching X" (D1): class stars in the benchmark (M10), then merge joins (O22), then O14.** A sequentially read cell costs about 1/35 of a lookup on the Accumulo test cluster, so intersecting subject-sorted `po` ranges should beat one lookup per driver row. Stars in the servers (O23) wait for O22's measurements (D13).
+6. **IRI prefix codes: measured (M9), and deferred.**
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
-6. **Whole-table operations and planning at scale (O4 to O6, O8, O9).**
-7. **Deferred:** the load work (O2, O3, O10, M2, M6), and with it the 1T runs. Dictionary encoding (O11) and an analytics engine (O12) stay conditional.
+7. **Whole-table operations and planning at scale (O4 to O6, O8, O9).**
+8. **Deferred:** the load work (O2, O3, O10, M2, M6), and with it the 1T runs. Dictionary encoding (O11) and an analytics engine (O12) stay conditional.
 
 **Dictionary encoding comes late on purpose (R1, section 5.1).**
 - The statement tables send 446 B per triple (0.5 PB at 1T), but compress about 7× on disk.
@@ -89,7 +90,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 
 | # | Decision | Options | Recommendation | Decided |
 |---|---|---|---|---|
-| D1 | Which queries must work at 1T | (a) selective: lookups, entity stars, batched joins, search, approximate counts; (b) also analytics over the whole store (large scans, exact aggregates) | (a) as the target. (b) only through a separate engine (O12): no single process can stream a large share of 1T rows interactively || 2026-11-16: **"all entities matching X"**: entities of large classes selected by several properties and values. That is (a) plus large stars. It puts O22 and O23 on the plan, and makes O14 (D12) matter more |
+| D1 | Which queries must work at 1T | (a) selective: lookups, entity stars, batched joins, search, approximate counts; (b) also analytics over the whole store (large scans, exact aggregates) | (a) as the target. (b) only through a separate engine (O12): no single process can stream a large share of 1T rows interactively | 2026-11-16: **"all entities matching X"**: entities of large classes selected by several properties and values. That is (a) plus large stars. It puts O22 and O23 on the plan, and makes O14 (D12) matter more |
 | D2 | How the data arrives | (a) one bulk build, then small online updates; (b) a continuous stream at high rate | (a). The online path stays for updates; (b) would need the online path at about 1M triples/s, which nobody has measured (section 5.4) | |
 | D3 | Backend for the first 1T run | Accumulo, HBase | Accumulo. Labelled RFiles import directly, and bulk counters sum through the existing combiner. HBase needs label ordinals in its files and unique counter timestamps (section 6.2) | |
 | D4 | Source data | (a) the synthetic loader; (b) a real dataset | Both: (a) for the benchmark ladder, (b) for acceptance. (b) must come as N-Triples or N-Quads, which split by line; Turtle can't be parsed in parallel | |
@@ -100,7 +101,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | D9 | Dictionary encoding | (a) decide after M5, on the criteria of section 6.5; (b) start now | (a) | |
 | D10 | Disks | NVMe SSD, HDD | NVMe for interactive use: at 1T most lookups miss the cache, and each miss is one read | |
 | D11 | IRI prefix codes in the stored keys | (a) decide after M9, on the criteria of section 6.9; (b) start now; (c) never | (a), and M9 says **not now**: −4 to −5 % on disk is far below the bar. The cache gain (−25 to −35 %) is worth revisiting if a cluster shows lookups bound by cache misses (M3) | |
-| D12 | Datatype markers for O14 (section 6.7) | (a) write them on every add from now on, flag new stores, rebuild old stores with O5; (b) no markers, so no O14 | (a) if range filters on numbers and dates matter to the workload. They cost one more `eval` cell per single-statement insert, cover new stores only until a rebuild, and forbid writes from older versions into flagged stores | |
+| D12 | Datatype markers for O14 (section 6.7) | (a) write them on every add from now on, flag new stores, rebuild old stores with O5; (b) no markers, so no O14 | (a) if range filters on numbers and dates matter to the workload. They cost one more `eval` cell per single-statement insert, cover new stores only until a rebuild, and forbid writes from older versions into flagged stores | 2026-11-16: **(a), with a storage-version check.** The workload's value conditions need O14. The DAO gets a version check: the markers raise the storage version, and a DAO refuses to write to a store whose version is newer than its own (older stores stay writable). Today it writes the version when missing and never checks it. A rebuild command for older stores comes with O5. O14 comes after O22 |
 | D13 | The subject-partitioned table of O23 | (a) an optional table like the text and geo indexes, with Tripatha server code on the tablet servers (an Accumulo iterator jar, an HBase coprocessor); (b) none, so stars stay with O22 on the client | decide after O22 is measured: (a) only if the client's intersection is the limit. It costs about another copy of `po` on disk and in writes, and an iterator jar to deploy | |
 
 **Where to read what:**
@@ -163,7 +164,7 @@ All on a real cluster with NVMe disks, unless the row says otherwise.
 | M7 | **Maintenance at 10B:** `DROP GRAPH` of a small and of a large graph, graph sizes, an index rebuild | O4, O5 | Not started |
 | M8 | **A local join benchmark,** no cluster needed: a fixed query suite over a generated store of about 10M triples, on RocksDB and the Accumulo test cluster. Star and chain joins, entity prefetch, OPTIONAL, `LIMIT`, value and prefix filters, text and geo. Reports p50 and p99, a profile of where the time goes, and scans and cells per query from the trace. Checked in, so each optimization reports before and after | O13 to O17 | Done: `tripatha.loader/bench.sh` (`JoinBench`); baseline in section 4.6. Follow-ups: report CPU samples apart from threads blocked in native code, and compare settings back to back in one run (`--conf` variants) |
 | M9 | **IRI prefix codes, measured offline:** the generator's `spo`, `po` and `osp` rows written to RFiles as today and with prefix codes. Compares bytes sent, compressed size, and scan and decode time (section 6.9) | D11, O18 | Done 2026-11-16: results in section 6.9 |
-| M10 | **Class-star queries in the join benchmark:** entities of a large class selected by two to four constant properties, with and without a value filter and with attributes fetched. For example, people of one nationality working for one company, and observations of one property above a value. They measure O14, O22 and O23 | O14, O22, O23 | Not started |
+| M10 | **Class-star queries in the join benchmark:** entities of a large class selected by two to four constant properties, with and without a value filter and with attributes fetched. For example, people of one nationality working for one company, and observations of one property above a value. They measure O14, O22 and O23 | O14, O22, O23 | Done: seven `class-*` queries; baseline in section 4.7 |
 
 ### 2.3 Milestones
 
@@ -308,7 +309,7 @@ Measured with `tripatha.loader/bench.sh` on 2026-11-16, before any of the query 
 | `type-limit` | 100 | 23 ms | 164 ms | 2,004 | 13,126 | 94 % |
 | `range-number` | 387 | 25 ms | 19 ms | 2 | 26,917 | 64 % |
 | `range-date` | 5 | 262 ms | 150 ms | 3 | 240,443 | 18 % |
-| `range-decimal` | 922 | 201 ms | 125 ms | 2 | 240,442 | 52 % |
+| `range-double` (was `range-decimal`) | 922 | 201 ms | 125 ms | 2 | 240,442 | 52 % |
 | `prefix` | 521 | 96 ms | 75 ms | 2 | 133,579 | 68 % |
 | `text` | 78 | 1.1 ms | 11 ms | 80 | 186 | 86 % |
 | `geo` | 13,432 | 183 ms | 1,588 ms | 14,814 | 62,192 | 96 % |
@@ -331,7 +332,7 @@ Measured with `tripatha.loader/bench.sh` on 2026-11-16, before any of the query 
 - **Filters read whole ranges.**
   - `range-date` reads 240,443 cells for 5 rows, `prefix` 133,579 for 521, and `range-number` 26,917 for 387 (O13, O14).
   - On top of that, RDF4J's parsing of every date for the `FILTER` is 27 to 32 % of `range-date`'s CPU.
-  - `range-decimal` can't be narrowed, because decimals are stored as text.
+  - `range-double` can be narrowed too: `o:hasResult` is an `xsd:double`, whose encoding sorts like the values. It was named `range-decimal`, and described here as not narrowable, by mistake: the generator's `decimal2` writes `xsd:double`.
 - **A star asks for each link separately.** `star-in` makes 2.4 ranges per driver row, one per link, though a subject's links are adjacent rows of `spo`. One range per subject would halve the seeks (O21).
 - **On RocksDB, decoding dominates.**
   - `RocksCodec.cell` rebuilds every key a byte at a time through `ByteArrayOutputStream.write`, a synchronized method: 40 to 63 % of the CPU in `prefix`, `range-date`, `count-class` and `type-limit` (O19).
@@ -349,6 +350,29 @@ On Accumulo the unchanged queries moved by −4 to −16 % between runs.
 | `chain-limit` | 0.7 ms (was 6.9) | 19 ms (was 114) | 67 (was 1,003) | 209 (was 2,871) |
 | `type-limit` | 1.6 ms (was 22.6) | 40 ms (was 164) | 260 (was 2,004) | 561 (was 13,126) |
 | `chain` | 24 ms | 339 ms (was 365) | 4,822 | 6,940 |
+
+### 4.7 Class stars, before merge joins (M10)
+
+Seven queries for "all entities matching X" (D1), added to the benchmark on 2026-11-16. Each is a star of constant patterns, sometimes with a value condition and attributes. Measured on the same machine as 4.6, after O19 and O20: `rocksdb-20261116-235129` and `accumulo-20261117-000803`. The list lengths are the patterns' `po` counts, counted exactly from the generator (they match the rows the queries return).
+
+| Query | Lists (subjects) | Rows | RocksDB p50 | Accumulo p50 | Ranges | Cells |
+|---|---|---|---|---|---|---|
+| `class-2` | employer 2,532; nationality 47,218 | 312 | 7.6 ms | 260 ms | 2,535 | 2,846 |
+| `class-3` | the same, and Person 347,303 | 312 | 12.8 ms | 270 ms | 5,068 | 5,379 |
+| `class-attrs` | `class-3`, then a label and an optional birth date | 361 | 22.8 ms | 284 ms | 10,134 | 10,690 |
+| `class-large` | category 20,640; in stock 93,492; Product 133,578 | 14,379 | 139 ms | 1,438 ms | 41,284 | 55,662 |
+| `class-count` | `class-large`, counted | 1 | 139 ms | 1,435 ms | 41,284 | 55,662 |
+| `class-value` | property 56,173; Observation 240,441; then `hasResult > 60` (922 values) | 218 | 378 ms | 3,948 ms | 112,350 | 168,522 |
+| `class-value-int` | industry 9,693; Company 53,431; then `numberOfEmployees >= 100` (2,645 values) | 201 | 71 ms | 1,775 ms | 19,390 | 27,235 |
+
+**What it shows:**
+- **Every star is driven by its shortest list, then looked up per row.** The other patterns are one lookup each per driver row, so `class-large` asks for 41,284 ranges to return 14,379 rows, and `class-value` 112,350 for 218.
+- **On Accumulo the lookups are the cost.** They take 96 to 99 % of the time in storage calls, and the query thread's CPU is 2 to 5 % of the wall time. In large batches a range costs about 35 µs (`class-large`, `class-value`). Small batches cost more per range: `class-2` spends 260 ms on 2,535 ranges, and `class-3`, whose two lookups per row go out in the same batches, only 10 ms more for twice the ranges.
+- **On RocksDB a lookup is cheap**, a few microseconds, and close to the cost of a cell read in sequence.
+- **What O22 should do, by the cost model** (a cell read in sequence about 1 µs on Accumulo, 1.3 µs on RocksDB):
+  - `class-large`: merging all three lists reads 247,710 cells in sequence, about 0.3 to 0.4 s against 1.44 s on Accumulo. On RocksDB it would be slower than today's 139 ms;
+  - `class-2` and `class-3`: merging employer with nationality reads 49,750 cells, about 50 to 85 ms against 260 ms on Accumulo, with Person left as a lookup per match. On RocksDB it loses;
+  - `class-value` and `class-value-int`: merging the type into the constant pattern saves one of the two lookups per row. The value condition stays one lookup per row, or becomes the driver with O14, which is what these two need most.
 
 ---
 
@@ -710,6 +734,7 @@ A spike measures it before any product change: offline, on a 1B-triple sample, w
 - **Numeric types:** SPARQL compares across them, so the scan is one range per numeric type the predicate uses, each bound encoded by that type's resolver.
 - **Types whose stored data sorts like the value:** `xsd:int`, `xsd:integer`, `xsd:long`, `xsd:short`, `xsd:byte`, `xsd:double`, `xsd:float`, and `xsd:dateTime` (UTC milliseconds).
 - **Unsafe:** `xsd:decimal` and other custom datatypes store their lexical text, which doesn't sort numerically. A predicate with any such value is never narrowed.
+  - `xsd:date` is one of them: it has no resolver of its own. So the generator's dates (`birthDate`, `foundingDate`, `releaseDate`, `installedOn`) are not narrowed, though `YYYY-MM-DD` without a time zone sorts as text. Narrowing them would need the markers to tell plain dates from dates with a zone or a negative year.
 
 **What O14 must know:** the datatypes a predicate's objects use, without ever missing one, since a missed type would lose answers. Neither of the obvious sources will do:
 - the statistics counters, because they can be turned off (`--stats off`, `tripatha.stats=false`), and a store written partly with them off would undercount;
@@ -729,7 +754,8 @@ A spike measures it before any product change: offline, on a 1B-triple sample, w
 - **Old stores:**
   - Markers are complete only for a store written by code that maintains them. So `init()` writes a flag in `ns` (row `tripatha`, family `datatypes`) only when it creates the store.
   - Stores created earlier have no flag, and O14 stays off for them until a rebuild writes their markers (with O5).
-  - A writer older than O14 must not write to a store that has the flag.
+  - A writer older than O14 must not write to a store that has the flag. So the markers raise the storage version, and from then on a DAO refuses to write to a store whose version is newer than its own (D12).
+    - Today the DAO writes the version only when it is missing and never checks it, so builds from before the check aren't stopped. No such writer is deployed: the project is a pre-release snapshot.
 - **When a range is used:** only when every datatype the markers report is one of the order-preserving types above, and comparable with the constant (numeric with numeric, `dateTime` with `dateTime`). Otherwise the pattern reads its whole range, as today.
 - **Bounds:** computed in each type's own domain, as a superset; the filter decides the edges. Examples:
   - `?x > 3.5` on `xsd:long` starts at 3;
@@ -839,7 +865,7 @@ The target workload (D1) is entities of large classes selected by several proper
 
 **O22: merge joins on the client.**
 - **How:** for patterns `?x p1 o1`, `?x p2 o2`, … in one join, read each `po` range in subject order and intersect them as they stream.
-  - When one list is much shorter, it drives, and the others are probed with seeks to its next subject: a leapfrog intersection.
+  - When one list is much shorter, it drives, and the others are looked up for its subjects, as today. A leapfrog intersection, seeking each list to the next candidate, is not possible on the client: the SPI's `CellScanner` and Accumulo's client scanner can't seek inside an open scan, so a probe is a new range, which is a lookup. Leapfrogging belongs in a server-side iterator (O23).
   - Patterns with unbound objects (attributes to fetch) are then batched lookups of the matching subjects, as today.
 - **Parallelism:** the subject space is cut at the tablet boundaries of `spo`, or at sampled split points, and the slices are intersected on several threads at once, each over the servers holding them.
 - **Semantics:**
@@ -857,6 +883,8 @@ The target workload (D1) is entities of large classes selected by several proper
   - **Slices:** all of a star's lists are cut at the same subject boundaries, taken from `spo`'s tablet splits or sampled. Each slice is one ordered scan per pattern, intersected on its own thread.
   - **Scope:** patterns in the default scope or one named graph, constant predicates and objects, one shared subject variable. Patterns with unbound objects stay batched lookups over the merge's output, as entity prefetch does today.
   - **The type check:** each list is a `po` range with its object's row suffix (O20), so a value of another type with the same data is dropped on the server, as in a single lookup.
+  - **Value conditions don't merge.** A prefix range (O13) or a value range (O14) of `po` is sorted by value, then by subject, so it can't be intersected as it streams. A star with a value condition is driven by the value range when that is short (O14), or merges its constant patterns and looks the value up per match. A later step could read a short value range into a set of subjects and filter the merge's output with it.
+  - **RDF4J's own merge join** (6.1, experimental, `TripleSource.getSupportedOrders`) was considered and not used. It joins two inputs at a time, decides with a fixed global factor (10×) where O22 needs a per-backend ratio, relies on the triple source's value comparator matching the stored order, and marks joins as merge joins, which turns off the batched joins and entity chains above them.
 
 
 **O23: the same intersection in the servers.**
@@ -896,7 +924,7 @@ In this order, each measured on M8 before and after (on RocksDB and on the Accum
 4. **M8's follow-ups**: CPU apart from blocked threads, and settings compared back to back in one run;
 5. **O20**, the type check without a regex, and **O19**, RocksDB key decoding: done;
 6. **M10**, class-star queries in the benchmark, then **O22**, merge joins of subject-sorted ranges: the first step for "all entities matching X" (D1);
-7. **O14**, comparisons as value ranges, after D12 (the datatype markers). Value conditions in class stars need it;
+7. **O14**, comparisons as value ranges, with the datatype markers and the storage-version check (D12, decided). Value conditions in class stars need it;
 8. **O16** and **O17**, only if the split profile shows where the Accumulo joins' time goes;
 9. **O7**, parallel reads of one large range;
 10. **O23**, stars evaluated in the servers, after D13.
