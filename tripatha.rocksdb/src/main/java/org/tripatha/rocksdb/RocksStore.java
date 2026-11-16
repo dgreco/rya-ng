@@ -189,6 +189,9 @@ public final class RocksStore implements Store {
         if (spec.rowRegex() != null) {
             out.add("row regex=" + spec.rowRegex());
         }
+        if (spec.rowSuffix() != null) {
+            out.add("row suffix=" + java.util.HexFormat.of().formatHex(spec.rowSuffix()));
+        }
         return out;
     }
 

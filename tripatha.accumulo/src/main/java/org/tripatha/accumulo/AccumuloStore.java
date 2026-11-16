@@ -329,9 +329,9 @@ public final class AccumuloStore implements Store {
             }
             out.add(setting);
         }
-        if (spec.rowRegex() != null) {
+        if (spec.rowFilterRegex() != null) {
             final IteratorSetting setting = new IteratorSetting(11, "ri", RegExFilter.class.getName());
-            RegExFilter.setRegexs(setting, spec.rowRegex(), null, null, null, false);
+            RegExFilter.setRegexs(setting, spec.rowFilterRegex(), null, null, null, false);
             out.add(setting);
         }
         for (final ServerIterator it : spec.iterators()) {

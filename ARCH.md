@@ -559,7 +559,7 @@ flowchart TD
 
 | Addition | When | How |
 |---|---|---|
-| object-type check | the object is bound | The range ignores the type suffix, so values of different types with the same data bytes fall in the same range: the string `"800000012a"` and the integer `42` both encode to `800000012a`. A server-side `RegExFilter` (priority 11, named `ri`) built by `AbstractTriplePatternStrategy.buildRegex` keeps only rows ending in the object's own type suffix. |
+| object-type check | the object is bound | The range ignores the type suffix, so values of different types with the same data bytes fall in the same range: the string `"800000012a"` and the integer `42` both encode to `800000012a`. So the scan keeps only rows ending in the object's own type suffix (`01` and the marker, or `01` datatype IRI `01 08`). It is a row suffix in the `ScanSpec`:<br>• **RocksDB** compares the bytes.<br>• **Accumulo and HBase** filter on the server with an equivalent linear expression, `[\s\S]*` and the quoted suffix. On Accumulo this is a `RegExFilter` at priority 11, named `ri`.<br>A row regex from the configuration (`query.regex.*`), or the hashed layout, still uses `AbstractTriplePatternStrategy.buildRegex`'s full expression. |
 | graph restriction | the pattern has a context | `fetchColumnFamily(graph)` |
 | qualifier | the pattern has a qualifier | `fetchColumn`, or a `RegExFilter` on the qualifier (priority 8) |
 | time to live | `query.ttl` is set | a `TimestampFilter` (priority 9) keeping cells newer than now minus the TTL |

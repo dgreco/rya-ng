@@ -489,8 +489,8 @@ public final class HBaseStore implements Store {
             filters.add(new QualifierFilter(CompareOperator.EQUAL,
                     new RegexStringComparator("\\A[^\\x00]*\\x00(?:" + spec.qualifierRegex() + ")\\x00[^\\x00]*\\z", 0)));
         }
-        if (spec.rowRegex() != null) {
-            filters.add(new RowFilter(CompareOperator.EQUAL, new RegexStringComparator("\\A(?:" + spec.rowRegex() + ")\\z", 0)));
+        if (spec.rowFilterRegex() != null) {
+            filters.add(new RowFilter(CompareOperator.EQUAL, new RegexStringComparator("\\A(?:" + spec.rowFilterRegex() + ")\\z", 0)));
         }
         return filters;
     }
@@ -505,8 +505,8 @@ public final class HBaseStore implements Store {
             out.add("TimeRange [" + (spec.minTimestamp() == null ? "-∞" : spec.minTimestamp()) + ", "
                     + (spec.maxTimestamp() == null ? "+∞" : spec.maxTimestamp()) + "]");
         }
-        if (spec.rowRegex() != null) {
-            out.add("RowFilter regex=" + spec.rowRegex());
+        if (spec.rowFilterRegex() != null) {
+            out.add("RowFilter regex=" + spec.rowFilterRegex());
         }
         return out;
     }

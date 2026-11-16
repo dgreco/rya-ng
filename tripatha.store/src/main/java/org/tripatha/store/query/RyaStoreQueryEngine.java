@@ -94,9 +94,15 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
                 range = KeyRange.all();
                 strategy = ryaContext.retrieveStrategy(layout);
             }
-            final TripleRowRegex regex = strategy.buildRegex(conf.getRegexSubject(), conf.getRegexPredicate(),
-                    conf.getRegexObject(), null, objectTypeInfo(stmt.getObject()));
-            final ScanSpec spec = spec(stmt.getContext(), stmt.getQualifer(), regex, conf, conf.getBatchSize());
+            // The object's type check alone is "the row ends with 01 and the type", a byte suffix; any
+            // other row condition (or the hashed layout) keeps the regular expression.
+            final byte[] typeInfo = objectTypeInfo(stmt.getObject());
+            final boolean typeOnly = typeInfo != null && conf.getRegexSubject() == null && conf.getRegexPredicate() == null
+                    && conf.getRegexObject() == null && !conf.isPrefixRowsWithHash();
+            final TripleRowRegex regex = typeOnly ? null : strategy.buildRegex(conf.getRegexSubject(), conf.getRegexPredicate(),
+                    conf.getRegexObject(), null, typeInfo);
+            final ScanSpec spec = spec(stmt.getContext(), stmt.getQualifer(), regex, typeOnly ? typeInfo : null, conf,
+                    conf.getBatchSize());
             final CellScanner cells;
             try (StoreTrace.Reason why = StoreTrace.reason(() -> "lookup " + TraceText.pattern(stmt) + " on " + layout)) {
                 cells = store.scan(table(layout, conf), range, spec);
@@ -148,10 +154,10 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
                     + (patterns == 1 ? "" : "s") + " on " + batchLayout);
             try {
                 if (ranges.size() > conf.getMaxRangesForScanner()) {
-                    final ScanSpec spec = spec(context, null, regex, conf, null).toBuilder().threads(numThreads(conf)).build();
+                    final ScanSpec spec = spec(context, null, regex, null, conf, null).toBuilder().threads(numThreads(conf)).build();
                     return limit(new RyaStatementCellIterator(layout, ryaContext, store.batchScan(table, ranges, spec)), conf);
                 }
-                final ScanSpec spec = spec(context, null, regex, conf, null);
+                final ScanSpec spec = spec(context, null, regex, null, conf, null);
                 final List<CellScanner> scanners = new ArrayList<>(ranges.size());
                 try {
                     for (final KeyRange range : ranges) {
@@ -240,10 +246,10 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
 
     /**
      * What to read: the context's column family (and the qualifier's column, or a qualifier
-     * filter without a context), the TTL window, the row regex and any extra iterators.
+     * filter without a context), the TTL window, the row regex or suffix and any extra iterators.
      */
     private static ScanSpec spec(final RyaIRI context, final String qualifier, final TripleRowRegex tripleRowRegex,
-            final StoreRdfConfiguration conf, final Integer batchSize) {
+            final byte[] rowSuffix, final StoreRdfConfiguration conf, final Integer batchSize) {
         final ScanSpec.Builder spec = ScanSpec.builder(conf.getStoreAuths()).batchSize(batchSize);
         if (context != null && qualifier != null) {
             spec.column(utf8(context.getData()), utf8(qualifier));
@@ -263,6 +269,9 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
         }
         if (tripleRowRegex != null) {
             spec.rowRegex(tripleRowRegex.getRow());
+        }
+        if (rowSuffix != null) {
+            spec.rowSuffix(rowSuffix);
         }
         for (final ServerIterator it : conf.getServerIterators()) {
             spec.iterator(it);
