@@ -164,6 +164,41 @@ jobs:
             */target/failsafe-reports/
           retention-days: 14
 
+  native:
+    name: Native executable (RocksDB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: graalvm-community
+          cache: maven
+
+      # The endpoint with the RocksDB backend only, compiled ahead of time.
+      - name: Build the native executable
+        run: mvn -B -ntp -Pnative -pl tripatha.standalone -am package -DskipTests -DskipITs
+
+      # The Java ITs can't start it, so it is run and checked over HTTP.
+      - name: Smoke test
+        run: |
+          tripatha.standalone/target/tripatha --tripatha.backend=rocksdb --tripatha.rocksdb.path="$RUNNER_TEMP/store" \
+            --tripatha.text-index=true --tripatha.geo-index=true --tripatha.inference=true > "$RUNNER_TEMP/tripatha.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fsS 'http://localhost:8080/sparql?query=ASK%20%7B%7D' > /dev/null && break
+            sleep 1
+          done
+          tripatha.standalone/smoke-test.sh http://localhost:8080 || { cat "$RUNNER_TEMP/tripatha.log"; exit 1; }
+
+      - name: Upload the executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: tripatha-linux-x64
+          path: tripatha.standalone/target/tripatha
+          retention-days: 14
+
   publish:
     name: Publish the coverage report
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}

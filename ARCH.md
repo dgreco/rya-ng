@@ -367,6 +367,7 @@ An arrow `A → B` means *B depends on A*. `tripatha.coverage` only exists under
 | `tripatha.sail` | The RDF4J Sail: connection, optimizer pipeline, evaluation strategy, batched joins, inference, index-search rewrite | `RdfCloudTripleStore`, `RdfCloudTripleStoreConnection`, `RyaEvaluationStrategy`, `BatchedJoinStep`, `InferenceEngine`, `IndexSearchOptimizer`, `RyaSailFactory` |
 | `tripatha.sparql` | Spring Boot SPARQL 1.1 Protocol endpoint and query page | `SparqlController`, `RyaStoreConfiguration`, `RyaProperties`, `BlankNodeOutput` |
 | `tripatha.loader` | Command-line generator and parallel loader of synthetic data | `LoaderMain`, `Prepare`, `Loader`, `Verify`, `EntityGenerator` |
+| `tripatha.standalone` | The endpoint with the RocksDB backend only, as an executable jar and a native executable | (no classes: packaging, native-image metadata, `smoke-test.sh`) |
 | `tripatha.test` | One in-process cluster per backend per test JVM, and the store-level integration tests | `StoreITBase`, `TestBackends`, `MiniAccumuloSingleton`, `MiniHBaseSingleton`, `RocksDBTestBackend` |
 
 `tripatha.loader` writes through `tripatha.store` only. It uses `tripatha.sail` in its tests.

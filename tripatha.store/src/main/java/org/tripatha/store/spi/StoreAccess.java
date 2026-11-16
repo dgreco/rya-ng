@@ -31,6 +31,15 @@ public interface StoreAccess {
      */
     Optional<List<String>> heldLabels();
 
+    /**
+     * The labels among these that the account can't read, where the backend can tell without
+     * failing a read. HBase drops labels an account doesn't hold instead of refusing the read, so
+     * an endpoint asks this at start-up; backends that refuse such a read return none.
+     */
+    default List<String> unreadableLabels(final Collection<String> labels) {
+        return List.of();
+    }
+
     /** Whether the account may create tables. */
     boolean mayCreateTables();
 

@@ -767,6 +767,11 @@ public final class HBaseStore implements Store {
         }
 
         @Override
+        public List<String> unreadableLabels(final Collection<String> labels) {
+            return HBaseLabels.missingCanaries(HBaseStore.this, options.labelsTable(), labels);
+        }
+
+        @Override
         public boolean mayCreateTables() {
             return true;
         }

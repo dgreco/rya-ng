@@ -19,90 +19,103 @@ package org.tripatha.sparql;
  * under the License.
  */
 
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
-import org.apache.accumulo.core.client.Accumulo;
-import org.apache.accumulo.core.client.AccumuloClient;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.StringUtils;
 
-import org.tripatha.accumulo.AccumuloClients;
-import org.tripatha.accumulo.AccumuloStore;
-import org.tripatha.hbase.HBaseLabels;
-import org.tripatha.hbase.HBaseStore;
-import org.tripatha.hbase.HBaseStoreProvider;
 import org.tripatha.rdftriplestore.RdfCloudTripleStore;
 import org.tripatha.rdftriplestore.RyaSailFactory;
-import org.tripatha.rocksdb.RocksStore;
 import org.tripatha.store.StoreRdfConfiguration;
 import org.tripatha.store.spi.Store;
+import org.tripatha.store.spi.Stores;
 
 /** Wires the store of the configured backend ({@code tripatha.backend}) and the Tripatha repository on it. */
 @Configuration(proxyBeanMethods = false)
 public class RyaStoreConfiguration {
 
-    /** The store; its operations report to the request's trace, if any. */
+    /**
+     * The store, opened through the backend's {@link org.tripatha.store.spi.StoreProvider}: the
+     * endpoint itself depends on no backend, so one can be left out of a build. Its operations
+     * report to the request's trace, if any.
+     */
     @Bean(destroyMethod = "close")
     Store ryaStore(final RyaProperties props) {
-        return switch (props.backend().trim().toLowerCase(java.util.Locale.ROOT)) {
-            case "accumulo" -> AccumuloStore.owning(accumuloClient(props));
-            case "hbase" -> hbaseStore(props);
-            case "rocksdb" -> RocksStore.open(Path.of(required(props.rocksdb().path(), "tripatha.rocksdb.path")));
+        final String backend = props.backend().trim().toLowerCase(java.util.Locale.ROOT);
+        final Properties settings = switch (backend) {
+            case "accumulo" -> accumuloSettings(props);
+            case "hbase" -> hbaseSettings(props);
+            case "rocksdb" -> rocksdbSettings(props);
             default -> throw new IllegalStateException("tripatha.backend must be accumulo, hbase or rocksdb, not " + props.backend());
         };
+        final Store store;
+        try {
+            store = Stores.open(backend, settings);
+        } catch (final IllegalArgumentException e) {
+            throw new IllegalStateException("Can't open the " + backend + " store: " + e.getMessage(), e);
+        }
+        // A backend that drops unheld labels instead of refusing the read (HBase) would silently
+        // return fewer rows: refuse to start instead.
+        final List<String> unreadable = store.access().unreadableLabels(props.sparql().authorizations());
+        if (!unreadable.isEmpty()) {
+            store.close();
+            throw new IllegalStateException("tripatha.sparql.authorizations names labels that " + store.access().whoami()
+                    + " can't read on " + backend + ": " + unreadable + ". Register and grant them with the loader's labels "
+                    + "command (it also writes the canaries this check reads).");
+        }
+        return store;
     }
 
-    private static AccumuloClient accumuloClient(final RyaProperties props) {
+    // The keys below are those of each backend's StoreProvider. They are spelled out here, not
+    // taken from the providers' constants, so that this class compiles without the backends.
+
+    private static Properties accumuloSettings(final RyaProperties props) {
         final RyaProperties.Accumulo acc = props.accumulo();
         if (acc == null) {
             throw new IllegalStateException("Set tripatha.accumulo.client-properties, or tripatha.accumulo.instance/zookeepers/user/password");
         }
+        final Properties settings = new Properties();
+        // The file may leave the password out; tripatha.accumulo.password (TRIPATHA_ACCUMULO_PASSWORD) fills it in.
+        set(settings, "accumulo.password", acc.password());
         if (StringUtils.hasText(acc.clientProperties())) {
-            // The file may leave the password out; tripatha.accumulo.password (TRIPATHA_ACCUMULO_PASSWORD) fills it in.
-            return AccumuloClients.fromFile(Path.of(acc.clientProperties()), acc.password());
+            settings.setProperty("accumulo.client-properties", acc.clientProperties());
+            return settings;
         }
-        return Accumulo.newClient()
-                .to(required(acc.instance(), "tripatha.accumulo.instance"), required(acc.zookeepers(), "tripatha.accumulo.zookeepers"))
-                .as(required(acc.user(), "tripatha.accumulo.user"), required(acc.password(), "tripatha.accumulo.password"))
-                .build();
+        settings.setProperty("accumulo.instance", required(acc.instance(), "tripatha.accumulo.instance"));
+        settings.setProperty("accumulo.zookeepers", required(acc.zookeepers(), "tripatha.accumulo.zookeepers"));
+        settings.setProperty("accumulo.user", required(acc.user(), "tripatha.accumulo.user"));
+        required(acc.password(), "tripatha.accumulo.password");
+        return settings;
     }
 
-    /**
-     * An HBase store, refused at startup when its account can't read every configured label: HBase
-     * would silently return fewer rows, where Accumulo rejects the request.
-     */
-    private static Store hbaseStore(final RyaProperties props) {
+    private static Properties hbaseSettings(final RyaProperties props) {
         final RyaProperties.HBase hb = props.hbase();
         final Properties settings = new Properties();
-        settings.setProperty(HBaseStoreProvider.SITE, String.join(",", hb.site()));
+        settings.setProperty("hbase.site", String.join(",", hb.site()));
         for (final Map.Entry<String, String> e : hb.conf().entrySet()) {
-            settings.setProperty(HBaseStoreProvider.CONF_PREFIX + e.getKey(), e.getValue());
+            settings.setProperty("hbase.conf." + e.getKey(), e.getValue());
         }
-        settings.setProperty(HBaseStoreProvider.LABELS_TABLE, hb.labelsTable());
-        settings.setProperty(HBaseStoreProvider.COUNTERS, hb.counters());
-        if (StringUtils.hasText(hb.countersJar())) {
-            settings.setProperty(HBaseStoreProvider.COUNTERS_JAR, hb.countersJar());
+        settings.setProperty("hbase.labels-table", hb.labelsTable());
+        settings.setProperty("hbase.counters", hb.counters());
+        set(settings, "hbase.counters.jar", hb.countersJar());
+        set(settings, "hbase.user", hb.user());
+        return settings;
+    }
+
+    private static Properties rocksdbSettings(final RyaProperties props) {
+        final Properties settings = new Properties();
+        settings.setProperty("rocksdb.path", required(props.rocksdb().path(), "tripatha.rocksdb.path"));
+        return settings;
+    }
+
+    private static void set(final Properties settings, final String key, final String value) {
+        if (StringUtils.hasText(value)) {
+            settings.setProperty(key, value);
         }
-        if (StringUtils.hasText(hb.user())) {
-            settings.setProperty(HBaseStoreProvider.USER, hb.user());
-        }
-        final HBaseStore store = (HBaseStore) new HBaseStoreProvider().open(settings);
-        final List<String> configured = props.sparql().authorizations();
-        if (!configured.isEmpty()) {
-            final List<String> missing = HBaseLabels.missingCanaries(store, hb.labelsTable(), configured);
-            if (!missing.isEmpty()) {
-                store.close();
-                throw new IllegalStateException("tripatha.sparql.authorizations names labels that " + store.access().whoami()
-                        + " can't read on HBase: " + missing + ". Register and grant them with the loader's labels command "
-                        + "(it also writes the canaries this check reads).");
-            }
-        }
-        return store;
     }
 
     @Bean
