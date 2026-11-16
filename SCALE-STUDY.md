@@ -89,7 +89,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 
 | # | Decision | Options | Recommendation | Decided |
 |---|---|---|---|---|
-| D1 | Which queries must work at 1T | (a) selective: lookups, entity stars, batched joins, search, approximate counts; (b) also analytics over the whole store (large scans, exact aggregates) | (a) as the target. (b) only through a separate engine (O12): no single process can stream a large share of 1T rows interactively | |
+| D1 | Which queries must work at 1T | (a) selective: lookups, entity stars, batched joins, search, approximate counts; (b) also analytics over the whole store (large scans, exact aggregates) | (a) as the target. (b) only through a separate engine (O12): no single process can stream a large share of 1T rows interactively || 2026-11-16: **"all entities matching X"**: entities of large classes selected by several properties and values. That is (a) plus large stars. It puts O22 and O23 on the plan, and makes O14 (D12) matter more |
 | D2 | How the data arrives | (a) one bulk build, then small online updates; (b) a continuous stream at high rate | (a). The online path stays for updates; (b) would need the online path at about 1M triples/s, which nobody has measured (section 5.4) | |
 | D3 | Backend for the first 1T run | Accumulo, HBase | Accumulo. Labelled RFiles import directly, and bulk counters sum through the existing combiner. HBase needs label ordinals in its files and unique counter timestamps (section 6.2) | |
 | D4 | Source data | (a) the synthetic loader; (b) a real dataset | Both: (a) for the benchmark ladder, (b) for acceptance. (b) must come as N-Triples or N-Quads, which split by line; Turtle can't be parsed in parallel | |
@@ -101,6 +101,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | D10 | Disks | NVMe SSD, HDD | NVMe for interactive use: at 1T most lookups miss the cache, and each miss is one read | |
 | D11 | IRI prefix codes in the stored keys | (a) decide after M9, on the criteria of section 6.9; (b) start now; (c) never | (a), and M9 says **not now**: −4 to −5 % on disk is far below the bar. The cache gain (−25 to −35 %) is worth revisiting if a cluster shows lookups bound by cache misses (M3) | |
 | D12 | Datatype markers for O14 (section 6.7) | (a) write them on every add from now on, flag new stores, rebuild old stores with O5; (b) no markers, so no O14 | (a) if range filters on numbers and dates matter to the workload. They cost one more `eval` cell per single-statement insert, cover new stores only until a rebuild, and forbid writes from older versions into flagged stores | |
+| D13 | The subject-partitioned table of O23 | (a) an optional table like the text and geo indexes, with Tripatha server code on the tablet servers (an Accumulo iterator jar, an HBase coprocessor); (b) none, so stars stay with O22 on the client | decide after O22 is measured: (a) only if the client's intersection is the limit. It costs about another copy of `po` on disk and in writes, and an iterator jar to deploy | |
 
 **Where to read what:**
 
@@ -110,7 +111,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | 3 | what "1T" is taken to mean |
 | 4 | the measured sizing model |
 | 5 | the requirements at 1T, and where Tripatha stands |
-| 6 | designs: loader-side counters, bulk build, statistics, graph drops, dictionary, big scans, filters as key ranges, the join path, IRI prefix codes |
+| 6 | designs: loader-side counters, bulk build, statistics, graph drops, dictionary, big scans, filters as key ranges, the join path, IRI prefix codes, merge joins and stars in the servers |
 | 7 | the phased plan |
 | 8 | published trillion-triple results |
 | 9 | sources |
@@ -138,12 +139,14 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O13 | **`STRSTARTS` as a prefix range:** a filter `STRSTARTS(?o, "abc")` on a pattern's object narrows its scan to the objects whose data starts with `abc`, with no type check; the filter stays. Not `STRSTARTS(STR(?o), …)`: numbers, dates and booleans aren't stored as their text (section 6.7, ARCH.md 12.8) | R2 | measured (M8): `prefix` 92 → 0.7 ms on RocksDB and 72 → 2.2 ms on Accumulo, 133,579 → 522 cells. `query.prefixranges` turns it off | M8 | 1 | Built on branch `loader-skip-singleton-counters`; green on Accumulo, HBase and RocksDB (also with batch size 2 and indexes) |
 | O14 | **Comparisons as value ranges:** `<`, `<=`, `>`, `>=` on a pattern's numeric or date object narrow its scan to the value range, one range per stored type; the filter stays. Needs a record of the datatypes each predicate's objects use (section 6.7) | R2 | the same, for numbers and dates | M8 | 1 | Not started |
 | O15 | **Adaptive batch windows in batched joins:** the first window is 64 left rows, doubling up to `query.join.batchsize`, as entity prefetch does (section 6.8) | R2 | measured (M8, section 4.6): `chain-limit` 114 → 19 ms on Accumulo and 6.9 → 0.7 ms on RocksDB (1,003 → 67 ranges); `type-limit` 164 → 40 ms and 22.6 → 1.6 ms (2,004 → 260 ranges). No cost on large joins: `chain` −7 % with 16 batch scans instead of 13 | M8 | 1 | Built on branch `loader-skip-singleton-counters`; green on Accumulo, HBase and RocksDB (also with batch size 2 and indexes) |
-| O16 | **More lookups in flight:** batched joins and entity prefetch keep the next window's fetch running while the current one is joined, and more than one when the store has several servers (section 6.8) | R2 | unproven: the baseline's "waiting on lookups" reading it rested on was contradicted by O21 (4.6). Decide after M8's profile split | M8 | 1 | Not started |
-| O17 | **Less work per looked-up row:** `BatchLookup` matches on the row's encoded object instead of encoding every result again, and allocates less per row (section 6.8) | R2 | small: Tripatha's own code is about 7 % of the client's CPU in the Accumulo joins (4.6). Only if a later profile says otherwise | M8 | 1 | Not started |
+| O16 | **More lookups in flight:** batched joins and entity prefetch keep the next window's fetch running while the current one is joined, and more than one when the store has several servers (section 6.8) | R2 | the tablet server is the limit on the test cluster (4.6), so overlapping with client work gains nothing. More server parallelism (more tablets, concurrent batch scans) is the open question, for a cluster (M3) | M8 | 1 | Not started |
+| O17 | **Less work per looked-up row:** `BatchLookup` matches on the row's encoded object instead of encoding every result again, and allocates less per row (section 6.8) | R2 | dropped for joins: on Accumulo the query thread's CPU is 2 to 3 % of a join's wall time (4.6). It could matter for range scans, which are client-bound | M8 | 1 | Not started |
 | O18 | **IRI prefix codes**, only if M9 says go (section 6.9) | R1 | measured (M9): −4 to −5 % on disk, −25 to −35 % in the block cache, −44 to −57 % of the key bytes a writer sends, no clear change in scan and decode time | M9, D11 | 2 | Deferred (2026-11-16: below the bar on disk; revisit after M3, see 6.9) |
-| O19 | **RocksDB key decoding:** `RocksCodec.cell` copies the row's runs between escapes in bulk instead of writing it a byte at a time through a synchronized `ByteArrayOutputStream` | — | RocksDB only: 40 to 63 % of the CPU of scan-heavy queries (4.6) | — | 1 | Not started |
-| O20 | **The object-type check without a regular expression per cell.** It is "the row ends with `01` and the marker", today the expression `.*\x00.*\x00.*\x01<marker>` matched against a new `String`. A structured suffix in `ScanSpec` lets RocksDB compare bytes; Accumulo and HBase keep their server-side filter, given the simpler, equivalent `.*\x01<marker>` | R2 | RocksDB: 44 % of `count-class`. Accumulo: less tablet-server CPU on every type-checked scan | — | 1 | Not started |
+| O19 | **RocksDB key decoding:** `RocksCodec` encodes and decodes keys by copying the runs between escapes in bulk, instead of a byte at a time through a synchronized `ByteArrayOutputStream` | — | measured with O20 on RocksDB (M8, against `rocksdb-20261116-204243`): `count-class` 71 → 25 ms, range scans −23 to −31 %, joins −13 to −19 % | — | 1 | Built on branch `loader-skip-singleton-counters`; green everywhere |
+| O20 | **The object-type check as a row suffix:** `ScanSpec.rowSuffix`, set by the query engine when the type is the only row condition. RocksDB compares bytes. Accumulo and HBase filter with the equivalent linear `[\s\S]*` and the quoted suffix, instead of three open groups. It also fixes datatype IRIs being pasted into the expression unquoted, which let a `.` in a custom datatype IRI match any character | R2 | measured with O19, above. On Accumulo it means less tablet-server CPU per type-checked cell, not measured separately | — | 1 | Built on branch `loader-skip-singleton-counters`; green everywhere, `RangeParityIT` on all three backends |
 | O21 | **One range per subject:** when a window looks up two or more links of the same subject in `spo`, it reads the subject's range once and lets `BatchLookup`'s exact matching keep the cells asked for. A batch whose subject ranges return more than 64 cells per subject plus 1,024 is re-read one range per link (section 6.8) | R2 | measured (M8): `star-in` 17,594 → 8,799 ranges but 25,445 → 103,265 cells; `star-optional` 7,601 → 2,537 ranges, 9,345 → 28,772 cells. Accumulo: no change beyond noise. RocksDB: +64 % and +49 %. So `query.join.subjectranges` is **off by default**. Untested hypothesis: on a cold cache a seek is a block read and the extra cells are in the same block (M3) | M8 | 1 | Built, off by default |
+| O22 | **Merge joins of subject-sorted ranges:** for a star with constant objects (`?x a :Person ; :worksFor :Acme ; :nationality :IT`), each pattern is a `po` range sorted by subject. Stream them side by side and intersect, instead of one lookup per row. The subject space is sliced so several slices are intersected at once (section 6.10) | R2 | expected from 4.6: a sequentially read cell costs about 1/35 of a lookup on the Accumulo test cluster. To be measured on M10's class stars | M10 | 1 | Not started |
+| O23 | **Stars evaluated in the servers:** an optional subject-partitioned table, maintained like an index. A shard holds, per predicate and object, the sorted subjects of its share of the store. A server-side iterator (Accumulo) or coprocessor (HBase) intersects a star's lists inside every shard in parallel, and returns only the matching subjects (section 6.10) | R2 | the distributed join for "all entities matching X" (D1). To be measured against O22 | O22, D13 | 2 | Not started |
 
 ### 2.2 Measurements
 
@@ -160,6 +163,7 @@ All on a real cluster with NVMe disks, unless the row says otherwise.
 | M7 | **Maintenance at 10B:** `DROP GRAPH` of a small and of a large graph, graph sizes, an index rebuild | O4, O5 | Not started |
 | M8 | **A local join benchmark,** no cluster needed: a fixed query suite over a generated store of about 10M triples, on RocksDB and the Accumulo test cluster. Star and chain joins, entity prefetch, OPTIONAL, `LIMIT`, value and prefix filters, text and geo. Reports p50 and p99, a profile of where the time goes, and scans and cells per query from the trace. Checked in, so each optimization reports before and after | O13 to O17 | Done: `tripatha.loader/bench.sh` (`JoinBench`); baseline in section 4.6. Follow-ups: report CPU samples apart from threads blocked in native code, and compare settings back to back in one run (`--conf` variants) |
 | M9 | **IRI prefix codes, measured offline:** the generator's `spo`, `po` and `osp` rows written to RFiles as today and with prefix codes. Compares bytes sent, compressed size, and scan and decode time (section 6.9) | D11, O18 | Done 2026-11-16: results in section 6.9 |
+| M10 | **Class-star queries in the join benchmark:** entities of a large class selected by two to four constant properties, with and without a value filter and with attributes fetched. For example, people of one nationality working for one company, and observations of one property above a value. They measure O14, O22 and O23 | O14, O22, O23 | Not started |
 
 ### 2.3 Milestones
 
@@ -311,11 +315,18 @@ Measured with `tripatha.loader/bench.sh` on 2026-11-16, before any of the query 
 | `count-class` | 1 | 74 ms | 96 ms | 2 | 53,432 | 90 % |
 
 **What it shows:**
-- **On Accumulo, joins spend nearly all their time inside the scans.**
-  - Batched joins, entity prefetch and geo resolution spend 94 to 97 % of their time in storage calls.
-  - But that figure is time inside the scan iterator. It includes the client's own work on every cell that comes back (Thrift, Accumulo's key decoding, building statements) as well as the tablet server's seeks and reads.
-  - The baseline first read it as "waiting on lookups, so fewer ranges pay". O21 tested that: halving the ranges and reading 4 times the cells left latency unchanged. So the split between server seeks and per-cell work is unknown.
-  - The profile can't settle it yet, because it puts threads blocked on the network in with CPU (M8's follow-up). Until it can, O16 and O17 are unproven either way.
+- **On Accumulo, joins are limited by the tablet server.** This was measured with the CPU split (`accumulo-20261116-204048`).
+  - **The client's share:** the query thread's CPU is 2 to 3 % of a join's wall time, and the whole JVM's 6 %. `star-in` takes 1,038 ms of wall time, 25 ms of query-thread CPU and 59 ms of JVM CPU. The rest is the tablet server, which runs in its own process.
+  - **The two costs, from the same run:**
+    - a lookup (one range in a batch scan) costs about 59 µs: `star-in`, 17,594 ranges;
+    - a cell read sequentially within one range costs about 1.7 µs, all included: `count-class`, 53,432 cells in 90 ms.
+    - On RocksDB the same two figures are about 4.7 µs and 1.3 µs.
+  - **What follows:**
+    - per-cell client work doesn't limit joins on Accumulo (O17 dropped for joins);
+    - reading a subject's whole range for two links costs about as much as it saves (O21);
+    - streaming sorted lists and intersecting them is about 35 times cheaper per row than one lookup per row (O22).
+  - **Range scans are different.** `range-date` spends 120 of its 130 ms on the query thread's CPU, parsing and decoding 240,443 cells. That is client-bound, and fewer cells (O14) is what helps.
+  - **Run-to-run noise:** variants measured in the same run agree within about 5 %. Separate runs differed by up to 40 %.
 - **`LIMIT` queries fetch a whole batch.** `chain-limit` asks for 1,003 ranges to return 10 rows, and `type-limit` 2,004 for 100. This is O15.
 - **Filters read whole ranges.**
   - `range-date` reads 240,443 cells for 5 rows, `prefix` 133,579 for 521, and `range-number` 26,917 for 387 (O13, O14).
@@ -820,6 +831,47 @@ Both are candidates. M8's profile decides whether they, the row decoding, or RDF
 - **The measurement:** M9 writes the same rows both ways and compares bytes sent, compressed size, and the time to scan and decode them.
 - **The bar:** go only for at least 20 % fewer bytes on disk, or at least 1.5× faster scanning and decoding.
 
+### 6.10 "All entities matching X": merge joins and stars in the servers (O22, O23)
+
+The target workload (D1) is entities of large classes selected by several properties and values, such as people of one nationality working for one company and born after 1990. Today such a star is a driver range followed by one lookup per driver row, for each other property. The rows flow through one JVM, and each lookup is a seek.
+
+**What is already there.** `po` holds, for every predicate and object, the sorted list of its subjects: rows `p 00 o 00 s`. A star with constant objects is the intersection of such lists.
+
+**O22: merge joins on the client.**
+- **How:** for patterns `?x p1 o1`, `?x p2 o2`, … in one join, read each `po` range in subject order and intersect them as they stream.
+  - When one list is much shorter, it drives, and the others are probed with seeks to its next subject: a leapfrog intersection.
+  - Patterns with unbound objects (attributes to fetch) are then batched lookups of the matching subjects, as today.
+- **Parallelism:** the subject space is cut at the tablet boundaries of `spo`, or at sampled split points, and the slices are intersected on several threads at once, each over the servers holding them.
+- **Semantics:**
+  - RDF4J's own join produces the same bindings.
+  - Rows come out in subject order instead of the driver's order, which SPARQL doesn't fix without `ORDER BY`.
+  - Labels and graphs are as for any range read; each list is read with the query's labels, as one range.
+- **Where it pays:** when the driver alone is large, and a constant pattern would otherwise cost one lookup per driver row.
+- **Measured on:** M10's class-star queries, against today's batched joins, as variants of one run.
+- **Design details:**
+  - **Bag semantics:** each pattern contributes, for a subject, as many rows as it has matching statements: several graphs, or one statement under several labels. The intersection carries a count per subject and pattern, and emits their product.
+  - **Merge or look up:** the `po` counters give each list's length.
+    - Merging costs both lengths in sequential cells, about 1.7 µs each on the test cluster.
+    - Today's batched lookups cost the driver's length in lookups, about 59 µs each.
+    - So merge when the longer list is under about 35 times the driver, and look up otherwise. The ratio is a setting, measured per backend.
+  - **Slices:** all of a star's lists are cut at the same subject boundaries, taken from `spo`'s tablet splits or sampled. Each slice is one ordered scan per pattern, intersected on its own thread.
+  - **Scope:** patterns in the default scope or one named graph, constant predicates and objects, one shared subject variable. Patterns with unbound objects stay batched lookups over the merge's output, as entity prefetch does today.
+  - **The type check:** each list is a `po` range with its object's row suffix (O20), so a value of another type with the same data is dropped on the server, as in a single lookup.
+
+
+**O23: the same intersection in the servers.**
+- **The table:** optional, `<prefix>entity`, maintained by `IndexManager` like the text and geo indexes.
+  - Row: a shard, from a hash of the subject, so a subject's postings are all in one shard and the shards spread over every tablet server.
+  - Column family: the predicate and object.
+  - Column qualifier: the subject.
+  - Visibility: the statement's label.
+- **The work:** a star is sent to every shard at once, with a batch scan over all shard rows. In each shard a server-side iterator seeks the star's posting lists and intersects them, the way Accumulo's intersecting iterator does for documents. Only matching subjects come back; their attributes are then batched lookups.
+- **Cost:**
+  - about another copy of `po`, on disk and in writes (roughly 20 B per triple);
+  - Tripatha code on the servers: an iterator jar on Accumulo's tablet servers, a second coprocessor on HBase. RocksDB has no servers, but its shards could be intersected on several local threads;
+  - value filters need O14's ranges inside a posting list.
+- **When:** only if O22's measurements show the client's intersection, or the transfer of the lists, as the limit (D13).
+
 ---
 
 ## 7. Plan
@@ -842,10 +894,12 @@ In this order, each measured on M8 before and after (on RocksDB and on the Accum
 2. **O13**, `STRSTARTS` as a prefix range: done;
 3. **O21**, one range per subject: built and measured, off by default (no gain warm; to be tried cold, M3);
 4. **M8's follow-ups**: CPU apart from blocked threads, and settings compared back to back in one run;
-5. **O20**, the type check without a regex, and **O19**, RocksDB key decoding;
-6. **O14**, comparisons as value ranges, after D12 (the datatype markers);
-7. **O16** and **O17**, only if the split profile shows where the Accumulo joins' time goes;
-8. **O7**, parallel reads of one large range.
+5. **O20**, the type check without a regex, and **O19**, RocksDB key decoding: done;
+6. **M10**, class-star queries in the benchmark, then **O22**, merge joins of subject-sorted ranges: the first step for "all entities matching X" (D1);
+7. **O14**, comparisons as value ranges, after D12 (the datatype markers). Value conditions in class stars need it;
+8. **O16** and **O17**, only if the split profile shows where the Accumulo joins' time goes;
+9. **O7**, parallel reads of one large range;
+10. **O23**, stars evaluated in the servers, after D13.
 
 **Exit:**
 - every change has an M8 report;
