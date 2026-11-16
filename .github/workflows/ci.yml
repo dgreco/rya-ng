@@ -134,6 +134,36 @@ jobs:
             */target/failsafe-reports/
           retention-days: 14
 
+  rocksdb:
+    name: Integration tests on RocksDB
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Build
+        run: mvn -B -ntp install -DskipTests -DskipITs
+
+      # The backend's own tests, and the store, Sail, loader and endpoint ITs on it.
+      - name: Test on RocksDB
+        run: mvn -B -ntp verify -pl rya.rocksdb,rya.test,rya.sail,rya.loader,rya.sparql -Drya.test.backend=rocksdb
+
+      - name: Upload test reports
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: rocksdb-test-reports
+          path: |
+            */target/surefire-reports/
+            */target/failsafe-reports/
+          retention-days: 14
+
   publish:
     name: Publish the coverage report
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}

@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# A try-out image: the SPARQL endpoint and its query page on a throwaway in-process cluster
-# (DevServer). Not for production: the data is lost when the container stops.
+# A try-out image: the SPARQL endpoint and its query page (DevServer) on a throwaway in-process
+# cluster, or on a RocksDB store in a volume. Not for production.
 FROM maven:3.9-eclipse-temurin-25
 
 WORKDIR /rya-ng
@@ -24,7 +24,11 @@ COPY . .
 RUN mvn -B -q install -DskipTests -DskipITs \
  && mvn -B -q -pl rya.sparql dependency:go-offline spring-boot:help
 
+# accumulo, hbase (both in-process clusters, emptied on every start) or rocksdb, whose data is
+# kept in RYA_DATA: mount a volume there to keep it across containers.
 ENV RYA_BACKEND=accumulo
+ENV RYA_DATA=/var/lib/rya-ng
+VOLUME /var/lib/rya-ng
 EXPOSE 8080
 
-CMD ["sh", "-c", "exec mvn -B -o -q -pl rya.sparql spring-boot:test-run -Dspring-boot.run.main-class=io.github.dgreco.rya.sparql.DevServer -Dspring-boot.run.jvmArguments=-Drya.test.backend=${RYA_BACKEND}"]
+CMD ["sh", "-c", "exec mvn -B -o -q -pl rya.sparql spring-boot:test-run -Dspring-boot.run.main-class=io.github.dgreco.rya.sparql.DevServer \"-Dspring-boot.run.jvmArguments=-Drya.test.backend=${RYA_BACKEND} -Drya.test.rocksdbPath=${RYA_DATA}\""]
