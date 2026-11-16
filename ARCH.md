@@ -1005,7 +1005,7 @@ sequenceDiagram
     participant QE as RyaStoreQueryEngine
     participant R as Right step (RDF4J's own)
     loop until the left side is exhausted
-        BJ->>L: read up to 1000 left rows
+        BJ->>L: read a window of left rows<br/>(64, then doubling up to 1000)
         BJ->>BJ: for each row, the lookup the right side will make<br/>(LookupKey: s, p, o, contexts)
         BJ->>TS: prefetch(keys)
         TS->>BL: fetch(dao, conf, keys, limit)
@@ -1025,6 +1025,8 @@ sequenceDiagram
 ```
 
 The right side is still RDF4J's own statement-pattern step, run once per left row. Only where its statements come from changes, so join semantics (optional variables, repeated variables, graph scopes) stay RDF4J's.
+
+**Window sizes.** The first window is 64 left rows, and each next one doubles, up to `query.join.batchsize`, as entity prefetch does ([section 13.5](#135-entity-prefetch-a-chain-of-joins-at-once)). A query that stops early, such as one with a `LIMIT`, fetches the lookups of a small window instead of a whole batch.
 
 ### 13.3 When a join is batched
 

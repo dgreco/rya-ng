@@ -41,9 +41,13 @@ import org.eclipse.rdf4j.query.algebra.evaluation.impl.DefaultEvaluationStrategy
 
 /**
  * A nested-loop join (same results and order as RDF4J's {@code JoinIterator}) whose right-hand
- * statement lookups are fetched in batches: it reads up to {@code batchSize} left rows, works
- * out the lookup each of them will make, fetches them all with one batch scan per table, and
- * then runs RDF4J's own right-hand step for each row against those prefetched statements.
+ * statement lookups are fetched in batches: it reads a window of left rows, works out the lookup
+ * each of them will make, fetches them all with one batch scan per table, and then runs RDF4J's
+ * own right-hand step for each row against those prefetched statements.
+ *
+ * <p>Windows start at 64 rows ({@code EntityPrefetchStep.FIRST_WINDOW}) and double up to
+ * {@code batchSize}, as {@link EntityPrefetchStep}'s do: a query that stops early, such as one
+ * with a {@code LIMIT}, fetches the lookups of a small window instead of a whole batch.
  */
 final class BatchedJoinStep implements QueryEvaluationStep {
     private final QueryEvaluationStep left;
@@ -93,6 +97,7 @@ final class BatchedJoinStep implements QueryEvaluationStep {
 
     private final class BatchedJoinIteration extends LookAheadIteration<BindingSet> {
         private final CloseableIteration<BindingSet> leftRows;
+        private int window = Math.min(EntityPrefetchStep.FIRST_WINDOW, batchSize);
         private Iterator<BindingSet> chunk;
         private AutoCloseable prefetch;
         private CloseableIteration<BindingSet> current;
@@ -119,9 +124,9 @@ final class BatchedJoinStep implements QueryEvaluationStep {
                 if (!leftRows.hasNext()) {
                     return null;
                 }
-                final List<BindingSet> rows = new ArrayList<>(batchSize);
+                final List<BindingSet> rows = new ArrayList<>(window);
                 final Set<LookupKey> keys = new LinkedHashSet<>();
-                while (rows.size() < batchSize && leftRows.hasNext()) {
+                while (rows.size() < window && leftRows.hasNext()) {
                     final BindingSet row = leftRows.next();
                     rows.add(row);
                     final LookupKey key = lookupFor(rightPattern, row);
@@ -132,6 +137,7 @@ final class BatchedJoinStep implements QueryEvaluationStep {
                 if (!keys.isEmpty() && rows.size() > 1) {
                     prefetch = source.prefetch(keys);
                 }
+                window = (int) Math.min(2L * window, batchSize);
                 chunk = rows.iterator();
             }
         }

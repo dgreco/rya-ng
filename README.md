@@ -202,7 +202,7 @@ Instead of the connection arguments, `--tripatha.accumulo.client-properties` can
 | `tripatha.inference` | `false` | Query-time OWL/RDFS inference |
 | `tripatha.inference-refresh` | `5m` | How often the ontology is reloaded. Ontology changes take effect after the next reload. |
 | `tripatha.stats` | `true` | Keep cardinality statistics on write and use them for join ordering |
-| `tripatha.join-batch-size` | `1000` | Left-hand join rows whose lookups are fetched together in one batch scan; `1` turns batching off |
+| `tripatha.join-batch-size` | `1000` | Left-hand join rows whose lookups are fetched together in one batch scan, at most (the first batch is 64 rows, and each next one doubles up to this size); `1` turns batching off |
 | `tripatha.entity-prefetch` | `true` | Fetch the attributes a query reads for a batch of entities (its joins and `OPTIONAL`s on them) in one batch scan, instead of one per join or per row |
 | `tripatha.text-index` | `false` | Keep the full-text index (see [Search](#search)) |
 | `tripatha.text-index-predicates` | `[]` | Predicates whose literals are text-indexed; empty means all |
