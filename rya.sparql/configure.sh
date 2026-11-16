@@ -35,7 +35,8 @@ only you can read.
   --force         overwrite FILE if it exists
   --defaults      accept every default without asking. RYA_ACCUMULO_ZOOKEEPERS,
                   RYA_ACCUMULO_INSTANCE, RYA_ACCUMULO_USER and RYA_ACCUMULO_PROPERTIES
-                  preset the connection defaults.
+                  preset the connection defaults. RYA_BACKEND=hbase picks HBase, and
+                  RYA_BACKEND=rocksdb RocksDB (in RYA_ROCKSDB_PATH, or ~/.rya-ng/rocksdb).
 
 Answers can also be piped in, one per line (an empty line keeps the default).
 EOF
@@ -223,13 +224,24 @@ section "Storage backend"
 
 backend_default=1
 [ "${RYA_BACKEND:-}" != hbase ] || backend_default=2
+[ "${RYA_BACKEND:-}" != rocksdb ] || backend_default=3
 choose backend_choice "Which store does the endpoint use?" "$backend_default" \
   "Accumulo" \
-  "HBase (with VisibilityController and hbase.security.authorization=true)"
+  "HBase (with VisibilityController and hbase.security.authorization=true)" \
+  "RocksDB (a store in a local directory, without a cluster)"
 
 zk="" instance="" user="" client_properties="" password_mode=0 password_file=""
 hbase_site="" hbase_zk="" hbase_zk_port="" hbase_user="" counters_choice=1
-if [ "$backend_choice" = 2 ]; then
+rocksdb_path="" connection=0
+if [ "$backend_choice" = 3 ]; then
+
+section "RocksDB directory"
+
+ask rocksdb_path "Directory of the database (created if missing)" "${RYA_ROCKSDB_PATH:-$HOME/.rya-ng/rocksdb}" not_empty
+$defaults || note "One process at a time can open the directory: stop the endpoint to run the loader on it."
+$defaults || note "There are no accounts: whoever can read the directory can read every statement."
+
+elif [ "$backend_choice" = 2 ]; then
 
 section "HBase connection"
 
@@ -352,6 +364,8 @@ if [ "$backend_choice" = 2 ]; then
   fi
   [ -z "$hbase_user" ] || args+=("--rya.hbase.user=$hbase_user")
   [ "$counters_choice" = 1 ] || args+=("--rya.hbase.counters=increment")
+elif [ "$backend_choice" = 3 ]; then
+  args+=("--rya.backend=rocksdb" "--rya.rocksdb.path=$rocksdb_path")
 elif [ "$connection" = 1 ]; then
   args+=("--rya.accumulo.zookeepers=$zk" "--rya.accumulo.instance=$instance" "--rya.accumulo.user=$user")
 else
@@ -425,6 +439,8 @@ trap 'rm -f "$tmp"' EXIT
     *)
       if [ "$backend_choice" = 2 ]; then
         echo '# HBase: no password (simple authentication, or the Kerberos login of core-site.xml).'
+      elif [ "$backend_choice" = 3 ]; then
+        echo '# RocksDB: a local directory, no password.'
       else
         echo '# The credentials are in the accumulo-client.properties file.'
       fi
