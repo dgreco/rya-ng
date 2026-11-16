@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.tripatha.accumulo.trace;
+package org.tripatha.accumulo;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -37,13 +37,12 @@ import org.tripatha.store.StoreRdfConfiguration;
 import org.tripatha.store.RyaStoreDAO;
 import org.tripatha.api.domain.RyaIRI;
 import org.tripatha.api.domain.RyaStatement;
-import org.tripatha.accumulo.AccumuloStore;
 import org.tripatha.store.trace.StoreTrace;
 import org.tripatha.store.trace.Trace;
 import org.tripatha.store.trace.TraceEvent;
 import org.tripatha.test.accumulo.AccumuloITBase;
 
-public class AccumuloTraceIT extends AccumuloITBase {
+public class AccumuloStoreTraceIT extends AccumuloITBase {
     private static final String NS = "urn:test#";
     private static final RyaIRI ALICE = new RyaIRI(NS + "alice");
     private static final RyaIRI BOB = new RyaIRI(NS + "bob");
@@ -58,7 +57,7 @@ public class AccumuloTraceIT extends AccumuloITBase {
 
     @BeforeEach
     public void setUp() {
-        client = AccumuloTrace.wrap(getClient());
+        client = getClient();
         conf = new StoreRdfConfiguration();
         conf.setTablePrefix(getTablePrefix());
         dao = new RyaStoreDAO(AccumuloStore.wrap(client), conf);

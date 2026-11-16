@@ -28,9 +28,9 @@ import org.tripatha.store.spi.KeyRange;
 import org.tripatha.store.spi.ScanSpec;
 
 /**
- * Reports a backend's reads to the trace of the thread that starts them, for backends that call
- * the trace themselves (the Accumulo backend traces through client proxies instead). Costs nothing
- * when the thread isn't traced.
+ * Reports a backend's reads to the trace of the thread that starts them. Every backend opens its
+ * reads through here, with its own name for the operation and its own list of server-side
+ * filters. Costs nothing when the thread isn't traced.
  */
 public final class TracedScans {
     private TracedScans() {

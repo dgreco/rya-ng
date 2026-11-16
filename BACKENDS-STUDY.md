@@ -18,7 +18,7 @@ limitations under the License.
 
 Status: written 2026-10-31 against `main` at `860fa66`; implemented on the `hbase-backend` branch on 2026-11-01. The study below is kept as written, with the phase 0 results added to section 8. The next section says what was built and where it differs from the plan.
 
-A third backend, an embedded RocksDB database, was added on 2026-11-16: see section 10.
+A third backend, an embedded RocksDB database, was added on 2026-11-16: see section 10. Since then the Accumulo backend reports to the trace through `TracedScans` like the other two; the client proxies this study mentions (`TracingProxies`, `AccumuloTrace.wrap`, rows A25 and 5.5) are gone.
 
 ## 0. Implementation status
 

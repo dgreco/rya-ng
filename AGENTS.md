@@ -95,7 +95,7 @@ The storage SPI (`store.spi`) is cell-shaped: `Store` (`scan`, `batchScan`, `del
   - **Counters:** RocksDB's `uint64add` merge operator, 8-byte little-endian, summed on reads and compactions. Merging onto a value that isn't 8 bytes silently restarts the count, so counter tables refuse PUT and other tables refuse counter deltas.
   - **Writes:** one `WriteBatch` per `CellWriter`, across families; a flush is one atomic write. A timestamped delete first writes the batch, then reads the cell and deletes it only if its timestamp is at or before the delete's.
   - **One database per directory and process** (`RocksDatabase`): stores and scanners of a directory in one JVM share the open database and count their uses; the last release closes it. Scanners hold native memory: close them (they close themselves when exhausted).
-- **Trace:** `StoreTrace` (scope, reasons, `Trace`) is neutral. Accumulo reports through client proxies (`AccumuloTrace.wrap`, applied by `AccumuloStore`), HBase and RocksDB through `TracedScans` and their writers.
+- **Trace:** `StoreTrace` (scope, reasons, `Trace`) is neutral, and every backend reports the same way: reads through `TracedScans.open`, visible-cell deletes through `TracedScans.started`, writers with `trace.wrote` and `trace.flushed`. Only the operation names and the filter list are a backend's own. Accumulo lists the scan iterators it attaches (`AccumuloStore.iterators` builds them, `describe` renders them), so add a new server-side filter there and it shows in traces. What is done directly with `AccumuloStore.client()` is not traced.
 
 ### Loader (`tripatha.loader`)
 
