@@ -125,7 +125,7 @@ class LoaderIT extends StoreITBase {
     private List<String> dataset(final String... extra) {
         final List<String> a = new ArrayList<>(List.of("--table-prefix", getTablePrefix(), "--entities",
                 Integer.toString(ENTITIES), "--seed", "7", "--labels", "A,B", "--labelled-fraction", "0.3", "--graphs", "4",
-                "--text-index", "--geo-index"));
+                "--rdf12-fraction", "0.3", "--text-index", "--geo-index"));
         a.addAll(List.of(extra));
         return a;
     }

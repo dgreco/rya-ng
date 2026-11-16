@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -29,12 +30,14 @@ import java.util.stream.IntStream;
 
 import org.eclipse.rdf4j.model.vocabulary.GEO;
 import org.eclipse.rdf4j.model.vocabulary.RDF;
+import org.eclipse.rdf4j.model.vocabulary.RDFS;
 import org.junit.jupiter.api.Test;
 
 import io.github.dgreco.rya.store.index.geo.GeoCells;
 import io.github.dgreco.rya.store.index.geo.GeoSupport;
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
+import io.github.dgreco.rya.api.domain.RyaTripleTerm;
 import io.github.dgreco.rya.api.resolver.RyaContext;
 
 class EntityGeneratorTest {
@@ -46,6 +49,74 @@ class EntityGeneratorTest {
     private static String key(final RyaStatement s) {
         return s.getSubject().getData() + " " + s.getPredicate().getData() + " " + s.getObject().getDataType() + " "
                 + s.getObject().getData() + "@" + s.getObject().getLanguage() + " " + s.getContext();
+    }
+
+    /** With an RDF 1.2 share, the same dataset plus annotated links, and some labels with a base direction. */
+    @Test
+    void rdf12FractionAddsAnnotationsAndDirections() throws Exception {
+        final GenConfig modernConfig = config.withRdf12Fraction(0.25);
+        final EntityGenerator modern = new EntityGenerator(modernConfig);
+        assertEquals(config.fingerprint(), config.withRdf12Fraction(0).fingerprint(), "RDF 1.1 fingerprints are unchanged");
+        assertFalse(config.fingerprint().equals(modernConfig.fingerprint()));
+
+        int links = 0;
+        int annotated = 0;
+        int languageLabels = 0;
+        int directed = 0;
+        int rightToLeft = 0;
+        for (long i = 0; i < 20_000; i++) {
+            final List<RyaStatement> plain = generator.generate(i);
+            final List<RyaStatement> statements = modern.generate(i);
+            final String entity = config.entity(i);
+            // Without the claims, and with directions dropped, it is the RDF 1.1 entity.
+            final List<String> withoutModern = new ArrayList<>();
+            final Set<String> ownLinks = new HashSet<>();
+            for (final RyaStatement s : statements) {
+                assertNotNull(RyaContext.getInstance().serializeType(s.getObject()));
+                final boolean claim = s.getSubject().getData().startsWith(entity + "/claim/");
+                if (claim && RDF.REIFIES.stringValue().equals(s.getPredicate().getData())) {
+                    final RyaTripleTerm term = (RyaTripleTerm) s.getObject();
+                    assertEquals(entity, term.getSubject().getData());
+                    assertTrue(ownLinks.contains(term.getPredicate().getData() + " " + term.getObject().getData()),
+                            "the annotated link is one of the entity's, written before it");
+                    assertEquals(statements.get(0).getContext(), s.getContext());
+                    annotated++;
+                } else if (claim) {
+                    assertTrue(List.of(config.ontology("certainty"), config.ontology("assertedOn"))
+                            .contains(s.getPredicate().getData()));
+                } else if (RDF.DIRLANGSTRING.equals(s.getObject().getDataType())) {
+                    final String language = s.getObject().getLanguage();
+                    assertTrue(language.endsWith("--ltr") || language.equals("ar--rtl"), language);
+                    directed++;
+                    if (language.endsWith("--rtl")) {
+                        rightToLeft++;
+                    }
+                    final String tag = language.substring(0, language.indexOf("--"));
+                    withoutModern.add(key(new RyaStatement(s.getSubject(), s.getPredicate(),
+                            LiteralForms.text(s.getObject().getData(), tag), s.getContext())));
+                } else {
+                    withoutModern.add(key(s));
+                    if (s.getObject() instanceof RyaIRI iri && s.getSubject().getData().equals(entity)) {
+                        ownLinks.add(s.getPredicate().getData() + " " + iri.getData());
+                    }
+                }
+            }
+            assertEquals(plain.stream().map(EntityGeneratorTest::key).toList(), withoutModern);
+            for (final RyaStatement s : plain) {
+                if (s.getObject() instanceof RyaIRI iri && iri.getData().startsWith(config.baseIri() + "e/")
+                        && !iri.getData().endsWith("/geom")) {
+                    links++;
+                }
+                if (RDF.LANGSTRING.equals(s.getObject().getDataType())
+                        && RDFS.LABEL.stringValue().equals(s.getPredicate().getData())) {
+                    languageLabels++;
+                }
+            }
+        }
+        assertTrue(annotated > links * 0.2 && annotated < links * 0.3, annotated + " of " + links + " links");
+        assertTrue(directed > languageLabels * 0.2 && directed < languageLabels * 0.3,
+                directed + " of " + languageLabels + " labels");
+        assertTrue(rightToLeft > 0 && rightToLeft < directed, "right to left: " + rightToLeft);
     }
 
     @Test

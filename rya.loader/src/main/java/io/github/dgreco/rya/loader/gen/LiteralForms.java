@@ -80,6 +80,11 @@ public final class LiteralForms {
         return new RyaType(RDF.LANGSTRING, value, language);
     }
 
+    /** Text with a base direction: the language field holds the tag and the direction, as the store keeps them. */
+    public static RyaType directional(final String value, final String language, final boolean rightToLeft) {
+        return new RyaType(RDF.DIRLANGSTRING, value, language + (rightToLeft ? "--rtl" : "--ltr"));
+    }
+
     public static RyaType wkt(final String wkt) {
         return new RyaType(GEO.WKT_LITERAL, wkt);
     }

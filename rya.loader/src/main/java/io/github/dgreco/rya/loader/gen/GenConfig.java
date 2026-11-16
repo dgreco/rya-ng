@@ -43,11 +43,13 @@ import java.util.Map;
  * @param linkSkew power-law exponent of link targets (0: uniform)
  * @param wordSkew Zipf exponent of word frequencies
  * @param classWeights per-mille share of each class
+ * @param rdf12Fraction share of links that get an RDF 1.2 annotation, and of language-tagged
+ *        labels that get a base direction (0: an RDF 1.1 dataset)
  */
 public record GenConfig(long seed, long entities, long timestamp, String baseIri, int graphs,
         double defaultGraphFraction, List<String> labels, double labelledFraction, double geoScale,
         double polygonFraction, double textScale, double linkSkew, double wordSkew,
-        Map<EntityClass, Integer> classWeights) {
+        Map<EntityClass, Integer> classWeights, double rdf12Fraction) {
 
     /** Bump when generation changes, so old progress files and datasets are not mixed up. */
     public static final String GENERATOR_VERSION = "rya-gen/1";
@@ -58,6 +60,18 @@ public record GenConfig(long seed, long entities, long timestamp, String baseIri
         if (entities < 1) {
             throw new IllegalArgumentException("the dataset needs at least one entity");
         }
+        if (!(rdf12Fraction >= 0 && rdf12Fraction <= 1)) {
+            throw new IllegalArgumentException("the RDF 1.2 fraction must be between 0 and 1");
+        }
+    }
+
+    /** An RDF 1.1 dataset. */
+    public GenConfig(final long seed, final long entities, final long timestamp, final String baseIri, final int graphs,
+            final double defaultGraphFraction, final List<String> labels, final double labelledFraction,
+            final double geoScale, final double polygonFraction, final double textScale, final double linkSkew,
+            final double wordSkew, final Map<EntityClass, Integer> classWeights) {
+        this(seed, entities, timestamp, baseIri, graphs, defaultGraphFraction, labels, labelledFraction, geoScale,
+                polygonFraction, textScale, linkSkew, wordSkew, classWeights, 0);
     }
 
     public static Map<EntityClass, Integer> defaultWeights() {
@@ -76,7 +90,12 @@ public record GenConfig(long seed, long entities, long timestamp, String baseIri
 
     public GenConfig withEntities(final long n) {
         return new GenConfig(seed, n, timestamp, baseIri, graphs, defaultGraphFraction, labels, labelledFraction,
-                geoScale, polygonFraction, textScale, linkSkew, wordSkew, classWeights);
+                geoScale, polygonFraction, textScale, linkSkew, wordSkew, classWeights, rdf12Fraction);
+    }
+
+    public GenConfig withRdf12Fraction(final double fraction) {
+        return new GenConfig(seed, entities, timestamp, baseIri, graphs, defaultGraphFraction, labels, labelledFraction,
+                geoScale, polygonFraction, textScale, linkSkew, wordSkew, classWeights, fraction);
     }
 
     /** SHA-256 of every setting that changes the data, as hex. */
@@ -88,6 +107,10 @@ public record GenConfig(long seed, long entities, long timestamp, String baseIri
                 .append('|').append(textScale).append('|').append(linkSkew).append('|').append(wordSkew);
         for (final EntityClass c : EntityClass.values()) {
             b.append('|').append(c.localName()).append('=').append(classWeights.getOrDefault(c, 0));
+        }
+        if (rdf12Fraction > 0) {
+            // Only then, so the fingerprints of RDF 1.1 datasets stay what they were.
+            b.append("|rdf12=").append(rdf12Fraction);
         }
         try {
             final byte[] digest = MessageDigest.getInstance("SHA-256").digest(b.toString().getBytes(StandardCharsets.UTF_8));

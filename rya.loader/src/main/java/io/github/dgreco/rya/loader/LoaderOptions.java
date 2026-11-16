@@ -71,13 +71,13 @@ public final class LoaderOptions {
             "hbase-labels-table", "grant-to",
             "text-predicates", "stats", "entities", "triples", "start-entity", "end-entity", "seed", "timestamp", "graphs",
             "default-graph-fraction", "labels", "labelled-fraction", "geo-scale", "polygon-fraction", "text-scale",
-            "link-skew", "word-skew", "class-weights", "base-iri", "part", "parts", "threads", "block-size",
+            "link-skew", "word-skew", "class-weights", "rdf12-fraction", "base-iri", "part", "parts", "threads", "block-size",
             "commit-interval", "batch-memory-mb", "writer-threads", "max-latency", "writer-timeout", "durability",
             "max-rate", "report-interval", "progress-file", "splits", "print", "link-mbps", "sample", "auths", "confirm");
     /** Options that change the generated data: repeated in the commands printed by prepare. */
     private static final List<String> GENERATION = List.of("seed", "timestamp", "graphs", "default-graph-fraction", "labels",
             "labelled-fraction", "geo-scale", "polygon-fraction", "text-scale", "link-skew", "word-skew", "class-weights",
-            "base-iri");
+            "rdf12-fraction", "base-iri");
     /** The settings an --hbase-properties file may hold, besides {@code hbase.conf.<key>}. */
     private static final List<String> HBASE_FILE_KEYS = List.of(HBaseStoreProvider.SITE, HBaseStoreProvider.USER,
             HBaseStoreProvider.COUNTERS, HBaseStoreProvider.COUNTERS_JAR, HBaseStoreProvider.LABELS_TABLE);
@@ -418,7 +418,7 @@ public final class LoaderOptions {
                     doubleValue("default-graph-fraction", 0.2), labels,
                     doubleValue("labelled-fraction", labels.isEmpty() ? 0 : 0.1), doubleValue("geo-scale", 1.0),
                     doubleValue("polygon-fraction", 0.25), doubleValue("text-scale", 1.0), doubleValue("link-skew", 0.8),
-                    doubleValue("word-skew", 1.0), weights);
+                    doubleValue("word-skew", 1.0), weights, doubleValue("rdf12-fraction", 0));
             final long entities;
             if (values.containsKey("entities")) {
                 entities = size("entities");
@@ -701,6 +701,8 @@ public final class LoaderOptions {
                   --seed 42  --timestamp 1767225600000  --graphs 8  --default-graph-fraction 0.2
                   --labels A,B  --labelled-fraction 0.1  --geo-scale 1  --polygon-fraction 0.25
                   --text-scale 1  --link-skew 0.8  --word-skew 1  --class-weights Person=260,…  --base-iri urn:rya-gen:
+                  --rdf12-fraction 0        share of links annotated with RDF 1.2 triple terms, and of
+                                            language-tagged labels given a base direction (0: RDF 1.1 only)
 
                 Load:
                   --part K --parts N        load slice K of N (run N processes, on one or more machines)
