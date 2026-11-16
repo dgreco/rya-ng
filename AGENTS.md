@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Tripatha is an RDF triple store on Accumulo, HBase or an embedded RocksDB database. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with eleven modules (plus `tripatha.coverage` under `-Pcoverage`), groupId `org.tripatha`, version `1.0.0-SNAPSHOT`, Java packages under `org.tripatha`. `BACKENDS-STUDY.md` is the design of the storage layer and of the HBase mapping.
+Tripatha is an RDF triple store on Accumulo, HBase or an embedded RocksDB database. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with eleven modules (plus `tripatha.coverage` under `-Pcoverage`), groupId `org.tripatha`, version `1.0.0-SNAPSHOT`, Java packages under `org.tripatha`. `BACKENDS-STUDY.md` is the design of the storage layer and of the HBase mapping. `SCALE-STUDY.md` drives the work toward 10^12 triples: its tracker (section 2) lists the optimizations (`O…`), measurements (`M…`) and decisions (`D…`). A change that lands one of them updates its row.
 
 | Component | Version | Notes |
 |---|---|---|
