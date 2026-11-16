@@ -17,9 +17,11 @@ package io.github.dgreco.rya.store.spi;
 
 /**
  * What a backend does natively. A store refuses settings its backend can't honour, rather than
- * emulating them on the client: emulated labels would let a bug leak data.
+ * emulating them above the SPI: labels checked by the code that asks for the cells would let a
+ * bug in it leak data. An embedded backend, which has no server, enforces them inside the store.
  *
- * @param labels cell visibility enforced by the server
+ * @param labels cell visibility enforced by the backend: no read through the SPI returns a cell
+ *        its labels don't satisfy
  * @param serverCombine counters added up by the server, so writing one is a blind write
  * @param serverRegex row and qualifier regular expressions evaluated by the server (Java syntax)
  * @param scanIterators arbitrary server-side scan iterators ({@link ScanSpec#iterators()})

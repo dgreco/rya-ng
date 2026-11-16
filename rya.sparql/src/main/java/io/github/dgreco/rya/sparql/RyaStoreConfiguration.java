@@ -38,6 +38,7 @@ import io.github.dgreco.rya.hbase.HBaseStore;
 import io.github.dgreco.rya.hbase.HBaseStoreProvider;
 import io.github.dgreco.rya.rdftriplestore.RdfCloudTripleStore;
 import io.github.dgreco.rya.rdftriplestore.RyaSailFactory;
+import io.github.dgreco.rya.rocksdb.RocksStore;
 import io.github.dgreco.rya.store.StoreRdfConfiguration;
 import io.github.dgreco.rya.store.spi.Store;
 
@@ -51,7 +52,8 @@ public class RyaStoreConfiguration {
         return switch (props.backend().trim().toLowerCase(java.util.Locale.ROOT)) {
             case "accumulo" -> AccumuloStore.owning(accumuloClient(props));
             case "hbase" -> hbaseStore(props);
-            default -> throw new IllegalStateException("rya.backend must be accumulo or hbase, not " + props.backend());
+            case "rocksdb" -> RocksStore.open(Path.of(required(props.rocksdb().path(), "rya.rocksdb.path")));
+            default -> throw new IllegalStateException("rya.backend must be accumulo, hbase or rocksdb, not " + props.backend());
         };
     }
 

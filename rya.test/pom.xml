@@ -41,6 +41,10 @@ under the License.
             <artifactId>rya.hbase</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.github.dgreco.rya</groupId>
+            <artifactId>rya.rocksdb</artifactId>
+        </dependency>
+        <dependency>
             <!-- On the in-process cluster's classpath, as on real region servers. -->
             <groupId>io.github.dgreco.rya</groupId>
             <artifactId>rya.hbase.coprocessor</artifactId>

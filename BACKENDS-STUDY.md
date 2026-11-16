@@ -18,6 +18,8 @@ limitations under the License.
 
 Status: written 2026-10-31 against `main` at `860fa66`; implemented on the `hbase-backend` branch on 2026-11-01. The study below is kept as written, with the phase 0 results added to section 8. The next section says what was built and where it differs from the plan.
 
+A third backend, an embedded RocksDB database, was added on 2026-11-16: see section 10.
+
 ## 0. Implementation status
 
 **Built, phases 0 to 4:**
@@ -884,3 +886,69 @@ In a throwaway branch:
 - what `FSYNC_WAL` does;
 - the cost of `VisibilityController` (no published benchmark);
 - what retries do to increments across region moves.
+
+---
+
+## 10. RocksDB as a third backend
+
+Status: built on the `rocksdb-backend` branch on 2026-11-16, after a spike that settled the RocksDB questions below. Where the HBase study had to match a server's behaviour, this section is about an embedded store: the "server" is a library in the caller's process.
+
+### 10.1 What it is for
+
+A store in a local directory, for one machine and one process: trying rya-ng out with data that survives a restart, small deployments, and running the integration tests without a cluster. It is not a replacement for Accumulo or HBase: there is no replication, and one process at a time can open the directory.
+
+### 10.2 The mapping
+
+| What rya-ng asks for | RocksDB |
+|---|---|
+| A table | A column family of one database. Its `TableKind` is a record in the default column family. |
+| A cell's key (row, family, qualifier, visibility) | One key: `esc(row) 00 01 family 00 qualifier 00 visibility`, where `esc` writes a `00` byte as `00 FF`. This is the byte-stuffing section 3.2 names as the alternative to HBase's layout. |
+| Key order | RocksDB's default bytewise comparator, which on these keys is Accumulo's order. No Java comparator: it would cost a JNI call per comparison. |
+| The timestamp | The first 8 bytes of the value, big-endian. One version per cell. |
+| A range | `[lower, upper)` on the encoded keys. `00 02` after an escaped row is above every cell of that row and below every longer row, which gives exclusive starts and inclusive ends. |
+| A batched read | One iterator, re-seeked for each range, on one snapshot. Every range is a prefix seek, because even one row holds several cells; a multi-get doesn't apply. |
+| Labels | Checked in the scanner (`RocksScan`), the only read path, with the neutral `VisibilityExpression`. |
+| Regex and timestamp filters | Checked in the scanner, after the label. |
+| Counters | The built-in `uint64add` merge operator: an 8-byte little-endian sum, added up on reads and compactions. |
+| A flush | One write batch across column families: atomic. |
+| Durability | `NONE`: no write-ahead log. `SYNC`: synced. Otherwise: written, not synced. |
+| Splits and servers | None: `addSplits` does nothing, `splitCount` is 0, `serverCount` is 1. |
+| Accounts and held labels | None: every label is held, and `ALL_HELD` filters nothing. |
+
+**Why the row is escaped.** Rows hold `00` and `01` bytes and can be empty (`RangeParityIT` uses such rows), so a flat key needs an unambiguous end of row. With `00 01` as the terminator and `00 FF` for a real `00`, a row sorts before every row it is a prefix of, and the cells of a row stay together. `RocksCodecTest` checks the order against Accumulo's on rows built from the bytes that matter (`00`, `01`, `02`, `FF`).
+
+### 10.3 Where it differs from Accumulo and HBase
+
+- **Labels are not a security boundary against file access.** They are enforced inside the store, below the SPI, so no code above it can read a cell its labels don't allow. But whoever can read the directory can read every cell.
+- **The last write wins.** Accumulo and HBase keep the version with the newest timestamp. The difference shows only when the same cell is written twice with timestamps out of order.
+- **Timestamped deletes read first.** A delete "at or before T" writes the buffered batch, reads the cell, and deletes it only if its timestamp is at or before T. The upper layers always pass the stored cell's own timestamp.
+- **A delete does not hide a later put.** On Accumulo and HBase a delete at T hides a put at T until compaction; here the put is simply stored.
+- **Counter tables refuse plain puts**, and other tables refuse counter deltas: merging onto a value that isn't 8 bytes silently restarts the count.
+- **A flush is atomic** across the statement tables, the indexes and the statistics. The other backends flush each table separately.
+- **One process per directory.** A second process is refused with RocksDB's lock error. Inside one JVM, stores of a directory share the open database (`RocksDatabase`).
+
+### 10.4 What the spike measured
+
+`rocksdbjni` 11.8.1 on JDK 25, macOS arm64 (2026-11-16). Each line was a question in the plan:
+
+| Question | Result |
+|---|---|
+| Does it load on JDK 25? | Yes; without `--enable-native-access=ALL-UNNAMED` it prints the restricted-method warning. |
+| `uint64add` | 8-byte little-endian; negative deltas work by wrap-around; a delete followed by merges restarts from the delta. |
+| 16 threads × 400 merges | Exact, also after a flush and a full compaction; one cell per counter. |
+| Reopening | Works with the merge operator on every column family, without knowing each table's kind. |
+| Dropping a family under a live iterator | The iterator keeps reading; a recreated family is empty. |
+| A second read-write open | Refused with a lock error. Read-only and secondary opens work while the database is open. |
+| 1,000 random prefix seeks on one iterator | 4–6 ms over 1.5M cells. |
+| 10,000 × read, then delete | 34 ms. |
+| The same program as a GraalVM native image | Built in 33 s, 25 MB, linked against system libraries only, and passed every check above. |
+
+### 10.5 Tests
+
+The store, Sail, loader and endpoint ITs run on it unchanged with `-Drya.test.backend=rocksdb`, except `LoaderIT`, which asserts splits and granted labels only on the backends that have them. The backend's own tests are `RocksCodecTest` (key order, decoding, range bounds) and `RocksStoreTest` (reopening, shared database, atomic flush, timestamped deletes, labels, concurrent counters, emptying a table under a scanner). All of them together take about two minutes, against about 25 on HBase.
+
+### 10.6 Not done
+
+- The endpoint cannot serve a directory while the loader writes to it. RocksDB's read-only and secondary opens would allow it.
+- Batch scans are single-threaded; `ScanSpec.threads` and `batchSize` are ignored.
+- No tuning: default options plus LZ4 compression, no bloom filters or prefix extractor.

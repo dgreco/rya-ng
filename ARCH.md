@@ -341,12 +341,15 @@ flowchart LR
     api["rya.api"] --> store["rya.store"]
     store --> accumulo["rya.accumulo"]
     store --> hbase["rya.hbase"]
+    store --> rocksdb["rya.rocksdb"]
     store --> sail["rya.sail"]
     sail --> sparql["rya.sparql"]
     accumulo --> sparql
     hbase --> sparql
+    rocksdb --> sparql
     accumulo --> loader["rya.loader"]
     hbase --> loader
+    rocksdb --> loader
     test["rya.test<br/>(test scope only)"] -.-> sail
     test -.-> sparql
     test -.-> loader
@@ -360,14 +363,15 @@ An arrow `A → B` means *B depends on A*. `rya.coverage` only exists under `-Pc
 | `rya.store` | The storage SPI (labelled cells, ranges, batched reads, writers, counters), and everything written once on top of it: writes, scans, statistics, graph markers, namespaces, the text and geo indexes, the trace | `Store`, `RyaStoreDAO`, `RyaStoreQueryEngine`, `EvalStatsMutations`, `RyaStoreEvalStatsDAO`, `IndexManager`, `IndexSearcher`, `StoreTrace` |
 | `rya.accumulo` | The Accumulo backend: each SPI call is one Accumulo call | `AccumuloStore`, `AccumuloCellWriter`, `TracingProxies` |
 | `rya.hbase` | The HBase backend: the cell mapping, labels, batched reads, counters | `HBaseStore`, `HBaseCodec`, `HBaseBatchScan`, `HBaseLabels` |
+| `rya.rocksdb` | The RocksDB backend: a store in a local directory, in the caller's process | `RocksStore`, `RocksCodec`, `RocksScan`, `RocksCellWriter`, `RocksDatabase` |
 | `rya.sail` | The RDF4J Sail: connection, optimizer pipeline, evaluation strategy, batched joins, inference, index-search rewrite | `RdfCloudTripleStore`, `RdfCloudTripleStoreConnection`, `RyaEvaluationStrategy`, `BatchedJoinStep`, `InferenceEngine`, `IndexSearchOptimizer`, `RyaSailFactory` |
 | `rya.sparql` | Spring Boot SPARQL 1.1 Protocol endpoint and query page | `SparqlController`, `RyaStoreConfiguration`, `RyaProperties`, `BlankNodeOutput` |
 | `rya.loader` | Command-line generator and parallel loader of synthetic data | `LoaderMain`, `Prepare`, `Loader`, `Verify`, `EntityGenerator` |
-| `rya.test` | One in-process cluster per backend per test JVM, and the store-level integration tests | `StoreITBase`, `TestBackends`, `MiniAccumuloSingleton`, `MiniHBaseSingleton` |
+| `rya.test` | One in-process cluster per backend per test JVM, and the store-level integration tests | `StoreITBase`, `TestBackends`, `MiniAccumuloSingleton`, `MiniHBaseSingleton`, `RocksDBTestBackend` |
 
 `rya.loader` writes through `rya.store` only. It uses `rya.sail` in its tests.
 
-This document describes rya-ng on Accumulo, the backend it was built for. [BACKENDS-STUDY.md](BACKENDS-STUDY.md) describes how the same cells, ranges, labels and counters map onto HBase.
+This document describes rya-ng on Accumulo, the backend it was built for. [BACKENDS-STUDY.md](BACKENDS-STUDY.md) describes how the same cells, ranges, labels and counters map onto HBase, and onto an embedded RocksDB database (its section 10).
 
 ---
 
@@ -1387,6 +1391,7 @@ flowchart LR
 1. **`Store`**, for `rya.backend`:
    - **Accumulo:** an `AccumuloStore` on a client built from `rya.accumulo.client-properties` (an `accumulo-client.properties` file, read with `AccumuloClients.fromFile`; if the file uses password authentication without a stored password, it comes from `rya.accumulo.password`, i.e. the `RYA_ACCUMULO_PASSWORD` environment variable), or from `rya.accumulo.instance`, `zookeepers`, `user` and `password`;
    - **HBase:** an `HBaseStore` from `rya.hbase.*`. It refuses to start when the account can't read a label of `rya.sparql.authorizations` (their canaries; see BACKENDS-STUDY.md 4.2).
+   - **RocksDB:** a `RocksStore` on the directory `rya.rocksdb.path`, which this process alone can open.
 2. **`StoreRdfConfiguration`**, from `RyaProperties` (`rya.*` in `application.yaml` or on the command line):
 
    | Setting | Configuration call |
@@ -1590,7 +1595,8 @@ sequenceDiagram
 
 - **Naming:** `*Test` classes are pure unit tests (surefire, `mvn test`). `*IT` classes need a cluster (failsafe, `mvn verify`).
 - **`MiniAccumuloSingleton`** and **`MiniHBaseSingleton`** start one in-process cluster per test JVM, on first use, and stop it with a shutdown hook. The HBase one runs `VisibilityController` with authorization on, and tests use it as a normal account, since the process user is a superuser who sees every cell.
-- **`StoreITBase`** gives each test, on the backend of `-Drya.test.backend` (`accumulo` by default, or `hbase`):
+- **`RocksDBTestBackend`** opens one RocksDB database per test JVM in a temporary directory. It needs no cluster, so the ITs run on it in seconds.
+- **`StoreITBase`** gives each test, on the backend of `-Drya.test.backend` (`accumulo` by default, `hbase` or `rocksdb`):
   - a `Store`;
   - a unique table prefix, whose tables are deleted afterwards;
   - `grantAuthorizations(...)`. Accumulo rejects scans with labels the user doesn't hold and HBase ignores them, so visibility tests must call it.
@@ -1605,6 +1611,7 @@ sequenceDiagram
   | `-Drya.test.indexes=true` | every test maintains both indexes, then `IndexVerifier` checks that each index table holds exactly the entries its statements call for |
   | `-Drya.test.backend=hbase` | the ITs run on the HBase mini cluster |
   | `-Drya.test.hbaseCounters=increment` | HBase counter tables use increments instead of the coprocessor |
+  | `-Drya.test.backend=rocksdb` | the ITs run on an embedded RocksDB database |
 
 - **Coverage:** `-Pcoverage` adds JaCoCo to both test phases and merges the reports in `rya.coverage`.
 

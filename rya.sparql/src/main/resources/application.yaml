@@ -30,6 +30,9 @@ rya:
     user: root
     # No default: pass it in the environment (RYA_ACCUMULO_PASSWORD), not on the command line.
     password:
+  # With rya.backend=rocksdb: the directory of the store. One process at a time can open it.
+  rocksdb:
+    path:
   table-prefix: rya_
   inference: false
   # How often the ontology is reloaded for inference.

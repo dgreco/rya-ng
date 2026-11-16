@@ -45,6 +45,7 @@ under the License.
         <module>rya.accumulo</module>
         <module>rya.hbase</module>
         <module>rya.hbase.coprocessor</module>
+        <module>rya.rocksdb</module>
         <module>rya.test</module>
         <module>rya.sail</module>
         <module>rya.loader</module>
@@ -82,6 +83,7 @@ under the License.
         <!-- HBase 3.0.0 with the plain (unshaded) client; its own Hadoop 3.4.3 is replaced by ${hadoop.version}
              everywhere, which is what runs on JDK 25 (see BACKENDS-STUDY.md, phase 0). -->
         <hbase.version>3.0.0</hbase.version>
+        <rocksdb.version>11.8.1</rocksdb.version>
         <rdf4j.version>6.1.0</rdf4j.version>
 
         <guava.version>33.7.2-jre</guava.version>
@@ -140,6 +142,17 @@ under the License.
                 <groupId>io.github.dgreco.rya</groupId>
                 <artifactId>rya.hbase</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.dgreco.rya</groupId>
+                <artifactId>rya.rocksdb</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <!-- Bundles the native library of every platform it supports. -->
+                <groupId>org.rocksdb</groupId>
+                <artifactId>rocksdbjni</artifactId>
+                <version>${rocksdb.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.github.dgreco.rya</groupId>
@@ -481,7 +494,7 @@ under the License.
                         </systemPropertyVariables>
                         <forkedProcessTimeoutInSeconds>1200</forkedProcessTimeoutInSeconds>
                         <!-- @{argLine}: the JaCoCo agent under -Pcoverage, resolved when the tests start. -->
-                        <argLine>@{argLine} -Xmx2G</argLine>
+                        <argLine>@{argLine} -Xmx2G --enable-native-access=ALL-UNNAMED</argLine>
                     </configuration>
                 </plugin>
             </plugins>

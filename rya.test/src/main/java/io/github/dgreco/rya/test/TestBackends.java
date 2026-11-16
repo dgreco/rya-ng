@@ -17,8 +17,9 @@ package io.github.dgreco.rya.test;
 
 import io.github.dgreco.rya.test.accumulo.AccumuloTestBackend;
 import io.github.dgreco.rya.test.hbase.HBaseTestBackend;
+import io.github.dgreco.rya.test.rocksdb.RocksDBTestBackend;
 
-/** The backend the integration tests run on: {@code -Drya.test.backend=accumulo} (the default) or {@code hbase}. */
+/** The backend the integration tests run on: {@code -Drya.test.backend=accumulo} (the default), {@code hbase} or {@code rocksdb}. */
 public final class TestBackends {
     /** The system property naming the backend. */
     public static final String PROPERTY = "rya.test.backend";
@@ -40,6 +41,7 @@ public final class TestBackends {
             current = switch (id()) {
                 case "accumulo" -> new AccumuloTestBackend();
                 case "hbase" -> new HBaseTestBackend();
+                case "rocksdb" -> new RocksDBTestBackend();
                 default -> throw new IllegalArgumentException("Unknown test backend '" + id() + "' (" + PROPERTY + ")");
             };
         }

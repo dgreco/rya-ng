@@ -206,6 +206,29 @@ class LoaderOptionsTest {
     }
 
     @Test
+    void rocksdbIsSelectedByItsDirectory() {
+        final LoaderOptions byPath = parse("check", "--rocksdb-path", "/data/rya");
+        assertEquals("rocksdb", byPath.backend());
+        assertEquals(Path.of("/data/rya"), byPath.rocksdbPath());
+
+        final LoaderOptions byEnv = LoaderOptions.parse(new String[] {"check"},
+                Map.of("RYA_BACKEND", "rocksdb", "RYA_ROCKSDB_PATH", "/env/rya"));
+        assertEquals("rocksdb", byEnv.backend());
+        assertEquals(Path.of("/env/rya"), byEnv.rocksdbPath());
+
+        // The option wins over the environment, and --backend over both.
+        assertEquals(Path.of("/data/rya"), LoaderOptions.parse(new String[] {"check", "--rocksdb-path", "/data/rya"},
+                Map.of("RYA_ROCKSDB_PATH", "/env/rya")).rocksdbPath());
+        assertEquals("accumulo", LoaderOptions.parse(new String[] {"check", "--backend", "accumulo"},
+                Map.of("RYA_BACKEND", "rocksdb")).backend());
+
+        final IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--backend", "rocksdb"));
+        assertTrue(e.getMessage().contains("--rocksdb-path"), e.getMessage());
+        // A dry run needs no store.
+        assertEquals("rocksdb", parse("dry-run", "--backend", "rocksdb", "--entities", "10").backend());
+    }
+
+    @Test
     void rejectsBadHBaseSettings(@TempDir final Path dir) throws IOException {
         final Path file = dir.resolve("hbase.properties");
         Files.writeString(file, "hbase.conf.hbase.zookeeper.quorum=zk1\n");
@@ -213,7 +236,7 @@ class LoaderOptionsTest {
                 () -> parse("check", "--backend", "accumulo", "--hbase-properties", file.toString()));
         assertTrue(e.getMessage().contains("--hbase-properties"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--backend", "cassandra"));
-        assertTrue(e.getMessage().contains("accumulo or hbase"), e.getMessage());
+        assertTrue(e.getMessage().contains("accumulo, hbase or rocksdb"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> parse("check", "--hbase-properties", dir.resolve("none").toString()));
         assertTrue(e.getMessage().contains("can't read"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class,

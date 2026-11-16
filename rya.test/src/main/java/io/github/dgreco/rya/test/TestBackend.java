@@ -24,7 +24,7 @@ import io.github.dgreco.rya.store.spi.Store;
 /** One backend's shared test cluster, as {@link StoreITBase} uses it. */
 public interface TestBackend {
 
-    /** The backend's id ({@code accumulo}, {@code hbase}). */
+    /** The backend's id ({@code accumulo}, {@code hbase}, {@code rocksdb}). */
     String id();
 
     /**

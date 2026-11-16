@@ -23,14 +23,14 @@ under the License. -->
 [![license](https://img.shields.io/github/license/dgreco/rya-ng?color=blue)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-25%2B-orange)](#requirements)
 
-rya-ng is an RDF triple store on [Apache Accumulo](https://accumulo.apache.org/) or [Apache HBase](https://hbase.apache.org/). It has two parts:
+rya-ng is an RDF triple store on [Apache Accumulo](https://accumulo.apache.org/) or [Apache HBase](https://hbase.apache.org/), or, without a cluster, on an embedded [RocksDB](https://rocksdb.org/) database in a local directory. It has two parts:
 - an [RDF4J](https://rdf4j.org/) Sail you can embed;
 - a standalone [SPARQL Protocol](https://www.w3.org/TR/sparql11-protocol/) endpoint for queries and updates.
 
 It supports:
 - RDF 1.2 and SPARQL 1.2: triple terms, reified and annotated statements, and literals with a text direction (see [RDF 1.2](#rdf-12));
 - named graphs;
-- cell-level visibility labels and scan authorizations, with the same meaning on both backends;
+- cell-level visibility labels and scan authorizations, with the same meaning on every backend;
 - optional query-time OWL/RDFS inference;
 - join ordering driven by statistics that are kept up to date on every write;
 - batched join lookups: the matches for many left-hand rows are fetched in one batched read, and so are all the attributes a query reads for many entities, `OPTIONAL` ones included;
@@ -58,6 +58,9 @@ mvn install -DskipTests -DskipITs
 mvn verify -pl rya.test,rya.sail,rya.loader,rya.sparql -Drya.test.backend=hbase
 mvn verify -pl rya.test -Drya.test.backend=hbase -Drya.test.hbaseCounters=increment
 
+# ...or on RocksDB, which needs no cluster and runs them in about two minutes
+mvn verify -pl rya.rocksdb,rya.test,rya.sail,rya.loader,rya.sparql -Drya.test.backend=rocksdb
+
 # one test class: install the modules once, then run a single module
 mvn -pl rya.api test -Dtest=TypeEncodingDelimiterTest
 mvn -pl rya.test verify -Dit.test=RyaStoreDAOIT -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false
@@ -66,7 +69,7 @@ mvn -pl rya.test verify -Dit.test=RyaStoreDAOIT -Dtest=none -Dsurefire.failIfNoS
 mvn clean verify -Pcoverage
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) runs `mvn clean verify -Pcoverage` on every push and pull request, and the integration tests again on HBase:
+GitHub Actions (`.github/workflows/ci.yml`) runs `mvn clean verify -Pcoverage` on every push and pull request, and the integration tests again on HBase and on RocksDB:
 - Each run's summary lists the tests and the coverage per module, and the HTML coverage report is attached to the run.
 - For pushes to `main`, the report is published at <https://dgreco.github.io/rya-ng/coverage/>. The coverage and tests badges above show its line coverage and test count.
 
@@ -81,6 +84,7 @@ The endpoint is packaged as `rya.sparql/target/rya.sparql-<version>.jar`.
 | `rya.accumulo` | The Accumulo backend |
 | `rya.hbase` | The HBase backend |
 | `rya.hbase.coprocessor` | The region observer for HBase's counter table, installed on the region servers |
+| `rya.rocksdb` | The RocksDB backend: a store in a local directory, without a cluster |
 | `rya.sail` | RDF4J Sail (`RdfCloudTripleStore`), query planning, inference, and `RyaSailFactory` |
 | `rya.sparql` | Spring Boot SPARQL endpoint |
 | `rya.loader` | Synthetic data generator and parallel loader, for stress tests |
@@ -88,7 +92,7 @@ The endpoint is packaged as `rya.sparql/target/rya.sparql-<version>.jar`.
 
 ## Storage backends
 
-`rya.backend` (endpoint) or `--backend` (loader) picks the store: `accumulo` (the default) or `hbase`. Both behave the same, labels included; the integration tests run on both. One difference: asking for labels the account doesn't hold fails on Accumulo, but returns fewer rows on HBase. The endpoint checks its labels at startup on HBase; code that embeds the Sail must grant its account the labels it asks for. Data is not moved between them.
+`rya.backend` (endpoint) or `--backend` (loader) picks the store: `accumulo` (the default), `hbase` or `rocksdb`. They behave the same, labels included; the integration tests run on all three. One difference: asking for labels the account doesn't hold fails on Accumulo, but returns fewer rows on HBase. The endpoint checks its labels at startup on HBase; code that embeds the Sail must grant its account the labels it asks for. Data is not moved between them.
 
 **HBase** needs:
 - **HBase 3.0.x**, with `org.apache.hadoop.hbase.security.visibility.VisibilityController` in both `hbase.coprocessor.master.classes` and `hbase.coprocessor.region.classes`, and `hbase.security.authorization=true`. Without that setting HBase ignores labels; rya-ng then refuses labelled data.
@@ -102,6 +106,20 @@ The endpoint is packaged as `rya.sparql/target/rya.sparql-<version>.jar`.
   - Configure the same mode for every endpoint and loader of a store. A writer reads the counter table's mode from its descriptor, but an account that may not read descriptors (with HBase's `AccessController`, that needs ADMIN or CREATE) falls back to its configured mode. Writing in the wrong mode loses counts.
 - Literals of more than about 32 KB (rows over 32,767 bytes, HBase's limit) are refused.
 - **Finding the cluster:** give the cluster's `hbase-site.xml` (`rya.hbase.site`), or only a ZooKeeper quorum (`rya.hbase.conf[hbase.zookeeper.quorum]`), in which case rya-ng finds the cluster through ZooKeeper. HBase 3's client otherwise asks its masters (`hbase.client.bootstrap.servers`, by default `localhost:16000`).
+
+**RocksDB** is a store in a local directory, in the endpoint's or the loader's own process: nothing to install or run besides rya-ng.
+
+```bash
+java -jar rya.sparql/target/rya.sparql-1.0.0-SNAPSHOT.jar --rya.backend=rocksdb --rya.rocksdb.path=/var/lib/rya-ng
+rya.loader/run.sh prepare --rocksdb-path /var/lib/rya-ng --table-prefix rya_ --triples 10M
+```
+
+- **One process at a time** can open the directory. Stop the endpoint to run the loader on it, and load with `--threads`, not with one process per `--part`.
+- **Labels are checked by rya-ng, not by a server.** There are no accounts, so every label counts as held: a request reads what its `auths` allow, up to `rya.sparql.authorizations`. Whoever can read the directory can read every statement, so protect it with file permissions.
+- **A flush is atomic:** the statement tables, the indexes and the statistics of the writes since the last flush are stored together or not at all.
+- **Rewriting a statement** keeps the last write. Accumulo and HBase keep the write with the newest timestamp, which differs only when timestamps are set out of order.
+- Splits mean nothing here: `prepare` plans none.
+- It is one database on one machine: no replication, and its size and speed are that machine's.
 
 ## Running the SPARQL endpoint
 
@@ -145,7 +163,8 @@ Instead of the connection arguments, `--rya.accumulo.client-properties` can poin
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `rya.backend` | `accumulo` | The store: `accumulo` or `hbase` |
+| `rya.backend` | `accumulo` | The store: `accumulo`, `hbase` or `rocksdb` |
+| `rya.rocksdb.path` | | With `rocksdb`: the directory of the store, created if missing |
 | `rya.hbase.site` | `[]` | `hbase-site.xml` files (and `core-site.xml` for Kerberos) |
 | `rya.hbase.conf[KEY]` | | Any HBase client setting, for example `rya.hbase.conf[hbase.zookeeper.quorum]=zk1,zk2` |
 | `rya.hbase.user` | | With simple authentication only, the account to connect as |
@@ -181,9 +200,10 @@ Or with Docker, which needs neither a JDK nor Maven. It runs the same throwaway 
 ```bash
 docker compose up --build                     # then open http://localhost:8080/
 RYA_BACKEND=hbase docker compose up --build   # on HBase instead of Accumulo
+RYA_BACKEND=rocksdb docker compose up --build # on RocksDB: the data is kept in a volume
 ```
 
-The first build downloads the dependencies and takes several minutes. `RYA_PORT` changes the published port. The data is lost when the container stops, so this is for trying rya-ng out, not for running it.
+The first build downloads the dependencies and takes several minutes. `RYA_PORT` changes the published port. On Accumulo and HBase the data is lost when the container stops. On RocksDB it is kept in the `rya-data` volume until `docker compose down -v`. Either way this is for trying rya-ng out, not for running it.
 
 ### Query page
 
@@ -276,7 +296,7 @@ curl http://localhost:8080/sparql --data-urlencode 'query=SELECT * WHERE { ?s ?p
 - **Closing:** the stream always ends with an `end` event whose status is `ok`, `error` or `timeout`.
 - **Size:** a trace reports up to 1,000 scans and flushes one by one; the summary counts them all.
 
-**Without the endpoint:** the same trace is available from Java. Both backends report to the thread's trace (`AccumuloStore` wraps the Accumulo client it is given), so tracing the thread that runs a query is enough:
+**Without the endpoint:** the same trace is available from Java. Every backend reports to the thread's trace (`AccumuloStore` wraps the Accumulo client it is given), so tracing the thread that runs a query is enough:
 
 ```java
 try (StoreTrace.Scope scope = StoreTrace.start(event -> System.out.println(event));
@@ -305,7 +325,7 @@ ORDER BY DESC(?statements)
 
 ## RDF 1.2
 
-rya-ng stores and queries RDF 1.2 data, on both backends:
+rya-ng stores and queries RDF 1.2 data, on every backend:
 
 ```sparql
 # An annotation says something about a statement. ~ names it; without ~ it is a blank node.
@@ -419,9 +439,10 @@ Without an index, these filters still work: they check every candidate, so they 
 Each entity depends only on the seed and its number, so any process can generate any part of the dataset, and writing a part again produces the same keys.
 
 ```bash
-rya.loader/configure.sh   # once: asks for the store (Accumulo or HBase) and the connection, writes a file in ~/.rya-ng
+rya.loader/configure.sh   # once: asks for the store (Accumulo, HBase or RocksDB) and the connection, writes a file in ~/.rya-ng
 R=rya.loader/run.sh       # builds the jar on first use; --build rebuilds it
 C="--accumulo-properties $HOME/.rya-ng/accumulo-client.properties"   # HBase: C="--hbase-properties $HOME/.rya-ng/hbase.properties"
+                                                                     # RocksDB: C="--rocksdb-path $HOME/.rya-ng/rocksdb"
 
 $R check $C                                                # connection, servers, the account's rights
 $R dry-run --triples 1B --text-index --geo-index           # no cluster: speed, bytes per triple, network ceiling
@@ -468,7 +489,7 @@ try (AccumuloClient client = Accumulo.newClient().from("accumulo-client.properti
 }
 ```
 
-On HBase, wrap a connection the same way: `HBaseStore.wrap(connection, user)` (the caller closes the connection), or open a store of either backend from its settings with `Stores.open("hbase", settings)` (see `HBaseStoreProvider` for the settings).
+On RocksDB, open the directory: `RocksStore.open(Path.of("/var/lib/rya-ng"))` (close the store when done). On HBase, wrap a connection the same way: `HBaseStore.wrap(connection, user)` (the caller closes the connection), or open a store of either backend from its settings with `Stores.open("hbase", settings)` (see `HBaseStoreProvider` for the settings).
 
 ## Notes
 

@@ -29,9 +29,10 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 /**
  * Settings under {@code rya.*}.
  *
- * @param backend the storage backend: {@code accumulo} or {@code hbase}.
+ * @param backend the storage backend: {@code accumulo}, {@code hbase} or {@code rocksdb}.
  * @param accumulo how to reach Accumulo, when the backend is Accumulo.
  * @param hbase how to reach HBase, when the backend is HBase.
+ * @param rocksdb where the store is, when the backend is RocksDB.
  * @param tablePrefix prefix of the Rya tables, e.g. {@code rya_}.
  * @param inference whether queries use OWL/RDFS inference.
  * @param inferenceRefresh how often the ontology is reloaded; changes to subClassOf,
@@ -53,6 +54,7 @@ public record RyaProperties(
         @DefaultValue("accumulo") String backend,
         Accumulo accumulo,
         @DefaultValue HBase hbase,
+        @DefaultValue RocksDB rocksdb,
         @DefaultValue("rya_") String tablePrefix,
         @DefaultValue("false") boolean inference,
         @DefaultValue("5m") Duration inferenceRefresh,
@@ -75,6 +77,14 @@ public record RyaProperties(
             String zookeepers,
             String user,
             String password) {
+    }
+
+    /**
+     * A RocksDB store: a local directory, opened by this process alone.
+     *
+     * @param path the directory of the database, created if it doesn't exist
+     */
+    public record RocksDB(String path) {
     }
 
     /**

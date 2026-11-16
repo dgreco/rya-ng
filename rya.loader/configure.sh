@@ -36,11 +36,14 @@ Asks which store the loader writes to and how to connect, and writes a connectio
             loader and the endpoint then read it from RYA_ACCUMULO_PASSWORD when they start.
   HBase     a file of HBase settings (run.sh <command> --hbase-properties FILE). HBase has no
             password: it uses simple authentication or Kerberos.
+  RocksDB   no file: a store in a local directory needs only that directory
+            (run.sh <command> --rocksdb-path DIR).
 
   --output FILE   where to write the file (default: ~/.rya-ng/accumulo-client.properties, or
                   ~/.rya-ng/hbase.properties for HBase)
   --force         overwrite FILE if it exists
-  --defaults      accept every default without asking. RYA_BACKEND=hbase picks HBase.
+  --defaults      accept every default without asking. RYA_BACKEND=hbase picks HBase, and
+                  RYA_BACKEND=rocksdb RocksDB (in RYA_ROCKSDB_PATH, or ~/.rya-ng/rocksdb).
                   RYA_ACCUMULO_ZOOKEEPERS, RYA_ACCUMULO_INSTANCE and RYA_ACCUMULO_USER, or
                   RYA_HBASE_SITE and RYA_HBASE_USER, preset the defaults; the Accumulo password
                   is stored only if RYA_ACCUMULO_PASSWORD is set.
@@ -48,7 +51,7 @@ Asks which store the loader writes to and how to connect, and writes a connectio
   --no-check      don't test it
 
 Answers can also be piped in, one per line (an empty line keeps the default). The first
-question is the store: 1 for Accumulo, 2 for HBase.
+question is the store: 1 for Accumulo, 2 for HBase, 3 for RocksDB.
 EOF
 }
 
@@ -256,11 +259,38 @@ $defaults || echo "rya-ng loader: connection setup. Press Enter to keep the valu
 section "Store"
 
 backend_default=1
-case "$(printf '%s' "${RYA_BACKEND:-}" | tr '[:upper:]' '[:lower:]')" in hbase) backend_default=2 ;; esac
+case "$(printf '%s' "${RYA_BACKEND:-}" | tr '[:upper:]' '[:lower:]')" in hbase) backend_default=2 ;; rocksdb) backend_default=3 ;; esac
 choose backend_choice "Which store does the loader write to?" "$backend_default" \
   "Accumulo" \
-  "HBase (with VisibilityController and hbase.security.authorization=true)"
-if [ "$backend_choice" = 2 ]; then backend=hbase; else backend=accumulo; fi
+  "HBase (with VisibilityController and hbase.security.authorization=true)" \
+  "RocksDB (a store in a local directory, without a cluster)"
+case "$backend_choice" in 2) backend=hbase ;; 3) backend=rocksdb ;; *) backend=accumulo ;; esac
+
+# ---- RocksDB ---------------------------------------------------------------------------------------
+
+if [ "$backend" = rocksdb ]; then
+  section "RocksDB directory"
+  note "One process at a time can open the directory: stop the endpoint while loading."
+  note "There are no accounts: whoever can read the directory can read every statement."
+  ask rocksdb_path "Directory of the database (created if missing)" "${RYA_ROCKSDB_PATH:-$HOME/.rya-ng/rocksdb}" not_empty
+  if [ "$check" = ask ]; then
+    yesno test_now "Open it now (the loader's check command; builds the loader first if needed)" y
+    $test_now && check=yes || check=no
+  fi
+  if [ "$check" = yes ]; then
+    echo >&2
+    "$HERE/run.sh" check --rocksdb-path "$rocksdb_path" || {
+      echo "The directory could not be opened; fix it and run the wizard again." >&2
+      exit 1
+    }
+  fi
+  if ! $defaults; then
+    echo >&2
+    echo "Nothing to write: use the directory with" >&2
+    echo "  $HERE/run.sh <command> --rocksdb-path $rocksdb_path ..." >&2
+  fi
+  exit 0
+fi
 
 if [ -z "$output" ]; then
   if [ "$backend" = hbase ]; then output="$HOME/.rya-ng/hbase.properties"; else output="$HOME/.rya-ng/accumulo-client.properties"; fi

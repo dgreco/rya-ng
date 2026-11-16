@@ -67,7 +67,7 @@ public final class LoaderOptions {
     private static final Set<String> FLAGS = Set.of("text-index", "geo-index", "resume", "grant-auths", "help");
     /** Every option with a value. */
     private static final Set<String> VALUED = Set.of("table-prefix", "accumulo-properties", "zookeepers", "instance", "user",
-            "backend", "hbase-properties", "hbase-site", "hbase-conf", "hbase-user", "hbase-counters", "hbase-counters-jar",
+            "backend", "rocksdb-path", "hbase-properties", "hbase-site", "hbase-conf", "hbase-user", "hbase-counters", "hbase-counters-jar",
             "hbase-labels-table", "grant-to",
             "text-predicates", "stats", "entities", "triples", "start-entity", "end-entity", "seed", "timestamp", "graphs",
             "default-graph-fraction", "labels", "labelled-fraction", "geo-scale", "polygon-fraction", "text-scale",
@@ -146,11 +146,15 @@ public final class LoaderOptions {
 
     private void validate() {
         final String backend = backend();
-        if (!backend.equals("accumulo") && !backend.equals("hbase")) {
-            throw new IllegalArgumentException("--backend must be accumulo or hbase, not " + backend);
+        if (!backend.equals("accumulo") && !backend.equals("hbase") && !backend.equals("rocksdb")) {
+            throw new IllegalArgumentException("--backend must be accumulo, hbase or rocksdb, not " + backend);
         }
-        if (backend.equals("accumulo") && hbaseProperties() != null) {
-            throw new IllegalArgumentException("--hbase-properties is for HBase, but --backend is accumulo");
+        if (!backend.equals("hbase") && hbaseProperties() != null) {
+            throw new IllegalArgumentException("--hbase-properties is for HBase, but --backend is " + backend);
+        }
+        if (backend.equals("rocksdb") && command != Command.DRY_RUN && rocksdbPath() == null) {
+            throw new IllegalArgumentException("The RocksDB backend needs the directory of its database: --rocksdb-path DIR "
+                    + "(or RYA_ROCKSDB_PATH)");
         }
         if (backend.equals("hbase") && command != Command.DRY_RUN) {
             hbaseSettings(); // reads the file and checks the values
@@ -207,8 +211,9 @@ public final class LoaderOptions {
     }
 
     /**
-     * {@code accumulo} (the default) or {@code hbase}: {@code --backend}, else {@code hbase} when
-     * {@code --hbase-properties} is given, else {@code RYA_BACKEND}.
+     * {@code accumulo} (the default), {@code hbase} or {@code rocksdb}: {@code --backend}, else
+     * {@code hbase} when {@code --hbase-properties} is given, else {@code rocksdb} when
+     * {@code --rocksdb-path} is, else {@code RYA_BACKEND}.
      */
     public String backend() {
         final String explicit = values.get("backend");
@@ -218,8 +223,18 @@ public final class LoaderOptions {
         if (hbaseProperties() != null) {
             return "hbase";
         }
+        if (values.get("rocksdb-path") != null) {
+            return "rocksdb";
+        }
         final String fromEnv = env.get("RYA_BACKEND");
         return fromEnv == null || fromEnv.isBlank() ? "accumulo" : fromEnv.trim().toLowerCase(Locale.ROOT);
+    }
+
+    /** The directory of the RocksDB database: {@code --rocksdb-path}, else {@code RYA_ROCKSDB_PATH}; null if not given. */
+    public Path rocksdbPath() {
+        final String given = values.get("rocksdb-path");
+        final String p = given != null ? given : env.get("RYA_ROCKSDB_PATH");
+        return p == null || p.isBlank() ? null : Path.of(p.trim());
     }
 
     /** The HBase settings file ({@code rya.loader/configure.sh} writes one); null if not given. */
@@ -679,7 +694,7 @@ public final class LoaderOptions {
                   labels    give an account labels: --labels A,B [--grant-to ACCOUNT]; on HBase also registers them
                             and writes the canaries the endpoint checks at startup (needs an HBase superuser)
 
-                Backend: --backend accumulo|hbase (default accumulo; also RYA_BACKEND).
+                Backend: --backend accumulo|hbase|rocksdb (default accumulo; also RYA_BACKEND).
                 Accumulo: --accumulo-properties FILE (rya.loader/configure.sh writes one), or --zookeepers,
                   --instance, --user plus the password in the RYA_ACCUMULO_PASSWORD environment variable (also
                   RYA_ACCUMULO_ZOOKEEPERS/_INSTANCE/_USER/_PROPERTIES). A properties file without auth.token
@@ -691,6 +706,9 @@ public final class LoaderOptions {
                   --hbase-counters-jar hdfs:///PATH (for prepare, when the coprocessor isn't on the region servers'
                   classpath), --hbase-labels-table T. Options win over the file, the file over RYA_HBASE_SITE,
                   RYA_HBASE_CONF and RYA_HBASE_USER.
+                RocksDB: --rocksdb-path DIR (selects RocksDB; also RYA_ROCKSDB_PATH): a store in a local directory,
+                  without a cluster. One process at a time can open it: stop the endpoint while loading, and use
+                  --threads instead of --part.
 
                 Dataset (repeat on every command; prepare prints the exact arguments):
                   --table-prefix P          required; tables P<spo|po|osp|ns|eval|graphs|text|geo>
