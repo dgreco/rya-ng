@@ -31,8 +31,7 @@ import java.util.function.Supplier;
  *     // run a query or an update on this thread
  * }   // reports the totals
  * </pre>
- * The backends report their operations to {@link #current()} (Accumulo through the traced
- * client of {@code AccumuloTrace.wrap}). A trace belongs to the thread that started it, and
+ * The backends report their operations to {@link #current()} (see {@link TracedScans}). A trace belongs to the thread that started it, and
  * costs nothing when none is running.
  */
 public final class StoreTrace {

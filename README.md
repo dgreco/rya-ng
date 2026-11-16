@@ -327,7 +327,7 @@ curl http://localhost:8080/sparql --data-urlencode 'query=SELECT * WHERE { ?s ?p
 - **Closing:** the stream always ends with an `end` event whose status is `ok`, `error` or `timeout`.
 - **Size:** a trace reports up to 1,000 scans and flushes one by one; the summary counts them all.
 
-**Without the endpoint:** the same trace is available from Java. Every backend reports to the thread's trace (`AccumuloStore` wraps the Accumulo client it is given), so tracing the thread that runs a query is enough:
+**Without the endpoint:** the same trace is available from Java. Every backend's store reports to the thread's trace, so tracing the thread that runs a query is enough:
 
 ```java
 try (StoreTrace.Scope scope = StoreTrace.start(event -> System.out.println(event));
