@@ -899,6 +899,7 @@ flowchart TD
     o5 --> o6["QueryJoinOptimizer<br/>join order from Rya statistics (section 11)"]
     o6 --> o6b["★ TripleTermOptimizer.order<br/>each triple-term pattern right after what binds its term (section 12.7)"]
     o6b --> o7["IterativeEvaluationOptimizer, FilterOptimizer,<br/>FilterInValuesOptimizer, FilterOptimizer,<br/>OrderLimitOptimizer"]
+    o7 --> o8["★ LeftDeepJoinOptimizer<br/>right-nested joins become left-deep (section 13)"]
 ```
 
 **Where the Rya steps sit:**
@@ -973,6 +974,8 @@ The statistics count a triple term like any other object, and estimate a `Triple
 ### 13.1 The problem
 
 With a nested-loop join, every row from the left side costs one Accumulo round trip for the right side. A left side of 100,000 rows means 100,000 small scans, one after the other.
+
+RDF4J's join optimizer makes this worse for three patterns or more. It nests the ordered joins to the right, `Join(a, Join(b, c))`, so the inner join is evaluated once per row of `a`, with a single row on its left: there is nothing to batch. `LeftDeepJoinOptimizer`, the last step of the pipeline, rotates them to `Join(Join(a, b), c)`. RDF4J evaluates both shapes as the same nested loops, so the results and their order are the same, but now every join has all the rows on its left and a statement pattern on its right. It leaves alone what RDF4J doesn't evaluate as a nested loop over the left bindings: merge joins, scope changes, subqueries, and the join subclasses inference builds.
 
 ### 13.2 The idea
 
