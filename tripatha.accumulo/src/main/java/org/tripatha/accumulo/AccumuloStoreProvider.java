@@ -18,6 +18,8 @@ package org.tripatha.accumulo;
 import java.nio.file.Path;
 import java.util.Properties;
 
+import org.apache.accumulo.core.client.Accumulo;
+
 import org.tripatha.store.spi.Store;
 import org.tripatha.store.spi.StoreProvider;
 
@@ -30,7 +32,12 @@ import org.tripatha.store.spi.StoreProvider;
  */
 public final class AccumuloStoreProvider implements StoreProvider {
     public static final String ID = "accumulo";
+    /** An {@code accumulo-client.properties} file. When set, the instance, ZooKeepers and user below are ignored. */
     public static final String CLIENT_PROPERTIES = "accumulo.client-properties";
+    public static final String INSTANCE = "accumulo.instance";
+    public static final String ZOOKEEPERS = "accumulo.zookeepers";
+    public static final String USER = "accumulo.user";
+    /** The password; with a properties file, used only when the file leaves it out. */
     public static final String PASSWORD = "accumulo.password";
 
     @Override
@@ -41,9 +48,21 @@ public final class AccumuloStoreProvider implements StoreProvider {
     @Override
     public Store open(final Properties settings) {
         final String file = settings.getProperty(CLIENT_PROPERTIES);
-        if (file == null || file.isBlank()) {
-            throw new IllegalArgumentException(CLIENT_PROPERTIES + " is not set");
+        if (file != null && !file.isBlank()) {
+            return AccumuloStore.owning(AccumuloClients.fromFile(Path.of(file.trim()), settings.getProperty(PASSWORD)));
         }
-        return AccumuloStore.owning(AccumuloClients.fromFile(Path.of(file), settings.getProperty(PASSWORD)));
+        return AccumuloStore.owning(Accumulo.newClient()
+                .to(required(settings, INSTANCE), required(settings, ZOOKEEPERS))
+                .as(required(settings, USER), required(settings, PASSWORD))
+                .build());
+    }
+
+    private static String required(final Properties settings, final String key) {
+        final String value = settings.getProperty(key);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("Set " + CLIENT_PROPERTIES + ", or " + INSTANCE + ", " + ZOOKEEPERS + ", " + USER
+                    + " and " + PASSWORD + ": " + key + " is missing");
+        }
+        return value;
     }
 }

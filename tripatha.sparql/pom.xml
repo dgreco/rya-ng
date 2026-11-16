@@ -59,14 +59,20 @@ under the License.
         <dependency>
             <groupId>org.tripatha</groupId>
             <artifactId>tripatha.accumulo</artifactId>
+            <!-- Found through the StoreProvider service: the endpoint compiles without it. -->
+            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.tripatha</groupId>
             <artifactId>tripatha.hbase</artifactId>
+            <!-- Found through the StoreProvider service: the endpoint compiles without it. -->
+            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.tripatha</groupId>
             <artifactId>tripatha.rocksdb</artifactId>
+            <!-- Found through the StoreProvider service: the endpoint compiles without it. -->
+            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
