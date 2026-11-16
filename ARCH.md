@@ -1452,7 +1452,7 @@ flowchart TD
 - **`rya-trace.js`** is the resizable trace panel on the right ([section 17.5](#175-tracing-a-query)).
 - **`rya-sparql12.js`** adds RDF 1.2 to YASGUI 4, which knows SPARQL 1.1 only, by replacing a few of its methods at load time (YASGUI's files are not changed):
   - `Yasqe.checkSyntax`: a small tokenizer of our own looks for SPARQL 1.2 syntax. A query that has some loses YASGUI's error marker, is highlighted by that tokenizer (a CodeMirror overlay), and gets its query-or-update kind from it. Other queries are left to YASGUI.
-  - YASR's response parser: triple terms in SPARQL JSON are turned into bindings the table can hold, and N-Triples is read by our own N-Triples 1.2 reader. `rya-ui.js` therefore asks for graph results in N-Triples.
+  - YASR's response parser: triple terms in SPARQL JSON are turned into bindings the table can hold, and N-Triples is read by our own N-Triples 1.2 reader. `rya-ui.js` asks for graph results in Turtle, and in N-Triples when the query uses SPARQL 1.2 syntax. When a Turtle result holds RDF 1.2 values (RDF4J starts it with `@version "1.2"`, and only then), it remembers the query and runs it once more in N-Triples.
   - The table plugin's cell renderer: triple terms as `<<( s p o )>>`, and the direction of directional literals.
 - **`rya-map.js`** draws `geo:wktLiteral` results on a map.
 - **`wkt.js`** turns WKT into GeoJSON.

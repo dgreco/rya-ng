@@ -23,7 +23,7 @@
  *    as invalid, is highlighted by a tokenizer of our own, and is sent as a query or an update
  *    according to our own reading of it. Queries without that syntax are left to YASGUI.
  *  - the results: triple terms and literals with a base direction are shown in the table, and
- *    graph results are read by an N-Triples 1.2 reader, since YASGUI's own can't read either.
+ *    graph results holding them are read by an N-Triples 1.2 reader, since YASGUI's own can't read either.
  *
  * Load it after yasgui.min.js and before rya-ui.js.
  */
@@ -412,6 +412,11 @@
         };
     }
 
+    /** @return whether a response is Turtle holding RDF 1.2 values: RDF4J starts those, and only those, with a version line. */
+    function isModernTurtle(contentType, data) {
+        return typeof data === "string" && (contentType || "").indexOf("turtle") >= 0 && /^@version\s+"1\.2"/m.test(data);
+    }
+
     /** The results: see the top of this file. */
     function installResults(Yasr) {
         // YASR's response parser isn't exported: take its class from a response set on a stand-in.
@@ -434,6 +439,12 @@
                         } finally {
                             delete this.getData;
                         }
+                    }
+                    if (isModernTurtle(type, data)) {
+                        // YASR's Turtle reader stops at RDF 1.2: show nothing while rya-ui.js asks again in N-Triples.
+                        this.json = { head: { vars: ["subject", "predicate", "object"] }, results: { bindings: [] } };
+                        this.type = "ttl";
+                        return true;
                     }
                     if (type.indexOf("n-triples") >= 0) {
                         this.json = { head: { vars: ["subject", "predicate", "object"] }, results: { bindings: parseNTriples(data) } };
@@ -490,7 +501,8 @@
         normaliseResults: normaliseResults,
         termText: termText,
         languageTag: languageTag,
-        /** The content type graph results must be asked in, for the reader above. */
+        isModernTurtle: isModernTurtle,
+        /** The content type graph results with RDF 1.2 values must be asked in, for the reader above. */
         GRAPH_RESULTS: "application/n-triples",
     };
     if (window.Yasgui) {

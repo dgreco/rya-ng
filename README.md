@@ -188,7 +188,7 @@ Open the server's root URL (for example `http://localhost:8080/`) for a query pa
 
 **Result tabs:**
 - **Table** and **Response**, as in YASGUI. The table shows triple terms as `<<( s p o )>>` and marks a literal's text direction (`"..."@ar--rtl`).
-- `CONSTRUCT` and `DESCRIBE` results are fetched as N-Triples, which the page can read with triple terms in them, so that is what **Response** shows.
+- `CONSTRUCT` and `DESCRIBE` results are fetched as Turtle. When a result holds triple terms or directions, the page fetches it again as N-Triples, which it can read with those in them, so that is what **Response** then shows. A query written in SPARQL 1.2 is fetched as N-Triples straight away.
 - **Map** draws every `geo:wktLiteral` in the results on an OpenStreetMap background. The background tiles need internet access; the rest of the page doesn't.
 - **Chart** shows bar, line and pie charts of numeric results.
 

@@ -150,7 +150,7 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
   - Always close the scope in a `finally`: server threads are pooled.
 - **Query page** (`src/main/resources/static`): `index.html` plus `ui/` (our code: `rya-ui.js` sets up YASGUI on `sparql`, `rya-map.js` is the Map result tab, `wkt.js` turns WKT into GeoJSON, `rya-sparql12.js` adds SPARQL 1.2 editing and RDF 1.2 results).
   - `rya-sparql12.js` replaces `Yasqe.prototype.checkSyntax`, YASR's response parser (`getParserFromContentType`, reached through a stand-in response) and the table plugin's `getCellContent`/`formatLiteral`. It must load before `rya-ui.js` creates YASGUI. A YASGUI upgrade has to recheck these hooks.
-  - Graph results are requested as N-Triples (set in `queryBefore`), because only our N-Triples 1.2 reader understands triple terms.
+  - Graph results are requested as Turtle (set in `queryBefore`). Only our N-Triples 1.2 reader understands triple terms, so a SPARQL 1.2 query is requested as N-Triples, and a query whose Turtle result starts with RDF4J's `@version "1.2"` line is run once more as N-Triples (`queryResponse`).
   - CodeMirror overlays can't keep state, so the overlay's tokenizer starts fresh on each line.
   - Third-party files go to `static/vendor` at build time. The `maven-antrun-plugin` execution in `rya.sparql/pom.xml` downloads pinned npm tarballs into `~/.m2/repository/.cache/rya-ng-ui` and checks their SHA-512.
   - To upgrade one, change its `*.version` and `*.sha512` properties (the hex of npm's `integrity`), and regenerate `static/vendor/THIRD-PARTY-NOTICES.txt`.

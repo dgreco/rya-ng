@@ -201,6 +201,9 @@
     });
     window.ryaYasgui = yasgui;
 
+    /** Queries whose graph results turned out to hold RDF 1.2 values. */
+    const modernGraphQueries = new Set();
+
     // Fired synchronously before the request is built: put the current authorizations, timeout
     // and trace id on the tab, keeping any other request arguments set in the tab's settings.
     // A query run without the trace drops the tab's old trace, which no longer matches its results.
@@ -214,9 +217,26 @@
         } else {
             window.RyaTrace.drop(tab.getId());
         }
-        // Graph results are asked in N-Triples, which the page reads itself (see rya-sparql12.js);
-        // set here so that tabs remembered from an earlier version follow too.
-        tab.setRequestConfig({ args: args, acceptHeaderGraph: window.RyaSparql12.GRAPH_RESULTS });
+        // Graph results are asked in Turtle, unless they hold RDF 1.2 values: those the page reads
+        // itself, from N-Triples (see rya-sparql12.js). Set on every request, so that tabs
+        // remembered from an earlier version follow too.
+        const query = tab.getYasqe() ? tab.getYasqe().getValue() : "";
+        const modern = modernGraphQueries.has(query) || window.RyaSparql12.scan(query).modern;
+        tab.setRequestConfig({ args: args, acceptHeaderGraph: modern ? window.RyaSparql12.GRAPH_RESULTS : "text/turtle" });
+    });
+
+    // A SPARQL 1.1 query can still return RDF 1.2 values. Its Turtle can't be shown, so the query
+    // is remembered and run once more, in N-Triples. Fired before the tab holds the response.
+    yasgui.on("queryResponse", (instance, tab) => {
+        window.setTimeout(() => {
+            const results = tab.getYasr() && tab.getYasr().results;
+            const query = tab.getYasqe() ? tab.getYasqe().getValue() : "";
+            if (results && !modernGraphQueries.has(query)
+                    && window.RyaSparql12.isModernTurtle(results.getContentType(), results.getData())) {
+                modernGraphQueries.add(query);
+                tab.query().catch(() => {});
+            }
+        }, 0);
     });
 
     // Each tab keeps its own trace, and the panel shows the selected tab's. YASGUI fires
