@@ -24,6 +24,7 @@ import org.apache.accumulo.core.client.BatchWriter;
 import org.apache.accumulo.core.client.MultiTableBatchWriter;
 import org.apache.accumulo.core.client.MutationsRejectedException;
 import org.apache.accumulo.core.client.TableNotFoundException;
+import org.apache.accumulo.core.data.ColumnUpdate;
 import org.apache.accumulo.core.data.Mutation;
 import org.apache.accumulo.core.security.ColumnVisibility;
 
@@ -31,6 +32,8 @@ import org.tripatha.api.persist.RyaDAOException;
 import org.tripatha.store.spi.CellWriter;
 import org.tripatha.store.spi.RowMutation;
 import org.tripatha.store.spi.TableWriter;
+import org.tripatha.store.trace.StoreTrace;
+import org.tripatha.store.trace.Trace;
 
 /**
  * A {@link CellWriter} on a {@link MultiTableBatchWriter}: one {@link Mutation} per row mutation,
@@ -59,8 +62,19 @@ final class AccumuloCellWriter implements CellWriter {
             throw new RyaDAOException(e);
         }
         return m -> {
+            final Mutation mutation = toMutation(m);
+            final Trace trace = StoreTrace.current();
+            if (trace != null) {
+                int deletes = 0;
+                for (final ColumnUpdate u : mutation.getUpdates()) {
+                    if (u.isDeleted()) {
+                        deletes++;
+                    }
+                }
+                trace.wrote(table, mutation.getUpdates().size(), deletes, mutation.numBytes());
+            }
             try {
-                bw.addMutation(toMutation(m));
+                bw.addMutation(mutation);
             } catch (final MutationsRejectedException e) {
                 throw new RyaDAOException(e);
             }
@@ -95,19 +109,31 @@ final class AccumuloCellWriter implements CellWriter {
 
     @Override
     public void flush() {
+        final Trace trace = StoreTrace.current();
+        final long t0 = System.nanoTime();
         try {
             writer.flush();
         } catch (final MutationsRejectedException e) {
             throw new RyaDAOException(e);
+        } finally {
+            if (trace != null) {
+                trace.flushed(System.nanoTime() - t0);
+            }
         }
     }
 
     @Override
     public void close() {
+        final Trace trace = StoreTrace.current();
+        final long t0 = System.nanoTime();
         try {
             writer.close();
         } catch (final MutationsRejectedException e) {
             throw new RyaDAOException(e);
+        } finally {
+            if (trace != null) {
+                trace.flushed(System.nanoTime() - t0);
+            }
         }
     }
 }

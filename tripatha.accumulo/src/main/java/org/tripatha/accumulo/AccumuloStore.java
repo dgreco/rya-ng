@@ -25,6 +25,7 @@ import java.util.Map.Entry;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.SortedSet;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 
@@ -57,7 +58,6 @@ import org.apache.hadoop.io.Text;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.tripatha.accumulo.trace.AccumuloTrace;
 import org.tripatha.api.persist.RyaDAOException;
 import org.tripatha.store.spi.Auths;
 import org.tripatha.store.spi.Capabilities;
@@ -74,6 +74,8 @@ import org.tripatha.store.spi.StoreAccess;
 import org.tripatha.store.spi.TableAdmin;
 import org.tripatha.store.spi.TableKind;
 import org.tripatha.store.spi.WriterOptions;
+import org.tripatha.store.trace.TraceText;
+import org.tripatha.store.trace.TracedScans;
 
 /**
  * The Accumulo backend. Every SPI call is one Accumulo client call: a {@link Scanner}, a
@@ -99,7 +101,7 @@ public final class AccumuloStore implements Store {
     private final StoreAccess access = new Access();
 
     private AccumuloStore(final AccumuloClient client, final boolean ownsClient) {
-        this.client = AccumuloTrace.wrap(client);
+        this.client = client;
         this.ownsClient = ownsClient;
     }
 
@@ -116,7 +118,7 @@ public final class AccumuloStore implements Store {
         return new AccumuloStore(client, true);
     }
 
-    /** The (traced) client, for Accumulo-only code. */
+    /** The client, for Accumulo-only code. What is done with it directly is not traced. */
     public AccumuloClient client() {
         return client;
     }
@@ -151,6 +153,11 @@ public final class AccumuloStore implements Store {
         if (!selects(range, spec)) {
             return Cells.EMPTY;
         }
+        final List<IteratorSetting> iterators = iterators(spec);
+        return TracedScans.open("Scanner", table, List.of(range), spec, describe(iterators), () -> scanner(table, range, spec, iterators));
+    }
+
+    private CellScanner scanner(final String table, final KeyRange range, final ScanSpec spec, final List<IteratorSetting> iterators) {
         try {
             final Scanner scanner = client.createScanner(table, authorizations(spec.auths()));
             try {
@@ -158,7 +165,7 @@ public final class AccumuloStore implements Store {
                 if (spec.batchSize() != null) {
                     scanner.setBatchSize(spec.batchSize());
                 }
-                configure(scanner, spec);
+                configure(scanner, spec, iterators);
                 return new Cells(scanner, scanner.iterator());
             } catch (final RuntimeException e) {
                 scanner.close();
@@ -180,11 +187,17 @@ public final class AccumuloStore implements Store {
         if (ranges.isEmpty()) {
             return Cells.EMPTY;
         }
+        final List<IteratorSetting> iterators = iterators(spec);
+        return TracedScans.open("BatchScanner", table, ranges, spec, describe(iterators), () -> batchScanner(table, ranges, spec, iterators));
+    }
+
+    private CellScanner batchScanner(final String table, final List<KeyRange> ranges, final ScanSpec spec,
+            final List<IteratorSetting> iterators) {
         try {
             final BatchScanner scanner = client.createBatchScanner(table, authorizations(spec.auths()), spec.threads());
             try {
                 scanner.setRanges(toRanges(ranges));
-                configure(scanner, spec);
+                configure(scanner, spec, iterators);
                 return new Cells(scanner, scanner.iterator());
             } catch (final RuntimeException e) {
                 scanner.close();
@@ -201,13 +214,17 @@ public final class AccumuloStore implements Store {
         if (ranges.isEmpty()) {
             return;
         }
+        final List<IteratorSetting> iterators = iterators(spec);
+        final Runnable done = TracedScans.started("BatchDeleter", table, ranges, spec, describe(iterators));
         try (BatchDeleter deleter = client.createBatchDeleter(table, authorizations(spec.auths()), spec.threads(),
                 batchWriterConfig(options))) {
             deleter.setRanges(toRanges(ranges));
-            configure(deleter, spec);
+            configure(deleter, spec, iterators);
             deleter.delete();
         } catch (final TableNotFoundException | MutationsRejectedException e) {
             throw new RyaDAOException(e);
+        } finally {
+            done.run();
         }
     }
 
@@ -283,18 +300,24 @@ public final class AccumuloStore implements Store {
         return auths.labels().isEmpty() ? Authorizations.EMPTY : new Authorizations(auths.labels().toArray(new String[0]));
     }
 
-    /** Columns, then the server-side filters, in the order and with the names Tripatha always used. */
-    private static void configure(final ScannerBase scanner, final ScanSpec spec) {
+    /** The columns of a spec, then its scan iterators. */
+    private static void configure(final ScannerBase scanner, final ScanSpec spec, final List<IteratorSetting> iterators) {
         for (final ScanSpec.Column c : spec.columns()) {
             scanner.fetchColumn(new Text(c.family()), new Text(c.qualifier()));
         }
         for (final byte[] f : spec.families()) {
             scanner.fetchColumnFamily(new Text(f));
         }
+        iterators.forEach(scanner::addScanIterator);
+    }
+
+    /** The server-side filters of a spec as scan iterators, in the order and with the names Tripatha always used. */
+    static List<IteratorSetting> iterators(final ScanSpec spec) {
+        final List<IteratorSetting> out = new ArrayList<>();
         if (spec.qualifierRegex() != null) {
             final IteratorSetting setting = new IteratorSetting(8, "riq", RegExFilter.class.getName());
             RegExFilter.setRegexs(setting, null, null, spec.qualifierRegex(), null, false);
-            scanner.addScanIterator(setting);
+            out.add(setting);
         }
         if (spec.minTimestamp() != null || spec.maxTimestamp() != null) {
             final IteratorSetting setting = new IteratorSetting(9, "fi", TimestampFilter.class.getName());
@@ -304,16 +327,35 @@ public final class AccumuloStore implements Store {
             if (spec.maxTimestamp() != null) {
                 TimestampFilter.setEnd(setting, spec.maxTimestamp(), true);
             }
-            scanner.addScanIterator(setting);
+            out.add(setting);
         }
         if (spec.rowRegex() != null) {
             final IteratorSetting setting = new IteratorSetting(11, "ri", RegExFilter.class.getName());
             RegExFilter.setRegexs(setting, spec.rowRegex(), null, null, null, false);
-            scanner.addScanIterator(setting);
+            out.add(setting);
         }
         for (final ServerIterator it : spec.iterators()) {
-            scanner.addScanIterator(new IteratorSetting(it.priority(), it.name(), it.className(), it.options()));
+            out.add(new IteratorSetting(it.priority(), it.name(), it.className(), it.options()));
         }
+        return out;
+    }
+
+    /** Scan iterators as a trace shows them: priority, name, class and options of each. */
+    static List<String> describe(final List<IteratorSetting> iterators) {
+        final List<String> out = new ArrayList<>(iterators.size());
+        for (final IteratorSetting s : iterators) {
+            final String cls = s.getIteratorClass().substring(s.getIteratorClass().lastIndexOf('.') + 1);
+            final StringBuilder text = new StringBuilder().append(s.getPriority()).append(' ').append(s.getName()).append(" (")
+                    .append(cls).append(')');
+            String separator = " ";
+            for (final Map.Entry<String, String> o : new TreeMap<>(s.getOptions()).entrySet()) {
+                text.append(separator).append(o.getKey()).append('=')
+                        .append(TraceText.bytes(o.getValue().getBytes(StandardCharsets.UTF_8)));
+                separator = ", ";
+            }
+            out.add(text.toString());
+        }
+        return out;
     }
 
     static BatchWriterConfig batchWriterConfig(final WriterOptions options) {
