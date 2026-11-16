@@ -88,6 +88,23 @@ class LoaderOptionsTest {
     }
 
     @Test
+    void rdf12FractionIsPartOfTheDataset() {
+        final LoaderOptions plain = parse("load", "--table-prefix", "t_", "--entities", "1000");
+        assertEquals(0, plain.genConfig().rdf12Fraction());
+        assertFalse(plain.datasetArgs().contains("rdf12"));
+
+        final LoaderOptions modern = parse("load", "--table-prefix", "t_", "--entities", "1000", "--rdf12-fraction", "0.2");
+        assertEquals(0.2, modern.genConfig().rdf12Fraction());
+        assertTrue(modern.datasetArgs().contains("--rdf12-fraction 0.2"), modern.datasetArgs());
+        assertFalse(plain.genConfig().fingerprint().equals(modern.genConfig().fingerprint()));
+        // More triples per entity, so fewer entities for the same number of triples.
+        assertTrue(parse("dry-run", "--triples", "3M", "--rdf12-fraction", "0.5").genConfig().entities()
+                < parse("dry-run", "--triples", "3M").genConfig().entities());
+        assertThrows(IllegalArgumentException.class,
+                () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--rdf12-fraction", "2").genConfig());
+    }
+
+    @Test
     void passwordOnlyFromTheEnvironment() {
         final IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--password", "x"));

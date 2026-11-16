@@ -413,7 +413,8 @@ Without an index, these filters still work: they check every candidate, so they 
 **The data:**
 - about 7.5 triples per entity, over 11 classes: people, organizations, companies, cities, landmarks, events, products, reviews, articles, sensors and observations;
 - labels and descriptions in 11 languages, numbers, dates, and power-law links between entities;
-- points and polygons, named graphs, and optional visibility labels.
+- points and polygons, named graphs, and optional visibility labels;
+- optionally RDF 1.2 data: with `--rdf12-fraction F`, that share of the links between entities is annotated (a reifier of the link's triple term, with a certainty and sometimes a date), and that share of the language-tagged labels gets a base direction. Everything else is the dataset the same options give without it. The default is 0, an RDF 1.1 dataset.
 
 Each entity depends only on the seed and its number, so any process can generate any part of the dataset, and writing a part again produces the same keys.
 

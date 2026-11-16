@@ -31,6 +31,7 @@ import org.eclipse.rdf4j.model.vocabulary.RDFS;
 
 import io.github.dgreco.rya.api.domain.RyaIRI;
 import io.github.dgreco.rya.api.domain.RyaStatement;
+import io.github.dgreco.rya.api.domain.RyaTripleTerm;
 import io.github.dgreco.rya.api.domain.RyaType;
 import io.github.dgreco.rya.loader.gen.Vocabulary.Language;
 
@@ -40,7 +41,9 @@ import io.github.dgreco.rya.loader.gen.Vocabulary.Language;
  * <p>
  * Each entity has separate streams for its graph and visibility, its anchor (the city it is in,
  * the country of a city…), its geometry, and its text, so another entity can recompute where a
- * city or landmark is without generating it: links and geometry stay consistent.
+ * city or landmark is without generating it: links and geometry stay consistent. The RDF 1.2
+ * additions (see {@link GenConfig#rdf12Fraction()}) draw from a stream of their own, so the
+ * other choices are those of the RDF 1.1 dataset with the same settings.
  */
 public final class EntityGenerator {
     private static final long MAIN = 1;
@@ -48,6 +51,7 @@ public final class EntityGenerator {
     private static final long GEOMETRY = 3;
     private static final long TEXT = 4;
     private static final long GRAPH = 5;
+    private static final long RDF12 = 6;
     private static final int CATEGORIES = 50;
     private static final int INDUSTRIES = 30;
     private static final int OBSERVABLE_PROPERTIES = 12;
@@ -72,7 +76,8 @@ public final class EntityGenerator {
         "nationality", "foundingDate", "numberOfEmployees", "locatedIn", "industry", "stockPrice", "population",
         "inCountry", "elevation", "startDate", "endDate", "location", "performer", "organizer", "price", "sku",
         "category", "manufacturer", "releaseDate", "inStock", "reviewOf", "author", "rating", "datePublished", "about",
-        "wordCount", "observes", "installedOn", "active", "madeBySensor", "observedProperty", "resultTime", "hasResult"};
+        "wordCount", "observes", "installedOn", "active", "madeBySensor", "observedProperty", "resultTime", "hasResult",
+        "certainty", "assertedOn"};
     private final Map<String, RyaIRI> predicates;
     private final RyaIRI[] graphIris;
     private final RyaIRI type = new RyaIRI(RDF.TYPE.stringValue());
@@ -80,6 +85,7 @@ public final class EntityGenerator {
     private final RyaIRI comment = new RyaIRI(RDFS.COMMENT.stringValue());
     private final RyaIRI hasGeometry = new RyaIRI(GEO.hasGeometry.stringValue());
     private final RyaIRI asWkt = new RyaIRI(GEO.AS_WKT.stringValue());
+    private final RyaIRI reifies = new RyaIRI(RDF.REIFIES.stringValue());
 
     public EntityGenerator(final GenConfig config) {
         this.config = config;
@@ -469,10 +475,13 @@ public final class EntityGenerator {
         final SplitMix64 main;
         final SplitMix64 text;
         final SplitMix64 shape;
+        /** The RDF 1.2 choices; null in an RDF 1.1 dataset. */
+        final SplitMix64 modern;
         final Language language;
         final List<RyaStatement> statements = new ArrayList<>(12);
         private final Set<String> seen = new HashSet<>();
         private boolean geometryWritten;
+        private int claims;
 
         Entity(final long index, final EntityClass c) {
             this.index = index;
@@ -480,6 +489,7 @@ public final class EntityGenerator {
             this.main = stream(index, MAIN);
             this.text = stream(index, TEXT);
             this.shape = stream(index, GEOMETRY);
+            this.modern = config.rdf12Fraction() > 0 ? stream(index, RDF12) : null;
             this.language = words.language(text);
             final SplitMix64 g = stream(index, GRAPH);
             this.graph = graphIris.length == 0 || g.chance(config.defaultGraphFraction()) ? null
@@ -511,19 +521,48 @@ public final class EntityGenerator {
             add(subject, predicate, object);
         }
 
-        void add(final RyaIRI s, final RyaIRI predicate, final RyaType object) {
+        /** @return whether the statement is new for this entity. */
+        boolean add(final RyaIRI s, final RyaIRI predicate, final RyaType object) {
             final String key = s.getData() + '\u0000' + predicate.getData() + '\u0000' + object.getDataType() + '\u0000'
                     + object.getData() + '\u0000' + object.getLanguage();
-            if (seen.add(key)) {
-                statements.add(new RyaStatement(s, predicate, object, graph, null, visibility, null, config.timestamp()));
+            if (!seen.add(key)) {
+                return false;
             }
+            // A label's direction is chosen after the duplicate check, so the same label is never written twice.
+            final RyaType stored = predicate == label ? directed(object) : object;
+            statements.add(new RyaStatement(s, predicate, stored, graph, null, visibility, null, config.timestamp()));
+            return true;
         }
 
         /** A link to another entity; ignored when there is no target or it would point to itself. */
         void link(final RyaIRI predicate, final long target) {
             if (target >= 0 && target != index) {
-                add(predicate, new RyaIRI(config.entity(target)));
+                final RyaIRI object = new RyaIRI(config.entity(target));
+                if (add(subject, predicate, object) && modern != null && modern.chance(config.rdf12Fraction())) {
+                    annotate(predicate, object);
+                }
             }
+        }
+
+        /**
+         * An RDF 1.2 annotation of a link: a reifier of the link's triple term, with how certain
+         * the link is and, for half of them, when it was asserted.
+         */
+        private void annotate(final RyaIRI predicate, final RyaIRI object) {
+            final RyaIRI claim = new RyaIRI(subject.getData() + "/claim/" + claims++);
+            add(claim, reifies, new RyaTripleTerm(subject, predicate, object));
+            add(claim, o("certainty"), LiteralForms.decimal2(0.5 + 0.5 * modern.nextDouble()));
+            if (modern.chance(0.5)) {
+                add(claim, o("assertedOn"), LiteralForms.date(LocalDate.ofYearDay(modern.between(2015, 2025), 1 + modern.nextInt(365))));
+            }
+        }
+
+        /** A language-tagged label, or the same with its base direction for the RDF 1.2 share of them. */
+        private RyaType directed(final RyaType text) {
+            if (modern == null || !RDF.LANGSTRING.equals(text.getDataType()) || !modern.chance(config.rdf12Fraction())) {
+                return text;
+            }
+            return LiteralForms.directional(text.getData(), text.getLanguage(), Language.AR.tag().equals(text.getLanguage()));
         }
 
         /** Whether this entity gets a geometry, with the given chance (scaled by geoScale). */
