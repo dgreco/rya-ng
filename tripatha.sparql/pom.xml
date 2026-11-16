@@ -27,7 +27,7 @@ under the License.
 
     <artifactId>tripatha.sparql</artifactId>
     <name>Tripatha SPARQL Endpoint</name>
-    <description>SPARQL Protocol endpoint (SPARQL 1.1 and 1.2 query and update) over a Tripatha store on Accumulo or HBase.</description>
+    <description>SPARQL Protocol endpoint (SPARQL 1.1 and 1.2 query and update) over a Tripatha store on Accumulo, HBase or RocksDB.</description>
 
     <properties>
         <!-- Web UI packages from npm, with the hex SHA-512 of each tarball (see the antrun execution). -->
@@ -128,6 +128,26 @@ under the License.
                 <configuration>
                     <classesDirectory>${project.build.outputDirectory}</classesDirectory>
                 </configuration>
+            </plugin>
+            <plugin>
+                <!--
+                  The endpoint's own classes as a second jar (classifier "lib"): the main jar is
+                  repackaged below into an executable one, which another module can't depend on.
+                -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>lib-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <classifier>lib</classifier>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

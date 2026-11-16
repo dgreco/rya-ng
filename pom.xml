@@ -50,6 +50,7 @@ under the License.
         <module>tripatha.sail</module>
         <module>tripatha.loader</module>
         <module>tripatha.sparql</module>
+        <module>tripatha.standalone</module>
     </modules>
 
     <properties>
