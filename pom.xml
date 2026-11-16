@@ -20,14 +20,14 @@ under the License.
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.github.dgreco.rya</groupId>
-    <artifactId>rya-ng</artifactId>
+    <groupId>org.tripatha</groupId>
+    <artifactId>tripatha</artifactId>
     <version>1.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
-    <name>rya-ng</name>
-    <description>RDF 1.2 triple store on Apache Accumulo or HBase, exposed as an RDF4J Sail and a SPARQL endpoint. Derived from Apache Rya.</description>
-    <url>https://github.com/dgreco/rya-ng</url>
+    <name>Tripatha</name>
+    <description>RDF 1.2 triple store on Apache Accumulo, Apache HBase or an embedded RocksDB database, exposed as an RDF4J Sail and a SPARQL endpoint. Derived from Apache Rya.</description>
+    <url>https://github.com/dgreco/tripatha</url>
     <licenses>
         <license>
             <name>Apache License, Version 2.0</name>
@@ -35,21 +35,21 @@ under the License.
         </license>
     </licenses>
     <scm>
-        <url>https://github.com/dgreco/rya-ng</url>
-        <connection>scm:git:https://github.com/dgreco/rya-ng.git</connection>
+        <url>https://github.com/dgreco/tripatha</url>
+        <connection>scm:git:https://github.com/dgreco/tripatha.git</connection>
     </scm>
 
     <modules>
-        <module>rya.api</module>
-        <module>rya.store</module>
-        <module>rya.accumulo</module>
-        <module>rya.hbase</module>
-        <module>rya.hbase.coprocessor</module>
-        <module>rya.rocksdb</module>
-        <module>rya.test</module>
-        <module>rya.sail</module>
-        <module>rya.loader</module>
-        <module>rya.sparql</module>
+        <module>tripatha.api</module>
+        <module>tripatha.store</module>
+        <module>tripatha.accumulo</module>
+        <module>tripatha.hbase</module>
+        <module>tripatha.hbase.coprocessor</module>
+        <module>tripatha.rocksdb</module>
+        <module>tripatha.test</module>
+        <module>tripatha.sail</module>
+        <module>tripatha.loader</module>
+        <module>tripatha.sparql</module>
     </modules>
 
     <properties>
@@ -119,33 +119,33 @@ under the License.
             </dependency>
 
             <dependency>
-                <groupId>io.github.dgreco.rya</groupId>
-                <artifactId>rya.api</artifactId>
+                <groupId>org.tripatha</groupId>
+                <artifactId>tripatha.api</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.github.dgreco.rya</groupId>
-                <artifactId>rya.store</artifactId>
+                <groupId>org.tripatha</groupId>
+                <artifactId>tripatha.store</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.github.dgreco.rya</groupId>
-                <artifactId>rya.accumulo</artifactId>
+                <groupId>org.tripatha</groupId>
+                <artifactId>tripatha.accumulo</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.github.dgreco.rya</groupId>
-                <artifactId>rya.sail</artifactId>
+                <groupId>org.tripatha</groupId>
+                <artifactId>tripatha.sail</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.github.dgreco.rya</groupId>
-                <artifactId>rya.hbase</artifactId>
+                <groupId>org.tripatha</groupId>
+                <artifactId>tripatha.hbase</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.github.dgreco.rya</groupId>
-                <artifactId>rya.rocksdb</artifactId>
+                <groupId>org.tripatha</groupId>
+                <artifactId>tripatha.rocksdb</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -155,8 +155,8 @@ under the License.
                 <version>${rocksdb.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.github.dgreco.rya</groupId>
-                <artifactId>rya.hbase.coprocessor</artifactId>
+                <groupId>org.tripatha</groupId>
+                <artifactId>tripatha.hbase.coprocessor</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -186,7 +186,7 @@ under the License.
                 <version>${hbase.version}</version>
                 <exclusions>
                     <!-- HBase's web UI pages, off in the test cluster. Its javax JSP engine breaks Spring Boot's
-                         Tomcat in rya.sparql's tests. -->
+                         Tomcat in tripatha.sparql's tests. -->
                     <exclusion>
                         <groupId>org.apache.tomcat</groupId>
                         <artifactId>tomcat-jasper</artifactId>
@@ -293,8 +293,8 @@ under the License.
                 <classifier>tests</classifier>
             </dependency>
             <dependency>
-                <groupId>io.github.dgreco.rya</groupId>
-                <artifactId>rya.test</artifactId>
+                <groupId>org.tripatha</groupId>
+                <artifactId>tripatha.test</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
@@ -379,7 +379,7 @@ under the License.
     </dependencyManagement>
 
     <!-- Test dependencies shared by every module. Logging bindings are added per module:
-         slf4j-simple for libraries, Spring Boot's Logback for rya.sparql. -->
+         slf4j-simple for libraries, Spring Boot's Logback for tripatha.sparql. -->
     <dependencies>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -541,11 +541,11 @@ under the License.
     <profiles>
         <!-- mvn verify -Pcoverage: records the coverage of the unit tests (target/jacoco.exec) and of the
              integration tests (target/jacoco-it.exec) of every module, and merges them into one report in
-             rya.coverage/target/site/jacoco-aggregate (HTML, XML, CSV). CI runs this. -->
+             tripatha.coverage/target/site/jacoco-aggregate (HTML, XML, CSV). CI runs this. -->
         <profile>
             <id>coverage</id>
             <modules>
-                <module>rya.coverage</module>
+                <module>tripatha.coverage</module>
             </modules>
             <build>
                 <plugins>

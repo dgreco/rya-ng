@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<!--
+  Copyright 2026 David Greco
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tripatha SPARQL</title>
+    <link rel="icon" href="ui/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="vendor/yasgui/yasgui.min.css">
+    <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+    <link rel="stylesheet" href="vendor/yasgui-chart-plugin/yasgui-chart-plugin.min.css">
+    <link rel="stylesheet" href="ui/tripatha-ui.css">
+</head>
+<body>
+<header class="tripatha-bar">
+    <div class="tripatha-brand">
+        <img src="ui/tripatha-mark.svg" alt="" width="28" height="28">
+        <span class="tripatha-name">tripatha</span>
+        <span class="tripatha-tag">SPARQL</span>
+    </div>
+    <div class="tripatha-controls">
+        <label class="tripatha-field">
+            <span>Examples</span>
+            <select id="tripatha-examples" aria-label="Open an example query in a new tab">
+                <option value="">Open an example…</option>
+            </select>
+        </label>
+        <label class="tripatha-field" title="Visibility labels to read with, comma-separated. Empty: everything the server allows. You can only narrow what the server allows.">
+            <span>Authorizations</span>
+            <input id="tripatha-auths" type="text" placeholder="all allowed" spellcheck="false" autocomplete="off">
+        </label>
+        <label class="tripatha-field" title="Longest a query may run, in seconds. Empty: the server's default. The server sets the most you may ask for.">
+            <span>Timeout (s)</span>
+            <input id="tripatha-timeout" class="tripatha-number" type="number" min="1" step="1" inputmode="numeric" placeholder="default" autocomplete="off">
+        </label>
+        <label class="tripatha-field tripatha-check" title="Show what each query does in the store, live: its plan, every scan and every write.">
+            <input id="tripatha-trace-on" type="checkbox">
+            <span>Trace</span>
+        </label>
+        <a class="tripatha-link" href="sparql?query=ASK%7B%7D" title="The SPARQL Protocol endpoint">/sparql</a>
+    </div>
+</header>
+<div class="tripatha-workspace">
+    <main id="yasgui"></main>
+    <div id="tripatha-trace-resizer" class="tripatha-trace-resizer" role="separator" aria-orientation="vertical"
+         aria-label="Resize the trace panel" aria-valuemin="300" tabindex="0"
+         title="Drag, or use the arrow keys, to resize the trace panel. Double-click for the default width." hidden></div>
+    <aside id="tripatha-trace" class="tripatha-trace" aria-label="Storage trace" hidden></aside>
+    <button id="tripatha-trace-tab" class="tripatha-trace-tab" type="button" aria-label="Open the storage trace panel" hidden></button>
+</div>
+<script src="vendor/yasgui/yasgui.min.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/yasgui-chart-plugin/yasgui-chart-plugin.min.js"></script>
+<script src="ui/tripatha-sparql12.js"></script>
+<script src="ui/wkt.js"></script>
+<script src="ui/tripatha-map.js"></script>
+<script src="ui/tripatha-trace.js"></script>
+<script src="ui/tripatha-ui.js"></script>
+</body>
+</html>

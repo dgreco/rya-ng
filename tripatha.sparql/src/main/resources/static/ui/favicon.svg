@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-4 -4 128 128" role="img" aria-label="Tripatha">
+<title>Tripatha</title>
+<!-- The Tripatha mark, in the colours of the reader's light or dark scheme. -->
+<style>
+:root{--ink:#17182B;--saf:#D9741C;--ind:#4B4BC8}
+@media (prefers-color-scheme: dark){:root{--ink:#ECEDF6;--saf:#F29A45;--ind:#8E8CF2}}
+</style>
+<g transform="scale(1.1111111111111112) translate(-6 1)">
+<g fill="none" stroke-width="10" stroke-linecap="round">
+<path d="M60 16 Q70.95 34.77 64.77 53.54" stroke="var(--ink)"/>
+<path d="M101.57 88 Q79.84 88.09 66.67 73.36" stroke="var(--saf)"/>
+<path d="M18.43 88 Q29.21 69.13 48.55 65.10" stroke="var(--ind)"/>
+</g>
+<circle cx="60" cy="16" r="8" fill="var(--ink)"/>
+<circle cx="101.57" cy="88" r="8" fill="var(--saf)"/>
+<circle cx="18.43" cy="88" r="8" fill="var(--ind)"/>
+<circle cx="60" cy="64" r="10" fill="none" stroke="var(--ink)" stroke-width="7"/>
+</g>
+</svg>
