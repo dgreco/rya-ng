@@ -42,7 +42,9 @@ public abstract class RyaSailITBase extends StoreITBase {
      * @return a configuration that points at this test's tables. System properties change every
      *         test that uses it: {@code -Dtripatha.test.joinBatchSize=2} sets the join batch size, and
      *         {@code -Dtripatha.test.indexes=true} turns on the text and geo indexes (each test then
-     *         checks that the indexes match the stored statements).
+     *         checks that the indexes match the stored statements), and
+     *         {@code -Dtripatha.test.mergeRatio=1000000} merges every star of constant patterns
+     *         (O22), whatever their lengths.
      */
     protected StoreRdfConfiguration newConf() {
         final StoreRdfConfiguration conf = new StoreRdfConfiguration();
@@ -50,6 +52,10 @@ public abstract class RyaSailITBase extends StoreITBase {
         final String batchSize = System.getProperty("tripatha.test.joinBatchSize");
         if (batchSize != null && !batchSize.isBlank()) {
             conf.setJoinBatchSize(Integer.parseInt(batchSize.trim()));
+        }
+        final String mergeRatio = System.getProperty("tripatha.test.mergeRatio");
+        if (mergeRatio != null && !mergeRatio.isBlank()) {
+            conf.setJoinMergeRatio(Double.parseDouble(mergeRatio.trim()));
         }
         if (Boolean.getBoolean("tripatha.test.indexes")) {
             conf.setTextIndex(true);

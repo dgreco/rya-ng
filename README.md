@@ -204,6 +204,7 @@ Instead of the connection arguments, `--tripatha.accumulo.client-properties` can
 | `tripatha.stats` | `true` | Keep cardinality statistics on write and use them for join ordering |
 | `tripatha.join-batch-size` | `1000` | Left-hand join rows whose lookups are fetched together in one batch scan, at most (the first batch is 64 rows, and each next one doubles up to this size); `1` turns batching off |
 | `tripatha.entity-prefetch` | `true` | Fetch the attributes a query reads for a batch of entities (its joins and `OPTIONAL`s on them) in one batch scan, instead of one per join or per row |
+| `tripatha.join-merge-ratio` | the backend's: 35 on Accumulo, 20 on HBase, 8 on RocksDB | Merge joins of a star's constant patterns (`?x :p :a ; :q :b`): a pattern up to this many times longer than the star's shortest is read in subject order and intersected with it, instead of looked up once per row; `0` turns them off |
 | `tripatha.text-index` | `false` | Keep the full-text index (see [Search](#search)) |
 | `tripatha.text-index-predicates` | `[]` | Predicates whose literals are text-indexed; empty means all |
 | `tripatha.geo-index` | `false` | Keep the geospatial index |

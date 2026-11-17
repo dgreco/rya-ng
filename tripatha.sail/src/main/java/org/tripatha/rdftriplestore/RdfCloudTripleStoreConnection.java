@@ -569,6 +569,21 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
             }
         }
 
+        /**
+         * The statements {@code ?s predicate object} of every graph, in the order of their
+         * subjects: one range of {@code po}. For a merge join ({@code SubjectMergeStep}), which
+         * reads only their subjects.
+         */
+        public CloseableIteration<RyaStatement> inSubjectOrder(final IRI predicate, final Value object) {
+            storeLookups++;
+            try {
+                return ryaDAO.getQueryEngine().query(new RyaStatement(null, RdfToRyaConversions.convertIRI(predicate),
+                        RdfToRyaConversions.convertValue(object)), conf);
+            } catch (final RyaDAOException e) {
+                throw new QueryEvaluationException(e);
+            }
+        }
+
         /** Runs a lookup with RDF4J's context semantics: no contexts means every graph; {@code null} the default graph only. */
         private CloseableIteration<Statement> inGraphs(final Resource[] contexts, final Function<Resource, RyaStatement> pattern) {
             if (contexts == null || contexts.length == 0) {

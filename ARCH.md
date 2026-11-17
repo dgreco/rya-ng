@@ -915,6 +915,7 @@ flowchart TD
     o6 --> o6b["★ TripleTermOptimizer.order<br/>each triple-term pattern right after what binds its term (section 12.7)"]
     o6b --> o7["IterativeEvaluationOptimizer, FilterOptimizer,<br/>FilterInValuesOptimizer, FilterOptimizer,<br/>OrderLimitOptimizer"]
     o7 --> o8["★ LeftDeepJoinOptimizer<br/>right-nested joins become left-deep (section 13)"]
+    o8 --> o9["★ SubjectMergeOptimizer<br/>a star's constant patterns become one merge join (section 13.6)"]
 ```
 
 **Where the Tripatha steps sit:**
@@ -924,10 +925,11 @@ flowchart TD
 
 ### 12.4 The evaluation strategy
 
-`RyaEvaluationStrategy` extends RDF4J's `DefaultEvaluationStrategy` and changes four `prepare` methods (`Join`, `LeftJoin`, `StatementPattern`, `TripleRef`):
+`RyaEvaluationStrategy` extends RDF4J's `DefaultEvaluationStrategy` and changes four `prepare` methods (`Join`, `LeftJoin`, `StatementPattern`, `TripleRef`). It also overrides `precompile`, for the one node type of its own, `SubjectMergeJoin`, which RDF4J's dispatch would refuse:
 
 | Node | Step used |
 |---|---|
+| `SubjectMergeJoin` (a star's constant patterns) | `SubjectMergeStep`, which intersects their subject-sorted lists ([section 13.6](#136-merge-joins-a-stars-constant-patterns-intersected)) |
 | `Join` or `LeftJoin` topping a chain of attribute lookups | the chain's own steps over an `EntityPrefetchStep` ([section 13.5](#135-entity-prefetch-a-chain-of-joins-at-once)) |
 | `Join` whose right side is a plain statement pattern (optionally under filters) | `BatchedJoinStep` ([section 13](#13-batched-joins)); otherwise RDF4J's own join |
 | `IndexedStatementPattern` | RDF4J's `StatementPatternQueryEvaluationStep`, reading through an `IndexTripleSource` ([section 15](#15-text-and-geo-search)) |
@@ -1118,6 +1120,34 @@ It is on by default: `query.join.entityprefetch`, or `tripatha.entity-prefetch` 
 **Limits.** Patterns rewritten by inference (subPropertyOf, inverseOf, symmetric and so on) are not single statement patterns any more, so they end the chain. Lookups are shared only within a window: an entity met in two windows is fetched twice.
 
 **Testing:** `EntityChainTest` covers which nodes form a chain; `EntityPrefetchIT` checks results and order against the plan without it, the store lookups it saves, halved windows, labels and inference.
+
+### 13.6 Merge joins: a star's constant patterns, intersected
+
+"All entities matching X" (SCALE-STUDY.md D1) is often a star whose objects are constants: `?x a :Person ; :worksFor :Acme ; :nationality :IT`. Join ordering drives it with the shortest pattern and looks the others up, one lookup per driver row and pattern. But each pattern is already a sorted list: in `po`, the rows of one predicate and object are `p 00 o 00 s 01 type`, in subject order. Reading the lists side by side and keeping the subjects found in all of them reads each list once, in sequence.
+
+```
+Join                                       ?x :name ?n            looked up per row, as before
+└── SubjectMergeJoin (?x, 2 lists)         read in subject order and intersected
+    ├── StatementPattern  ?x :worksFor :Acme      2,532 subjects
+    └── StatementPattern  ?x :nationality :IT    47,218 subjects
+Join … ?x a :Person                       347,303 subjects: looked up for the merge's rows instead
+```
+
+1. **Finding the star.** `SubjectMergeOptimizer` runs last, after `LeftDeepJoinOptimizer`. In each left-deep chain of plain joins it looks at the driver, the first argument join ordering chose. If that is a star pattern on `?x`, every star pattern on `?x` in the chain is a candidate. A star pattern is a plain `StatementPattern` in the default scope, with a variable subject, a constant IRI predicate and a constant IRI or literal object. The chain stops at filters, OPTIONALs and joins with a scope of their own.
+2. **Merge or look up.** A candidate's length is its `po` counter. Reading a list costs its length in cells read in sequence; looking up the shortest list's subjects in it costs that many lookups. So a candidate is merged if it is at most `query.join.mergeratio` times the shortest: about what a lookup costs in sequential cells. The rest stay joins after the merge, looked up for the merge's rows only. Inner joins commute, so moving them doesn't change the answers.
+3. **The ratio** is unset by default. `RyaSailFactory` then sets it to the store's `Capabilities.lookupCost()`: 35 on Accumulo and 20 on HBase, where a lookup is a server round trip; 8 on RocksDB, where it is a seek. Each was measured on the join benchmark (SCALE-STUDY.md 4.7). 0 turns merges off; the endpoint's setting is `tripatha.join-merge-ratio`.
+4. **The merge.** `SubjectMergeStep` opens one range per list (`StoreTripleSource.inSubjectOrder`: an ordinary `po` lookup with the object's type as a row suffix, read with the query's labels) and advances them together.
+   - Subjects are compared by code point, which is the order of their UTF-8 bytes and so of the rows. `String.compareTo` compares UTF-16 units, which puts characters above U+FFFF before U+E000 to U+FFFF.
+   - A subject with `n1` statements in one list and `n2` in the other (the same triple in several graphs, or under several labels) gives `n1 × n2` rows, as the nested loop does.
+   - Rows come out in subject order instead of the driver's. SPARQL fixes no order without `ORDER BY`, so a `LIMIT` without one may return other rows of the same answer.
+   - When the subject is already bound, as on the right of an OPTIONAL evaluated per row, the step runs the patterns' plain nested loop.
+5. **Above the merge,** `SubjectMergeJoin` binds the subject on every row (`getAssuredBindingNames`), so the attribute patterns form a `BatchedJoinStep` or an entity chain over it, as over any driver.
+
+**Not merged:** without counters (the choice needs them), with a dataset or `query.limit`, under RDF4J's result-size or time tracking, and with the hashed row layout, whose `po` rows are not in subject order. Patterns built by inference or for an index, named-graph patterns and value conditions are left alone. A prefix or value range of `po` is sorted by value, so it can't be intersected as it streams.
+
+**Measured** (SCALE-STUDY.md 4.7, 10M triples): on the Accumulo test cluster, `class-large` (three lists of 20k, 93k and 134k subjects) went from 1,446 ms and 41,284 lookups to 137 ms and 6 ranges, and `class-2` from 267 to 47 ms; on the HBase test cluster `class-large` went from 506 to 149 ms. Merging a whole class of 347k subjects into a star whose other lists are short is slower than looking it up (+20 %), which is what the ratio prevents. On RocksDB only stars of similar lengths gain (`class-large` −28 %), so its ratio is 8.
+
+**Testing:** `SubjectMergeIT` runs a set of stars with merges off and forced, with and without a label, over data with duplicates in graphs and labels, values of other types with the same data, and subjects whose UTF-16 and UTF-8 orders differ. It checks through the trace that the lists are read in order, that the attributes above are still an entity chain, and that a long list is looked up instead. `-Dtripatha.test.mergeRatio=1000000` forces merges in every IT.
 
 ---
 

@@ -252,6 +252,33 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
         return super.prepare(node, context);
     }
 
+    /** Adds the one node type RDF4J's dispatch doesn't know: a {@link SubjectMergeJoin}. */
+    @Override
+    public QueryEvaluationStep precompile(final TupleExpr expr, final QueryEvaluationContext context) {
+        if (expr instanceof SubjectMergeJoin merge) {
+            return prepare(merge, context);
+        }
+        return super.precompile(expr, context);
+    }
+
+    /**
+     * A merge join of a star's constant patterns ({@link SubjectMergeStep}). The nested loop of
+     * the same patterns serves rows that already bind the subject, and any triple source but the
+     * store's.
+     */
+    private QueryEvaluationStep prepare(final SubjectMergeJoin node, final QueryEvaluationContext context) {
+        QueryEvaluationStep nestedLoop = null;
+        for (final StatementPattern sp : node.getPatterns()) {
+            final QueryEvaluationStep left = nestedLoop;
+            final QueryEvaluationStep right = precompile(sp, context);
+            nestedLoop = left == null ? right : bindings -> JoinIterator.getInstance(left, right, bindings);
+        }
+        if (!(tripleSource instanceof StoreTripleSource<?> source)) {
+            return nestedLoop;
+        }
+        return new SubjectMergeStep(node, source, nestedLoop, context);
+    }
+
     /** A triple term in a pattern: matched in memory when it is already bound, else read from the store. */
     @Override
     protected QueryEvaluationStep prepare(final TripleRef node, final QueryEvaluationContext context) {

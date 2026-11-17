@@ -72,7 +72,10 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
      - the benchmark's two blind spots (M8): it now reports CPU apart from waiting, and compares settings within one run. It shows Accumulo joins are bound by the servers, not the client;
      - the type check without a regex (O20) and RocksDB key decoding (O19): on RocksDB, range scans are 23 to 31 % faster and joins 13 to 19 %.
    - **Then,** if the split profile supports them: more lookups in flight (O16), less client work per cell (O17), and parallel reads of one large range (O7).
-5. **"All entities matching X" (D1): class stars in the benchmark (M10), then merge joins (O22), then O14.** A sequentially read cell costs about 1/35 of a lookup on the Accumulo test cluster, so intersecting subject-sorted `po` ranges should beat one lookup per driver row. Stars in the servers (O23) wait for O22's measurements (D13).
+5. **"All entities matching X" (D1): class stars in the benchmark (M10) and merge joins (O22) done; O14 next.**
+   - O22 reads a star's constant patterns as subject-sorted `po` ranges and intersects them. On the Accumulo test cluster that is 3 to 10 times faster than one lookup per driver row: `class-large` 1,446 → 137 ms, `class-2` 267 → 47 ms. On RocksDB, where a lookup is cheap, it gains only for lists of similar lengths, so the ratio that decides is per backend (section 4.7).
+   - Value conditions in stars are still one lookup per match: O14 is what they need.
+   - Stars in the servers (O23) wait for D13. On these queries the client's merge reads 50k to 400k cells in 50 to 140 ms on Accumulo, so the transfer of the lists is not the limit at 10M; it would be with lists of billions.
 6. **IRI prefix codes: measured (M9), and deferred.**
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
@@ -146,8 +149,9 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O19 | **RocksDB key decoding:** `RocksCodec` encodes and decodes keys by copying the runs between escapes in bulk, instead of a byte at a time through a synchronized `ByteArrayOutputStream` | — | measured with O20 on RocksDB (M8, against `rocksdb-20261116-204243`): `count-class` 71 → 25 ms, range scans −23 to −31 %, joins −13 to −19 % | — | 1 | Built on branch `loader-skip-singleton-counters`; green everywhere |
 | O20 | **The object-type check as a row suffix:** `ScanSpec.rowSuffix`, set by the query engine when the type is the only row condition. RocksDB compares bytes. Accumulo and HBase filter with the equivalent linear `[\s\S]*` and the quoted suffix, instead of three open groups. It also fixes datatype IRIs being pasted into the expression unquoted, which let a `.` in a custom datatype IRI match any character | R2 | measured with O19, above. On Accumulo it means less tablet-server CPU per type-checked cell, not measured separately | — | 1 | Built on branch `loader-skip-singleton-counters`; green everywhere, `RangeParityIT` on all three backends |
 | O21 | **One range per subject:** when a window looks up two or more links of the same subject in `spo`, it reads the subject's range once and lets `BatchLookup`'s exact matching keep the cells asked for. A batch whose subject ranges return more than 64 cells per subject plus 1,024 is re-read one range per link (section 6.8) | R2 | measured (M8): `star-in` 17,594 → 8,799 ranges but 25,445 → 103,265 cells; `star-optional` 7,601 → 2,537 ranges, 9,345 → 28,772 cells. Accumulo: no change beyond noise. RocksDB: +64 % and +49 %. So `query.join.subjectranges` is **off by default**. Untested hypothesis: on a cold cache a seek is a block read and the extra cells are in the same block (M3) | M8 | 1 | Built, off by default |
-| O22 | **Merge joins of subject-sorted ranges:** for a star with constant objects (`?x a :Person ; :worksFor :Acme ; :nationality :IT`), each pattern is a `po` range sorted by subject. Stream them side by side and intersect, instead of one lookup per row. The subject space is sliced so several slices are intersected at once (section 6.10) | R2 | expected from 4.6: a sequentially read cell costs about 1/35 of a lookup on the Accumulo test cluster. To be measured on M10's class stars | M10 | 1 | Not started |
+| O22 | **Merge joins of subject-sorted ranges:** for a star with constant objects (`?x a :Person ; :worksFor :Acme ; :nationality :IT`), each pattern is a `po` range sorted by subject. Stream them side by side and intersect, instead of one lookup per row. The subject space is sliced so several slices are intersected at once (section 6.10) | R2 | expected from 4.6: a sequentially read cell costs about 1/35 of a lookup on the Accumulo test cluster. To be measured on M10's class stars | M10 | 1 | Done: `SubjectMergeJoin`, on by default with a ratio per backend (35 Accumulo, 20 HBase, 8 RocksDB); measured in section 4.7. Slices in parallel and subject-only reads are O24 |
 | O23 | **Stars evaluated in the servers:** an optional subject-partitioned table, maintained like an index. A shard holds, per predicate and object, the sorted subjects of its share of the store. A server-side iterator (Accumulo) or coprocessor (HBase) intersects a star's lists inside every shard in parallel, and returns only the matching subjects (section 6.10) | R2 | the distributed join for "all entities matching X" (D1). To be measured against O22 | O22, D13 | 2 | Not started |
+| O24 | **Merge joins, part 2:** intersect a star's lists in slices of the subject space on several threads at once (cut at `spo`'s tablet splits or at sampled subjects), and read only each cell's subject instead of decoding the whole statement (section 6.10) | R2 | O22 reads one list per pattern on one thread, and decodes every cell | O22 | 1 | Not started |
 
 ### 2.2 Measurements
 
@@ -373,6 +377,39 @@ Seven queries for "all entities matching X" (D1), added to the benchmark on 2026
   - `class-large`: merging all three lists reads 247,710 cells in sequence, about 0.3 to 0.4 s against 1.44 s on Accumulo. On RocksDB it would be slower than today's 139 ms;
   - `class-2` and `class-3`: merging employer with nationality reads 49,750 cells, about 50 to 85 ms against 260 ms on Accumulo, with Person left as a lookup per match. On RocksDB it loses;
   - `class-value` and `class-value-int`: merging the type into the constant pattern saves one of the two lookups per row. The value condition stays one lookup per row, or becomes the driver with O14, which is what these two need most.
+
+**After O22** (merge joins), as variants of one run per backend: `query.join.mergeratio` 0 (off), the backend's default (35 on Accumulo, 8 on RocksDB), and 10^6 (merge everything). Reports `accumulo-20261117-003258`, `rocksdb-20261117-004032` (off and default) and `rocksdb-20261117-001428` (0, 5, 35 and everything).
+
+| Query | Accumulo, off | Accumulo, 35 | merge all | RocksDB, off | RocksDB, 8 | merge all |
+|---|---|---|---|---|---|---|
+| `class-2` | 267 ms, 2,535 ranges | **47 ms**, 4 ranges, 49,738 cells | 46 ms | 9.4 ms | 8.4 ms (not merged) | 18.3 ms |
+| `class-3` | 272 ms | **83 ms**: Person looked up for 312 rows | 326 ms (+20 %): Person read whole | 12.6 ms | 12.6 ms (not merged) | 157 ms |
+| `class-attrs` | 286 ms | **84 ms** | 362 ms | 23.9 ms | 22.2 ms (not merged) | 161 ms |
+| `class-large` | 1,446 ms, 41,284 ranges | **137 ms**, 6 ranges, 247,677 cells | 137 ms | 141 ms | **101 ms** | 99 ms |
+| `class-count` | 1,439 ms | **137 ms** | 138 ms | 140 ms | **101 ms** | 100 ms |
+| `class-value` | 3,938 ms, 112,350 ranges | **2,141 ms**, 56,178 ranges | 2,141 ms | 382 ms | 358 ms | 368 ms |
+| `class-value-int` | 1,774 ms | **931 ms** | 931 ms | 71 ms | 67 ms | 70 ms |
+
+On the HBase test cluster (`hbase-20261117-014817`), one run with ratios 0, 8, 35 and 10^6. Its default, 20, merges what 35 merges here:
+
+| Query | HBase, off | HBase, 35 | merge all |
+|---|---|---|---|
+| `class-2` | 57.6 ms | 52.2 ms | 52.8 ms |
+| `class-3` | 63.0 ms | 52.0 ms | 347 ms |
+| `class-attrs` | 71.7 ms | 50.5 ms | 355 ms |
+| `class-large` | 506 ms | 149 ms | 147 ms |
+| `class-count` | 557 ms | 161 ms | 161 ms |
+| `class-value` | 1,845 ms | 1,031 ms | 1,052 ms |
+| `class-value-int` | 440 ms | 252 ms | 250 ms |
+
+- **Accumulo:** merging is 3 to 10 times faster wherever the lists are within about 35 times each other: −83 % on `class-2`, −91 % on `class-large`. Merging a list 137 times the shortest (the whole Person class) is slower than looking it up: the ratio must stay well below that.
+- **RocksDB:** a sequential cell costs about 0.4 µs inside a merge, and a lookup about 3 µs, so the break-even is near 8. Below it (`class-large`, three lists within 6.5× of each other) the merge is 25 to 30 % faster; above it (`class-2`, 18.6×) it is 2.4 times slower.
+- **HBase** (`hbase-20261117-014817`, the in-process test cluster): a lookup costs 12 to 21 µs and a cell read in a merge 0.6 to 0.9 µs, so the break-even is near 20. `class-2` (18.6×) gains 9 % merged, `class-attrs` 30 %, `class-large` 71 % (506 → 149 ms) and the value stars 43 %; merging the whole Person class (137×) is 5.5 times slower.
+- **Hence a ratio per backend**, from `Capabilities.lookupCost()`: 35 for Accumulo, 20 for HBase, 8 for RocksDB.
+- **Value conditions:** `class-value` and `class-value-int` halve on Accumulo, since the type list is merged. The other half is the value lookup per match, which is O14's work.
+- **Row counts** were the same in every variant (the benchmark compares counts only; `SubjectMergeIT` compares the rows themselves).
+- **The other 13 queries don't change.** Run with merges off and with every star merged (`rocksdb-20261117-013844`), they read exactly the same scans, ranges and cells: none of them has two constant patterns on one subject. Plans don't depend on the backend, so that holds on Accumulo and HBase too.
+- The RocksDB columns come from two runs: "off" and "8" from one, "merge all" from the other. Compare within a run only.
 
 ---
 
@@ -923,7 +960,7 @@ In this order, each measured on M8 before and after (on RocksDB and on the Accum
 3. **O21**, one range per subject: built and measured, off by default (no gain warm; to be tried cold, M3);
 4. **M8's follow-ups**: CPU apart from blocked threads, and settings compared back to back in one run;
 5. **O20**, the type check without a regex, and **O19**, RocksDB key decoding: done;
-6. **M10**, class-star queries in the benchmark, then **O22**, merge joins of subject-sorted ranges: the first step for "all entities matching X" (D1);
+6. **M10**, class-star queries in the benchmark, then **O22**, merge joins of subject-sorted ranges: done. Next, O24: slices intersected in parallel, and reading only the subjects of each cell instead of decoding whole statements;
 7. **O14**, comparisons as value ranges, with the datatype markers and the storage-version check (D12, decided). Value conditions in class stars need it;
 8. **O16** and **O17**, only if the split profile shows where the Accumulo joins' time goes;
 9. **O7**, parallel reads of one large range;

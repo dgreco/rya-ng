@@ -52,6 +52,7 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
     private final InferenceOptimizer inference;
     private final IndexSearchOptimizer indexSearch;
     private final GraphSizeOptimizer graphSizes;
+    private final RdfCloudTripleStoreConfiguration conf;
 
     /** Without secondary indexes. */
     public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
@@ -61,7 +62,7 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
 
     /**
      * @param indexes the secondary indexes queries may use
-     * @param conf the query's configuration (whether to use the indexes); ignored without indexes
+     * @param conf the query's configuration (whether to use the indexes, merge joins); null for neither
      */
     public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
             final EvaluationStatistics statistics, final InferenceOptimizer inference, final IndexCatalog indexes,
@@ -82,6 +83,7 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
         this.inference = inference;
         this.indexSearch = indexes == IndexCatalog.NONE || conf == null ? null : new IndexSearchOptimizer(indexes, conf);
         this.graphSizes = graphSizes;
+        this.conf = conf;
     }
 
     @Override
@@ -120,9 +122,11 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
                 StandardQueryOptimizerPipeline.FILTER_IN_VALUES_OPTIMIZER,
                 new FilterOptimizer(statistics),
                 StandardQueryOptimizerPipeline.ORDER_LIMIT_OPTIMIZER,
-                // Last: gives every join of a chain a statement pattern on its right, which is
-                // what the batched join and the entity prefetch work on.
-                new LeftDeepJoinOptimizer()));
+                // Gives every join of a chain a statement pattern on its right, which is what the
+                // batched join and the entity prefetch work on.
+                new LeftDeepJoinOptimizer(),
+                // Last: a star's merge becomes the driver of the left-deep chain.
+                new SubjectMergeOptimizer(statistics, conf, !strategy.isTrackResultSize() && !strategy.isTrackTime())));
         return optimizers;
     }
 }

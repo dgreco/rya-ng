@@ -42,6 +42,10 @@ tripatha:
   join-batch-size: 1000
   # Fetch the attributes a query reads for a batch of entities (joins and OPTIONALs on them) together.
   entity-prefetch: true
+  # Merge joins of a star's constant patterns: a pattern up to this many times longer than the
+  # star's shortest is read in subject order and intersected with it, instead of looked up per row.
+  # 0 turns them off; unset takes the backend's figure (35 on Accumulo, 20 on HBase, 8 on RocksDB).
+  # join-merge-ratio: 35
   # Full-text index behind text:matches (string and language-tagged literals).
   text-index: false
   # Predicates whose literals are text-indexed. Empty: all of them.

@@ -63,6 +63,13 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
     public static final String CONF_JOIN_SUBJECT_RANGES = "query.join.subjectranges";
     /** Narrow a pattern's scan to the prefix a {@code STRSTARTS} filter requires of its object (default true). */
     public static final String CONF_QUERY_PREFIX_RANGES = "query.prefixranges";
+    /**
+     * Merge joins of a star's constant patterns (SCALE-STUDY.md O22): a pattern {@code ?x p o}
+     * whose list of subjects is at most this many times the shortest such list of the star is
+     * read in subject order and intersected with it, instead of being looked up once per row.
+     * About the cost of one lookup over the cost of one cell read in sequence; 0 turns it off.
+     */
+    public static final String CONF_JOIN_MERGE_RATIO = "query.join.mergeratio";
     /** Maintain the full-text index (table {@code <prefix>text}). */
     public static final String CONF_INDEX_TEXT = "index.text";
     /** Predicates whose text literals are indexed; empty means every text literal. */
@@ -744,6 +751,15 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setJoinSubjectRanges(final boolean enabled) {
         setBoolean(CONF_JOIN_SUBJECT_RANGES, enabled);
+    }
+
+    /** @return how much longer than a star's shortest list a list may be and still be merged; 0 when merge joins are off. */
+    public double getJoinMergeRatio() {
+        return getDouble(CONF_JOIN_MERGE_RATIO, 0);
+    }
+
+    public void setJoinMergeRatio(final double ratio) {
+        setDouble(CONF_JOIN_MERGE_RATIO, ratio);
     }
 
     /** Whether a {@code STRSTARTS} filter on a pattern's object narrows the pattern's scan to the prefix. */
