@@ -260,6 +260,11 @@ public final class JoinBench {
         q.add(new Query("class-value-int", "companies of one industry with at least 100 employees (xsd:integer)",
                 "SELECT ?co ?n WHERE { ?co a o:Company ; o:industry <" + c.topIndustry
                         + "> ; o:numberOfEmployees ?n FILTER(?n >= 100) }"));
+        // The value condition keeps nine values in ten: a value range is the wrong driver here,
+        // and its fixed estimate (a tenth of the predicate) says otherwise. O14's losing side.
+        q.add(new Query("class-value-wide", "class-value with a condition most results pass (?v > 0)",
+                "SELECT ?obs ?v WHERE { ?obs a o:Observation ; o:observedProperty <" + c.topProperty
+                        + "> ; o:hasResult ?v FILTER(?v > 0) }"));
         final String prefixes = "PREFIX o: <" + generator.config().ontology("") + ">\n"
                 + "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
                 + "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"

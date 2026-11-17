@@ -423,9 +423,9 @@ All tables are named `<prefix><suffix>`. The default prefix is `tripatha_`.
 | `spo` | subject `00` predicate `00` object `01` type | graph IRI, empty for the default graph | qualifier, normally empty | statement's label | metadata, normally empty | patterns with a known subject |
 | `po` | predicate `00` object `00` subject `01` type | same | same | same | same | patterns with a known predicate |
 | `osp` | object `00` subject `00` predicate `01` type | same | same | same | same | patterns with a known object |
-| `eval` | one value, or two joined by `00` | which counter: `s`, `p`, `o`, `sp`, `po`, `so` | empty (all graphs) or a graph IRI | statement's label | a count as decimal text, summed server side | cardinality statistics ([section 11](#11-statistics-and-join-ordering)) |
+| `eval` | one value, or two joined by `00` | which counter: `s`, `p`, `o`, `sp`, `po`, `so`; or `t`, a datatype marker | empty (all graphs) or a graph IRI; for `t`, the object's datatype IRI | statement's label | a count as decimal text, summed server side | cardinality statistics ([section 11](#11-statistics-and-join-ordering)); for `t`, the datatypes of a predicate's objects ([section 12.9](#129-comparisons-as-value-ranges)) |
 | `graphs` | graph IRI | `g` | empty | statement's label | empty | named-graph markers |
-| `ns` | a prefix, or `tripatha` | `namespace`, `version` or `index` | empty, or the index id | none | namespace IRI, `1.0.0`, or index state | namespaces, storage version, index state |
+| `ns` | a prefix, or `tripatha` | `namespace`, `version`, `datatypes` or `index` | empty, or the index id | none | namespace IRI, `1.1.0`, `1`, or index state | namespaces, storage version, whether the datatype markers are complete, index state |
 | `text` | word `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | full-text index (optional, [section 15](#15-text-and-geo-search)) |
 | `geo` | geohash cell `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | geospatial index (optional) |
 
@@ -630,7 +630,7 @@ For `ex:alice ex:age 42` in graph `ex:g1`, with statistics and both indexes on:
 |---|---|---|
 | `spo`, `po`, `osp` | 1 each | the rows of [section 7.2](#72-row-keys-of-the-statement-tables) |
 | `graphs` | 1 | row `http://ex.org/g1`, family `g`. Written once per `add` call for each graph and label, not once per statement. |
-| `eval` | 12 | 6 counters (`s`, `p`, `o`, `sp`, `po`, `so`) for all graphs, and 6 more for graph `ex:g1` |
+| `eval` | 13 | 6 counters (`s`, `p`, `o`, `sp`, `po`, `so`) for all graphs, 6 more for graph `ex:g1`, and the datatype marker of `ex:age` for `xsd:integer`. The marker is written once per `add` call for each predicate, datatype and label, whether or not statistics are on. |
 | `text` | 0 | `42` is not a string, so the text index ignores it |
 | `geo` | 0 | not a `geo:wktLiteral` |
 
@@ -661,11 +661,16 @@ The batch is written early once it holds 50,000 keys (`MAX_PENDING_COUNTERS`), s
 `RyaStoreDAO.init()`:
 1. creates any missing tables;
 2. checks that the summing combiner is attached to `eval`, and attaches it if not. Listing a table's iterators needs `ALTER_TABLE`, so for a user without it the check is skipped;
-3. writes the storage version (`ns` row `tripatha`, family `version`) only if it is missing;
-4. opens the batch writers and the query engine;
+3. opens the batch writers and the query engine;
+4. reads the storage version (`ns` row `tripatha`, family `version`):
+   - **on a store it has just created,** it writes version `1.1.0` and the `datatypes` flag, which says that every statement of the store has its datatype markers ([section 12.9](#129-comparisons-as-value-ranges));
+   - **on any other store,** it writes neither. A store created before the markers keeps its version (`1.0.0`, or none) and has no flag, so comparisons there read whole predicates;
+   - **on a store whose version is newer than its own,** it opens read-only: every write method (`add`, `delete`, `dropGraph`, `purge`, namespaces, index rebuilds) throws. A newer store may rely on writes this code doesn't make, as a 1.1.0 store relies on the markers. Versions compare number by number between the dots;
 5. creates the `IndexManager`, which opens, creates or validates the index tables ([section 15.6](#156-index-lifecycle)).
 
 `init()` writes nothing when the store is already set up, so a read-only account (such as an endpoint user) can open it.
+
+The version check came with the markers, so a build from before it isn't stopped from writing to a 1.1.0 store, and its statements would have no markers. No such build is deployed: the project is a pre-release snapshot.
 
 ---
 
@@ -705,7 +710,8 @@ SPARQL `CLEAR` and `DROP` call `clearInternal`, which calls `dropGraph(conf, gra
 
 1. **Statement and index tables.** In `spo`, `po`, `osp` and the active index tables, it deletes the whole range, restricted to the column families of the given graphs. A `null` graph means the default graph (empty family). No graphs at all means everything. The index tables use the graph as column family too, so the same delete clears them.
 2. **Graph markers.** It deletes the markers of the named graphs, or all of them.
-3. **Counters.** Only when dropping everything, it also deletes the visible `eval` counters. A single-graph drop leaves the all-graphs counters too high, which only affects join ordering.
+3. **Counters.** Only when dropping everything, it also deletes the visible `eval` counters, family by family. A single-graph drop leaves the all-graphs counters too high, which only affects join ordering.
+4. **Not the datatype markers.** A writer adding statements meanwhile may have written its marker before this delete reached it, and a deleted marker would hide its statements from comparisons. A marker for a type with no values left only narrows less.
 
 ### 10.3 Listing graphs: the `graphs` table
 
@@ -713,7 +719,7 @@ SPARQL `CLEAR` and `DROP` call `clearInternal`, which calls `dropGraph(conf, gra
 
 ### 10.4 Purge and destroy
 
-- **`purge(conf)`** deletes everything visible from every table, then writes the storage version and the index state records again.
+- **`purge(conf)`** deletes everything visible from every table, then writes back the storage version and the `datatypes` flag it found, and the index state records. Exactly what it found: statements under labels the purger lacks stay, so a store without complete markers mustn't come out of a purge with the flag.
 - **`dropAndDestroy()`** deletes the tables.
 
 ---
@@ -774,6 +780,7 @@ The two-value counters (`sp`, `po`, `so`) are used because `query.usecompositeca
 
 More rules:
 - **Indexed patterns:** an `IndexedStatementPattern` ([section 15](#15-text-and-geo-search)) gets its plain estimate times 0.001 (`SELECTIVITY`), but at least 1.
+- **Value ranges:** a `ValueRangePattern` ([section 12.9](#129-comparisons-as-value-ranges)) gets its plain estimate times 0.1, but at least 1, and 1 when no value can match. A guess: there are no histograms.
 - **Filters:** a `Filter` node is estimated at a tenth of its argument.
 - **Joins:** a `Join` is estimated at the larger of its two sides.
 
@@ -901,7 +908,7 @@ Results are lazy: Accumulo is scanned as the result writer asks for rows, so `LI
 
 ### 12.3 The optimizer pipeline
 
-`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with six Tripatha steps added (marked ★):
+`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with nine Tripatha steps added (marked ★):
 
 ```mermaid
 flowchart TD
@@ -911,7 +918,8 @@ flowchart TD
     o3a --> o3b["★ GraphSizeOptimizer<br/>stats:approxSize patterns from the counters (section 11.4)"]
     o3b --> o4["★ InferenceOptimizer<br/>15 OWL/RDFS rewrites (section 14)"]
     o4 --> o5["★ IndexSearchOptimizer<br/>text and geo patterns (section 15)<br/>only when the store has indexes"]
-    o5 --> o6["QueryJoinOptimizer<br/>join order from Tripatha statistics (section 11)"]
+    o5 --> o5b["★ ValueRangeOptimizer<br/>comparisons narrow patterns to value ranges (section 12.9)"]
+    o5b --> o6["QueryJoinOptimizer<br/>join order from Tripatha statistics (section 11)"]
     o6 --> o6b["★ TripleTermOptimizer.order<br/>each triple-term pattern right after what binds its term (section 12.7)"]
     o6b --> o7["IterativeEvaluationOptimizer, FilterOptimizer,<br/>FilterInValuesOptimizer, FilterOptimizer,<br/>OrderLimitOptimizer"]
     o7 --> o8["★ LeftDeepJoinOptimizer<br/>right-nested joins become left-deep (section 13)"]
@@ -922,6 +930,7 @@ flowchart TD
 - **Graph sizes** are filled in before inference, which leaves the in-memory pattern they produce alone.
 - **Inference** runs after the tree is normalized and before join ordering. Join ordering therefore runs once, on the final tree, and sees the patterns inference created.
 - **The index rewrite** runs after inference, so sub-properties added by inference are searched too. It runs before join ordering, which then sees the much smaller indexed patterns.
+- **The value-range rewrite** runs after it: a pattern an index already narrows is left alone. Join ordering then sees the narrowed estimate.
 
 ### 12.4 The evaluation strategy
 
@@ -937,6 +946,7 @@ flowchart TD
 | `TripleRef` (a triple-term pattern) | `TripleRefStep` ([section 12.7](#127-triple-terms)) |
 | a `StatementPattern` whose object is a triple term with a constant subject | RDF4J's `StatementPatternQueryEvaluationStep`, reading through a `TripleTermRangeSource` ([section 12.7](#127-triple-terms)) |
 | a `StatementPattern` whose object a `STRSTARTS` filter constrains | RDF4J's `StatementPatternQueryEvaluationStep`, reading through an `ObjectPrefixSource` ([section 12.8](#128-strstarts-as-a-prefix-range)) |
+| `ValueRangePattern` (a pattern whose object comparisons bound) | RDF4J's `StatementPatternQueryEvaluationStep`, reading through a `ValueRangeSource` ([section 12.9](#129-comparisons-as-value-ranges)) |
 | `TransitivePropertySP` | the closure computed by `InferenceEngine.findTransitiveProperty` when one end is bound; otherwise a plain lookup |
 | any other node | RDF4J's default |
 
@@ -1006,6 +1016,49 @@ The statistics count a triple term like any other object, and estimate a `Triple
 **At run time,** when the pattern's subject or object is bound (in a join, for example), the lookup is already narrow and goes to the store as usual. In a batched join such a pattern is batched only once its subject or object is bound, like an indexed pattern.
 
 **Tests:** `ObjectPrefixIT` compares every query with the setting on and off.
+
+### 12.9 Comparisons as value ranges
+
+`?obs :hasResult ?v FILTER(?v > 60)` would read every `:hasResult` statement for the filter to keep a few. A `ValueRangePattern` reads only the results above 60 instead, a little widened (SCALE-STUDY.md O14).
+
+**Why a range is possible:**
+- Within one predicate, `po` rows sort by the object's data bytes.
+- For `xsd:int`, `xsd:short`, `xsd:long`, `xsd:integer`, `xsd:double`, `xsd:float` and `xsd:dateTime`, mango's encodings sort like the values ([section 7.3](#73-value-encoding)): negatives first, `-INF` to `INF` and then NaN for doubles, UTC milliseconds for date-times.
+- Not the others:
+  - `xsd:decimal`, `xsd:date` and other custom datatypes store their lexical text;
+  - `xsd:byte` stores the two hex digits of its unsigned byte, so its negative values sort after the positive ones.
+
+**What has to be known: the datatypes of the predicate's objects.** The type is the last part of a `po` row, after the subject, so nothing in the row layout groups them. The counters can be turned off. So every `add` writes a **datatype marker**: an `eval` counter cell per predicate, datatype and label, in family `t` (`DatatypeMarkers`).
+- **When written:** once per call and key, as graph markers are, whether or not statistics are on, and before the rows it stands for.
+- **When removed:** only by a purge. Deletes and `dropGraph` leave them ([section 10.2](#102-dropping-graphs-dropgraph)).
+- **Who sees them:** a reader sees a marker under the same labels as the statements it stands for, so it learns only the types of statements it may see. A type is present when any of its cells is visible, whatever they add up to.
+- **Trusted only when complete:** that is, in a store created by code that writes them, which `init()` flags in `ns` ([section 9.5](#95-opening-a-store)). A store without the flag is never narrowed.
+- **Not atomic:** an `add` whose flush fails can leave rows without their marker, until they are added again (the loader's resume does). Like every partial write, it isn't transactional.
+
+**When it applies** (`ValueRangeOptimizer`, after the index search and before join ordering):
+- **The pattern:** a plain `StatementPattern` (not one inference or an index built) with a variable subject, an IRI predicate, and the compared variable as its object, used nowhere else in it.
+- **The filter:** above the pattern, reached through joins, unions, the left side of an `OPTIONAL` or a `MINUS`, and extensions that don't bind the variable, as with the indexes ([section 15.7](#157-the-query-side-step-by-step)).
+- **The conditions:** conjuncts `<`, `<=`, `>`, `>=` or `=` between the variable and a constant number or `xsd:dateTime`, on either side.
+- **The datatypes:** read once per query and predicate, under the query's labels. Every one of them must sort like its values and be comparable with the constants (numbers with numbers, date-times with date-times). Otherwise the pattern is left as it is.
+- **The settings:** `query.valueranges` is on, which is the default. There is no result limit (`query.limit`), no hashed row layout and no row regular expression.
+
+**The ranges** (`ValueRanges`): one per datatype, each a scan of `po` from `p 00 start` to `p 00 stop 00 FF`, keeping the rows of that type with the type check of [section 8.2](#82-what-the-scan-adds-on-top-of-the-range). A range only has to hold every value the filter can keep, so its bounds are widened on purpose:
+- **Numbers.** RDF4J compares two numbers in a common type, rounding both to a float or a double when either is one. So the long 2^60 + 100 equals the double 2^60. Each bound is widened by 2^-20 of the constant plus 2^-120, more than that rounding, then floored or ceiled into the type's own values and clamped to its range.
+- **NaN.** RDF4J orders doubles with `Double.compare`, which puts NaN above every number, so `?v > 60` keeps a NaN. A double or float range without an upper bound runs past `INF` to the type's last data.
+- **Date-times** are stored as UTC milliseconds and read back with a `Z`. A constant without a time zone is read as UTC: XSD compares a value with a zone and one without only beyond 14 hours, on the side that reading gives, and in between the comparison is an error, which the filter rejects. The bounds are widened by a second.
+- **What bounds nothing:** a constant that is NaN, infinite, ill-typed, or a date-time outside the years 1 to 9999, and `!=`. Leaving a condition out only widens the ranges.
+- **What reads nothing:** contradictory bounds (`?v > 10 && ?v < 5`), or a type no value of which can match (a byte above 200) gets no range.
+- **When there are no ranges at all:** when a type's range would be open at both ends, as a byte's always is. The types share the predicate's rows, so each range also reads, and drops, the other types' rows whose data falls in it, and a range open at both ends costs a whole scan.
+
+**Why the answers can't change:** the filter stays and decides every row, and each range is a superset of the values the filter keeps. `ValueRangesTest` checks this against RDF4J's own comparisons, in strict and standard mode, for every narrowed type and every kind of constant, edges included.
+
+**At run time,** a `ValueRangeSource` reads the ranges one after the other, through `StoreTripleSource` with the usual graph semantics. When the pattern's subject or object is bound (in a join, say), the lookup is already narrow and goes to the store as usual. In a batched join such a pattern is batched only once its subject or object is bound, like an indexed pattern.
+
+**The estimate** is the predicate's count times 0.1 ([section 11.2](#112-how-a-patterns-cardinality-is-estimated)). With no histograms that is a guess, and it decides whether the range drives a star: it does when the predicate has fewer than ten times as many statements as the star's shortest other pattern. A condition most values pass makes it the wrong driver (SCALE-STUDY.md section 4.8).
+
+**Tests:**
+- `ValueRangeIT` compares every query with the setting on and off, with and without a label and with inference.
+- `DatatypeMarkersIT` checks the markers, the flag, the version check and what a range reads, on each backend.
 
 ---
 
@@ -1711,6 +1764,8 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 13. **One DAO, one writer thread.** Parallel writers use separate DAOs.
 14. **A triple term is never a constant `Var` of a statement pattern.** It is bound through a row (`TripleTermOptimizer.fold`); RDF4J's statement-pattern step would otherwise give one `Var` two parents.
 15. **A triple-term range only narrows.** The `TripleRef` that follows checks every result, as index searches are checked against `spo`.
+16. **Every statement of a flagged store has its datatype marker.** Every `add` writes them, only a purge removes them, and a DAO never writes to a store newer than itself. A missing marker would hide the statements of its type from comparisons.
+17. **A value range only narrows.** The filter stays and decides every row ([section 12.9](#129-comparisons-as-value-ranges)).
 
 ---
 

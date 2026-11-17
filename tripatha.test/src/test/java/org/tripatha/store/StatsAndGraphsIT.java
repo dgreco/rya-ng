@@ -105,6 +105,10 @@ public class StatsAndGraphsIT extends StoreITBase {
                     expected.merge(cell(m.row(), u.family(), u.qualifier(), u.visibility()), 1L, Long::sum);
                 }
             }
+            // One datatype marker per predicate, object type and label, written once by the one add.
+            expected.put(cell(p.getData().getBytes(StandardCharsets.UTF_8), DatatypeMarkers.FAMILY.getBytes(StandardCharsets.UTF_8),
+                    o.getDataType().stringValue().getBytes(StandardCharsets.UTF_8),
+                    label == null ? new byte[0] : label.getBytes(StandardCharsets.UTF_8)), 1L);
         }
         dao.add(batch.iterator());
         dao.flush();

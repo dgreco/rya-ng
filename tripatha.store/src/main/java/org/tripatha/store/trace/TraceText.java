@@ -22,6 +22,7 @@ import org.tripatha.api.domain.RyaRange;
 import org.tripatha.api.domain.RyaSchema;
 import org.tripatha.api.domain.RyaTripleTerm;
 import org.tripatha.api.domain.RyaType;
+import org.tripatha.api.domain.RyaValueRange;
 import org.tripatha.store.spi.KeyRange;
 
 /**
@@ -120,6 +121,10 @@ public final class TraceText {
         if (t instanceof RyaTripleTerm tt) {
             return "<<( " + term(tt.getSubject()) + ' ' + term(tt.getPredicate()) + ' ' + term(tt.getObject()) + " )>>";
         }
+        if (t instanceof RyaValueRange range) {
+            // Its data is the bounds as text.
+            return '[' + range.getData() + "]^^" + shortType(range.getDataType().stringValue());
+        }
         final String data = String.valueOf(t.getData());
         if (t.getDataType() == null || "http://www.w3.org/2001/XMLSchema#anyURI".equals(t.getDataType().stringValue())) {
             return '<' + data + '>';
@@ -127,8 +132,10 @@ public final class TraceText {
         if (t.getLanguage() != null) {
             return '"' + data + "\"@" + t.getLanguage();
         }
-        final String type = t.getDataType().stringValue();
-        final String shortType = type.startsWith("http://www.w3.org/2001/XMLSchema#") ? "xsd:" + type.substring(33) : '<' + type + '>';
-        return '"' + data + "\"^^" + shortType;
+        return '"' + data + "\"^^" + shortType(t.getDataType().stringValue());
+    }
+
+    private static String shortType(final String type) {
+        return type.startsWith("http://www.w3.org/2001/XMLSchema#") ? "xsd:" + type.substring(33) : '<' + type + '>';
     }
 }

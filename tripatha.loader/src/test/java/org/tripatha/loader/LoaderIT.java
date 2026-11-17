@@ -56,6 +56,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import org.tripatha.store.StoreRdfConfiguration;
+import org.tripatha.store.DatatypeMarkers;
 import org.tripatha.store.EvalStatsMutations;
 import org.tripatha.store.index.IndexSearcher;
 import org.tripatha.store.index.IndexType;
@@ -381,7 +382,9 @@ class LoaderIT extends StoreITBase {
 
     /**
      * spo holds exactly the generated statements and the reference data; eval holds exactly their
-     * summed counters, without the subject counters of 1 the load leaves out by default.
+     * summed counters, without the subject counters of 1 the load leaves out by default, and one
+     * datatype marker per predicate, object type and label (whose count is the number of adds
+     * that wrote it).
      */
     private StoreRdfConfiguration assertStoreHoldsExactlyTheDataset() throws Exception {
         final LoaderOptions o = options();
@@ -413,14 +416,27 @@ class LoaderIT extends StoreITBase {
                 expectedCounts.merge(cell(m.row(), u.family(), u.qualifier(), u.visibility()), u.delta(), Long::sum);
             }
         }
+        final Set<String> expectedMarkers = statements.stream()
+                .map(st -> cell(st.getPredicate().getData().getBytes(StandardCharsets.UTF_8),
+                        DatatypeMarkers.FAMILY.getBytes(StandardCharsets.UTF_8),
+                        st.getObject().getDataType().stringValue().getBytes(StandardCharsets.UTF_8),
+                        st.getColumnVisibility() == null ? new byte[0] : st.getColumnVisibility()))
+                .collect(Collectors.toSet());
         final Map<String, Long> actualCounts = new HashMap<>();
+        final Set<String> actualMarkers = new HashSet<>();
         try (CellScanner eval = getStore().scan(getTablePrefix() + "eval", KeyRange.all(), ScanSpec.of(Auths.of(AUTHS)))) {
             while (eval.hasNext()) {
                 final Cell k = eval.next();
-                actualCounts.merge(cell(k.row(), k.family(), k.qualifier(), k.visibility()), getStore().counterValue(k.value()),
-                        Long::sum);
+                final String key = cell(k.row(), k.family(), k.qualifier(), k.visibility());
+                if (DatatypeMarkers.FAMILY.equals(new String(k.family(), StandardCharsets.UTF_8))) {
+                    assertTrue(getStore().counterValue(k.value()) >= 1, key);
+                    actualMarkers.add(key);
+                } else {
+                    actualCounts.merge(key, getStore().counterValue(k.value()), Long::sum);
+                }
             }
         }
+        assertSame("datatype markers", expectedMarkers, actualMarkers);
         assertSame("eval", expectedCounts.entrySet().stream().map(Object::toString).collect(Collectors.toSet()),
                 actualCounts.entrySet().stream().map(Object::toString).collect(Collectors.toSet()));
         return conf;

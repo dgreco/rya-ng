@@ -59,6 +59,9 @@ public final class EvalStatsMutations {
     /** Column family of the named-graph marker rows. */
     public static final String GRAPH_CF = "g";
     public static final byte[] GRAPH_CF_BYTES = GRAPH_CF.getBytes(StandardCharsets.UTF_8);
+    /** The column families of the six counters, which leave out the datatype markers ({@link DatatypeMarkers}). */
+    public static final List<String> COUNTER_FAMILIES = List.of(SUBJECT_CF, PRED_CF, OBJ_CF, SUBJECTPRED_CF,
+            PREDOBJECT_CF, SUBJECTOBJECT_CF);
 
     private static final byte[] EMPTY = new byte[0];
 

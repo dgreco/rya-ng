@@ -106,6 +106,13 @@ public class RdfCloudTripleStoreConstants {
     public static RyaIRI RTS_SUBJECT_TRIPATHA = new RyaIRI(RTS_SUBJECT.stringValue());
     public static IRI RTS_VERSION_PREDICATE = VALUE_FACTORY.createIRI(NAMESPACE, "version");
     public static RyaIRI RTS_VERSION_PREDICATE_TRIPATHA = new RyaIRI(RTS_VERSION_PREDICATE.stringValue());
-    public static final Value VERSION = VALUE_FACTORY.createLiteral("1.0.0");
+    /**
+     * The storage version this code writes when it creates a store. 1.1.0 stores keep datatype
+     * markers (SCALE-STUDY.md O14); a DAO refuses to write to a store whose version is newer
+     * than this.
+     */
+    public static final Value VERSION = VALUE_FACTORY.createLiteral("1.1.0");
+    /** The version of a store created before the datatype markers. */
+    public static final String VERSION_WITHOUT_MARKERS = "1.0.0";
     public static RyaType VERSION_TRIPATHA = new RyaType(VERSION.stringValue());
 }

@@ -31,7 +31,9 @@ import java.util.Set;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 
 import com.google.common.base.Preconditions;
+import com.google.common.primitives.Bytes;
 
+import org.tripatha.api.RdfCloudTripleStoreConstants;
 import org.tripatha.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import org.tripatha.api.RdfCloudTripleStoreUtils;
 import org.tripatha.api.domain.RyaAnyTypeRange;
@@ -39,6 +41,7 @@ import org.tripatha.api.domain.RyaIRI;
 import org.tripatha.api.domain.RyaRange;
 import org.tripatha.api.domain.RyaStatement;
 import org.tripatha.api.domain.RyaType;
+import org.tripatha.api.domain.RyaValueRange;
 import org.tripatha.api.layout.TableLayoutStrategy;
 import org.tripatha.api.persist.RyaDAOException;
 import org.tripatha.api.persist.query.RyaQueryEngine;
@@ -79,6 +82,9 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
         if (conf == null) {
             conf = configuration;
         }
+        if (stmt.getObject() instanceof RyaValueRange range) {
+            return queryValueRange(stmt, range, conf);
+        }
         try {
             TriplePatternStrategy strategy = ryaContext.retrieveStrategy(stmt);
             final TABLE_LAYOUT layout;
@@ -108,6 +114,46 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
                 cells = store.scan(table(layout, conf), range, spec);
             }
             return limit(new RyaStatementCellIterator(layout, ryaContext, cells), conf);
+        } catch (final RyaDAOException e) {
+            throw e;
+        } catch (final Exception e) {
+            throw new RyaDAOException(e);
+        }
+    }
+
+    /**
+     * The statements {@code ?s p ?o} whose object is in a range of one datatype's values
+     * (SCALE-STUDY.md O14): one scan of po from {@code p 00 start} to {@code p 00 stop 00 FF},
+     * keeping the rows whose object has the range's type. An open end reaches the first or last
+     * row of the predicate, and the type check keeps that type's.
+     */
+    private CloseableIteration<RyaStatement> queryValueRange(final RyaStatement stmt, final RyaValueRange range,
+            final StoreRdfConfiguration conf) {
+        Preconditions.checkArgument(stmt.getSubject() == null && stmt.getPredicate() != null
+                && !(stmt.getPredicate() instanceof RyaRange), "A value range needs a predicate and no subject: %s", stmt);
+        // The hashed layout puts a hash before the predicate, which these rows don't have.
+        Preconditions.checkArgument(!Boolean.TRUE.equals(conf.isPrefixRowsWithHash()),
+                "Value ranges don't support the hashed row layout");
+        try {
+            final byte[] prefix = Bytes.concat(stmt.getPredicate().getData().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    RdfCloudTripleStoreConstants.DELIM_BYTES);
+            final byte[] startData = range.getStartData();
+            final byte[] stopData = range.getStopData();
+            final byte[] start = startData == null ? prefix : Bytes.concat(prefix, startData);
+            final byte[] stop = stopData == null ? Bytes.concat(prefix, RdfCloudTripleStoreConstants.LAST_BYTES)
+                    : Bytes.concat(prefix, stopData, RdfCloudTripleStoreConstants.DELIM_BYTES, RdfCloudTripleStoreConstants.LAST_BYTES);
+            final byte[] typeInfo = { RdfCloudTripleStoreConstants.TYPE_DELIM_BYTE, range.getMarker() };
+            final boolean typeOnly = conf.getRegexSubject() == null && conf.getRegexPredicate() == null
+                    && conf.getRegexObject() == null;
+            final TripleRowRegex regex = typeOnly ? null : ryaContext.retrieveStrategy(TABLE_LAYOUT.PO).buildRegex(
+                    conf.getRegexSubject(), conf.getRegexPredicate(), conf.getRegexObject(), null, typeInfo);
+            final ScanSpec spec = spec(stmt.getContext(), stmt.getQualifer(), regex, typeOnly ? typeInfo : null, conf,
+                    conf.getBatchSize());
+            final CellScanner cells;
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "lookup " + TraceText.pattern(stmt) + " on PO")) {
+                cells = store.scan(table(TABLE_LAYOUT.PO, conf), KeyRange.closed(start, stop), spec);
+            }
+            return limit(new RyaStatementCellIterator(TABLE_LAYOUT.PO, ryaContext, cells), conf);
         } catch (final RyaDAOException e) {
             throw e;
         } catch (final Exception e) {

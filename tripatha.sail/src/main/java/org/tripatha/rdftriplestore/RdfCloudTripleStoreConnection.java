@@ -26,6 +26,8 @@ import org.eclipse.rdf4j.common.iteration.LookAheadIteration;
 import java.util.HashSet;
 import org.tripatha.api.domain.RyaType;
 import org.tripatha.api.domain.RyaTypeRange;
+import org.tripatha.api.domain.RyaValueRange;
+import org.eclipse.rdf4j.common.iteration.UnionIteration;
 import org.tripatha.api.domain.RyaSchema;
 import org.tripatha.api.domain.RyaTripleTerm;
 import org.tripatha.api.resolver.impl.TripleTermResolver;
@@ -40,6 +42,7 @@ import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
 
@@ -257,13 +260,18 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 : new RyaDefaultStatistics();
         final RyaEvaluationStrategy strategy = new RyaEvaluationStrategy(tripleSource, dataset, inferenceEngine, statistics);
         final IndexCatalog indexes = ryaDAO instanceof RyaStoreDAO accumulo ? accumulo.getIndexCatalog() : IndexCatalog.NONE;
+        // The datatypes of a predicate's objects, from the markers, read with this query's labels.
+        final Function<IRI, Optional<Set<String>>> datatypes = ryaDAO instanceof RyaStoreDAO dao
+                && queryConf instanceof StoreRdfConfiguration storeConf
+                        ? p -> dao.objectDatatypes(RdfToRyaConversions.convertIRI(p), storeConf)
+                        : null;
         // Graph sizes come from the counters, read with this query's authorizations.
         final GraphSizeOptimizer graphSizes = new GraphSizeOptimizer(
                 rdfEvalStatsDAO instanceof RyaStoreEvalStatsDAO stats && queryConf instanceof StoreRdfConfiguration accumuloConf
                         ? () -> stats.graphSizes(accumuloConf)
                         : null);
         strategy.setOptimizerPipeline(new RyaQueryOptimizerPipeline(strategy, tripleSource, statistics,
-                new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf, graphSizes));
+                new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf, graphSizes, datatypes));
         try {
             final TupleExpr parsed = tupleExpr;
             StoreTrace.plan("parsed", parsed::toString);
@@ -567,6 +575,31 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 return inGraphs(contexts, graph -> new RyaStatement(null, p, RyaAnyTypeRange.startingWith(prefix),
                         RdfToRyaConversions.convertResource(graph)));
             }
+        }
+
+        /**
+         * The statements with this predicate whose object is in one of the ranges of values
+         * ({@code ValueRangePattern}): one range of {@code po} per range. Only for a caller that
+         * checks each object itself, as the comparison filter the ranges were made for does.
+         *
+         * @param condition the comparisons, for the trace
+         */
+        public CloseableIteration<? extends Statement> getStatementsInValueRanges(final IRI predicate,
+                final List<RyaValueRange> ranges, final String condition, final Resource... contexts)
+                throws QueryEvaluationException {
+            storeLookups++;
+            final RyaIRI p = RdfToRyaConversions.convertIRI(predicate);
+            final List<CloseableIteration<Statement>> parts = new ArrayList<>(ranges.size());
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "value ranges: only objects with " + condition + " are read, "
+                    + ranges.size() + " range" + (ranges.size() == 1 ? "" : "s"))) {
+                for (final RyaValueRange range : ranges) {
+                    parts.add(inGraphs(contexts, graph -> new RyaStatement(null, p, range, RdfToRyaConversions.convertResource(graph))));
+                }
+            } catch (final RuntimeException e) {
+                parts.forEach(CloseableIteration::close);
+                throw e;
+            }
+            return parts.size() == 1 ? parts.get(0) : new UnionIteration<>(parts);
         }
 
         /**

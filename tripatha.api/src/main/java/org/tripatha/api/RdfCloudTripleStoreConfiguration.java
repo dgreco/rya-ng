@@ -64,6 +64,12 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
     /** Narrow a pattern's scan to the prefix a {@code STRSTARTS} filter requires of its object (default true). */
     public static final String CONF_QUERY_PREFIX_RANGES = "query.prefixranges";
     /**
+     * Narrow a pattern's scan to the values a comparison filter on its object allows, one range
+     * per stored datatype, when the store's datatype markers say every type sorts like its values
+     * (SCALE-STUDY.md O14; default true).
+     */
+    public static final String CONF_QUERY_VALUE_RANGES = "query.valueranges";
+    /**
      * Merge joins of a star's constant patterns (SCALE-STUDY.md O22): a pattern {@code ?x p o}
      * whose list of subjects is at most this many times the shortest such list of the star is
      * read in subject order and intersected with it, instead of being looked up once per row.
@@ -769,5 +775,14 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setPrefixRanges(final boolean enabled) {
         setBoolean(CONF_QUERY_PREFIX_RANGES, enabled);
+    }
+
+    /** Whether a comparison filter on a pattern's object narrows the pattern's scan to value ranges. */
+    public boolean isValueRanges() {
+        return getBoolean(CONF_QUERY_VALUE_RANGES, true);
+    }
+
+    public void setValueRanges(final boolean enabled) {
+        setBoolean(CONF_QUERY_VALUE_RANGES, enabled);
     }
 }
