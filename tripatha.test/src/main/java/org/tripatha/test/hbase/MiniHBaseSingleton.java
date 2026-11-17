@@ -163,6 +163,13 @@ public final class MiniHBaseSingleton {
             Thread.currentThread().interrupt();
         }
         deleteRecursively(rootDir);
+        // createRootDir(true) puts the cluster's data under the utility's own directory
+        // (target/test-data/<id>), not under rootDir: about 25 GB after a benchmark load.
+        try {
+            running.cleanupTestDir();
+        } catch (final Exception e) {
+            e.printStackTrace(System.err);
+        }
     }
 
     private static void deleteRecursively(final File dir) {
