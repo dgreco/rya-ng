@@ -46,6 +46,9 @@ tripatha:
   # star's shortest is read in subject order and intersected with it, instead of looked up per row.
   # 0 turns them off; unset takes the backend's figure (35 on Accumulo, 20 on HBase, 8 on RocksDB).
   # join-merge-ratio: 35
+  # Merge joins read their lists in up to this many slices of the subject space, cut at the
+  # store's split points and intersected on threads of their own; 1 reads them whole.
+  # join-merge-slices: 4
   # Full-text index behind text:matches (string and language-tagged literals).
   text-index: false
   # Predicates whose literals are text-indexed. Empty: all of them.

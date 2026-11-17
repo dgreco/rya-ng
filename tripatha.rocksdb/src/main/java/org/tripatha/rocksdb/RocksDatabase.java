@@ -68,6 +68,8 @@ final class RocksDatabase {
     private final UInt64AddOperator add;
     private final ColumnFamilyHandle metadata;
     private final Map<String, ColumnFamilyHandle> families = new ConcurrentHashMap<>();
+    /** Split points given to tables in this process (a RocksDB table has none of its own). */
+    private final Map<String, java.util.SortedSet<byte[]>> splitHints = new ConcurrentHashMap<>();
     private final Map<String, TableKind> kinds = new ConcurrentHashMap<>();
     /** Handles of dropped tables: a scanner may still be reading one, so they are closed with the database. */
     private final List<ColumnFamilyHandle> retired = new ArrayList<>();
@@ -251,6 +253,55 @@ final class RocksDatabase {
         } catch (final RocksDBException e) {
             throw new RyaDAOException(e);
         }
+    }
+
+    /** Remembers split points given to a table, for {@link #splitRows}: a RocksDB table has no splits of its own. */
+    void addSplitHints(final String table, final java.util.Collection<byte[]> rows) {
+        splitHints.computeIfAbsent(table, t -> java.util.Collections.synchronizedSortedSet(new TreeSet<>(java.util.Arrays::compareUnsigned)))
+                .addAll(rows);
+    }
+
+    /**
+     * Rows that divide a table into parts of similar size, sorted: the split points given to it
+     * in this process, or else the first rows of its files on the level that holds most of its
+     * data (RocksDB keeps each level's files in disjoint key ranges). None for a table still in
+     * memory.
+     */
+    List<byte[]> splitRows(final String table) {
+        final java.util.SortedSet<byte[]> hints = splitHints.get(table);
+        if (hints != null && !hints.isEmpty()) {
+            synchronized (hints) {
+                return new ArrayList<>(hints);
+            }
+        }
+        final byte[] familyName = name(table);
+        final Map<Integer, List<org.rocksdb.LiveFileMetaData>> byLevel = new HashMap<>();
+        for (final org.rocksdb.LiveFileMetaData file : db.getLiveFilesMetaData()) {
+            if (java.util.Arrays.equals(file.columnFamilyName(), familyName)) {
+                byLevel.computeIfAbsent(file.level(), l -> new ArrayList<>()).add(file);
+            }
+        }
+        List<org.rocksdb.LiveFileMetaData> fullest = List.of();
+        long most = -1;
+        for (final List<org.rocksdb.LiveFileMetaData> files : byLevel.values()) {
+            final long size = files.stream().mapToLong(org.rocksdb.LiveFileMetaData::size).sum();
+            if (size > most) {
+                most = size;
+                fullest = files;
+            }
+        }
+        final TreeSet<byte[]> rows = new TreeSet<>(java.util.Arrays::compareUnsigned);
+        for (final org.rocksdb.LiveFileMetaData file : fullest) {
+            final byte[] row = RocksCodec.row(file.smallestKey());
+            if (row.length > 0) {
+                rows.add(row);
+            }
+        }
+        // The first file starts the table: its first row splits nothing.
+        if (!rows.isEmpty()) {
+            rows.pollFirst();
+        }
+        return new ArrayList<>(rows);
     }
 
     /** Writes a table's memory to disk and fully compacts it. */

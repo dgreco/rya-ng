@@ -64,6 +64,12 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
     /** Narrow a pattern's scan to the prefix a {@code STRSTARTS} filter requires of its object (default true). */
     public static final String CONF_QUERY_PREFIX_RANGES = "query.prefixranges";
     /**
+     * Merge joins (O22) read their lists in up to this many slices of the subject space, cut at
+     * the store's split points and intersected on threads of their own (SCALE-STUDY.md O24;
+     * default 4). 1 reads each list whole.
+     */
+    public static final String CONF_JOIN_MERGE_SLICES = "query.join.mergeslices";
+    /**
      * Narrow a pattern's scan to the values a comparison filter on its object allows, one range
      * per stored datatype, when the store's datatype markers say every type sorts like its values
      * (SCALE-STUDY.md O14; default true).
@@ -773,6 +779,18 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setJoinMergeRatio(final double ratio) {
         setDouble(CONF_JOIN_MERGE_RATIO, ratio);
+    }
+
+    /**
+     * @return into how many slices of the subject space a merge join may cut its lists, each
+     *         intersected on a thread of its own; 1 reads them whole on the query thread
+     */
+    public int getJoinMergeSlices() {
+        return getInt(CONF_JOIN_MERGE_SLICES, 4);
+    }
+
+    public void setJoinMergeSlices(final int slices) {
+        setInt(CONF_JOIN_MERGE_SLICES, slices);
     }
 
     /** Whether a {@code STRSTARTS} filter on a pattern's object narrows the pattern's scan to the prefix. */

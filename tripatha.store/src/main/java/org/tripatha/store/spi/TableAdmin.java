@@ -53,6 +53,33 @@ public interface TableAdmin {
     /** The number of split points a table has. */
     int splitCount(String table);
 
+    /**
+     * Rows that divide a table into parts of similar size, sorted: its split points, or what the
+     * backend knows instead. For reading one range in slices on several threads (SCALE-STUDY.md
+     * O24). A hint only: any rows are correct, they only balance the slices better or worse.
+     *
+     * @param max the most rows returned, spread evenly over all of them
+     * @return the rows, or none when the backend can't tell (one slice)
+     */
+    default List<byte[]> splitRows(final String table, final int max) {
+        return List.of();
+    }
+
+    /** At most {@code max} of {@code sorted}, spread evenly over it. */
+    static List<byte[]> spread(final List<byte[]> sorted, final int max) {
+        if (max <= 0) {
+            return List.of();
+        }
+        if (sorted.size() <= max) {
+            return List.copyOf(sorted);
+        }
+        final List<byte[]> out = new java.util.ArrayList<>(max);
+        for (int i = 1; i <= max; i++) {
+            out.add(sorted.get((int) ((long) i * sorted.size() / (max + 1))));
+        }
+        return out;
+    }
+
     /** The number of servers holding data. */
     int serverCount();
 }

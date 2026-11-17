@@ -20,6 +20,7 @@ package org.tripatha.store.query;
  */
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
@@ -141,6 +142,96 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
             throw e;
         } catch (final Exception e) {
             throw new RyaDAOException(e);
+        }
+    }
+
+    /**
+     * The subjects of the statements {@code ?s predicate object}, in every graph and in subject
+     * order: one range of po, read without decoding the statements (SCALE-STUDY.md O24). For merge
+     * joins, which compare only subjects.
+     *
+     * <p>Each cell gives its subject's UTF-8 bytes, cut from the row between the known
+     * {@code p 00 object 00} and the object's type suffix, so a subject with several statements
+     * (graphs, labels) comes once per statement. Unsigned byte order is code point order.
+     *
+     * @param from the first subject included, or null from the first
+     * @param to the first subject left out, or null to the last: a slice of the subject space
+     */
+    public CloseableIteration<byte[]> subjects(final RyaIRI predicate, final RyaType object, final byte[] from,
+            final byte[] to, StoreRdfConfiguration conf) {
+        Preconditions.checkNotNull(predicate);
+        Preconditions.checkNotNull(object);
+        if (conf == null) {
+            conf = configuration;
+        }
+        // The hashed layout puts a hash before the predicate, which these rows don't have.
+        Preconditions.checkArgument(!Boolean.TRUE.equals(conf.isPrefixRowsWithHash()),
+                "Subject scans don't support the hashed row layout");
+        try {
+            final byte[][] value = RyaContext.getInstance().serializeType(object);
+            final byte[] prefix = Bytes.concat(predicate.getData().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    RdfCloudTripleStoreConstants.DELIM_BYTES, value[0], RdfCloudTripleStoreConstants.DELIM_BYTES);
+            final byte[] typeInfo = value[1];
+            final byte[] start = from == null ? prefix : Bytes.concat(prefix, from);
+            final byte[] stop = to == null ? Bytes.concat(prefix, RdfCloudTripleStoreConstants.LAST_BYTES) : Bytes.concat(prefix, to);
+            final boolean typeOnly = conf.getRegexSubject() == null && conf.getRegexPredicate() == null
+                    && conf.getRegexObject() == null;
+            final TripleRowRegex regex = typeOnly ? null : ryaContext.retrieveStrategy(TABLE_LAYOUT.PO).buildRegex(
+                    conf.getRegexSubject(), conf.getRegexPredicate(), conf.getRegexObject(), null, typeInfo);
+            final ScanSpec spec = spec(null, null, regex, typeOnly ? typeInfo : null, conf, conf.getBatchSize());
+            final RyaStatement pattern = new RyaStatement(null, predicate, object);
+            final CellScanner cells;
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "lookup " + TraceText.pattern(pattern)
+                    + " on PO, subjects only" + (from == null && to == null ? "" : ", one slice"))) {
+                cells = store.scan(table(TABLE_LAYOUT.PO, conf), KeyRange.rows(start, true, stop, false), spec);
+            }
+            return new SubjectIterator(cells, prefix.length, typeInfo);
+        } catch (final RyaDAOException e) {
+            throw e;
+        } catch (final Exception e) {
+            throw new RyaDAOException(e);
+        }
+    }
+
+    /** The subject bytes of po rows {@code p 00 object 00 subject typeInfo}. */
+    private static final class SubjectIterator implements CloseableIteration<byte[]> {
+        private final CellScanner cells;
+        private final int prefixLength;
+        private final byte[] typeInfo;
+        private byte[] next;
+
+        SubjectIterator(final CellScanner cells, final int prefixLength, final byte[] typeInfo) {
+            this.cells = cells;
+            this.prefixLength = prefixLength;
+            this.typeInfo = typeInfo;
+        }
+
+        @Override
+        public boolean hasNext() {
+            while (next == null && cells.hasNext()) {
+                final byte[] row = cells.next().row();
+                final int end = row.length - typeInfo.length;
+                // The scan keeps only rows of the object's type; check the suffix anyway.
+                if (end >= prefixLength && Arrays.equals(row, end, row.length, typeInfo, 0, typeInfo.length)) {
+                    next = Arrays.copyOfRange(row, prefixLength, end);
+                }
+            }
+            return next != null;
+        }
+
+        @Override
+        public byte[] next() {
+            if (!hasNext()) {
+                throw new NoSuchElementException();
+            }
+            final byte[] subject = next;
+            next = null;
+            return subject;
+        }
+
+        @Override
+        public void close() {
+            cells.close();
         }
     }
 

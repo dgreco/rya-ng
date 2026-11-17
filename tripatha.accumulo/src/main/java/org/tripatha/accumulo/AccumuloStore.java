@@ -17,6 +17,7 @@ package org.tripatha.accumulo;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
@@ -539,6 +540,24 @@ public final class AccumuloStore implements Store {
                 return client.tableOperations().listSplits(table).size();
             } catch (final AccumuloException | AccumuloSecurityException | TableNotFoundException e) {
                 throw new RyaDAOException(e);
+            }
+        }
+
+        @Override
+        public List<byte[]> splitRows(final String table, final int max) {
+            if (max <= 0) {
+                return List.of();
+            }
+            try {
+                final List<byte[]> rows = new ArrayList<>();
+                for (final Text split : client.tableOperations().listSplits(table, max)) {
+                    rows.add(split.copyBytes());
+                }
+                rows.sort(Arrays::compareUnsigned);
+                return rows;
+            } catch (final AccumuloException | AccumuloSecurityException | TableNotFoundException | RuntimeException e) {
+                log.debug("No split points for {}: {}", table, e.toString());
+                return List.of();
             }
         }
 

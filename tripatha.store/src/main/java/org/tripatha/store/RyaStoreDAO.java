@@ -130,6 +130,14 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
     private volatile boolean datatypeMarkers;
     /** Why writes are refused (the store is newer than this code), or null. */
     private volatile String writesRefused;
+    /** The last subject boundaries read, with how many were asked for and when. */
+    private volatile Boundaries boundaries;
+
+    private record Boundaries(int max, long nanos, List<byte[]> subjects) {
+    }
+
+    /** How long subject boundaries are kept: split points change rarely, and stale ones only balance worse. */
+    private static final long BOUNDARIES_NANOS = java.util.concurrent.TimeUnit.MINUTES.toNanos(1);
 
     public RyaStoreDAO() {
     }
@@ -244,6 +252,37 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
         if (refused != null) {
             throw new RyaDAOException(refused);
         }
+    }
+
+    /**
+     * Subjects that divide the store's subjects into parts of similar size, sorted by their UTF-8
+     * bytes: {@code spo}'s split points cut to their subjects (SCALE-STUDY.md O24). Merge joins read
+     * their lists in the slices between them. Kept a minute.
+     *
+     * @param slices how many slices are wanted; one fewer boundaries are returned, at most
+     * @return the boundaries, or none (one slice) when the backend reports no split points
+     */
+    public List<byte[]> subjectBoundaries(final int slices) {
+        if (slices <= 1) {
+            return List.of();
+        }
+        final Boundaries cached = boundaries;
+        if (cached != null && cached.max() == slices && System.nanoTime() - cached.nanos() < BOUNDARIES_NANOS) {
+            return cached.subjects();
+        }
+        final java.util.TreeSet<byte[]> subjects = new java.util.TreeSet<>(Arrays::compareUnsigned);
+        for (final byte[] row : store.tables().splitRows(tables.getSpo(), slices - 1)) {
+            int end = 0;
+            while (end < row.length && row[end] != 0) {
+                end++;
+            }
+            if (end > 0) {
+                subjects.add(Arrays.copyOf(row, end));
+            }
+        }
+        final List<byte[]> found = List.copyOf(subjects);
+        boundaries = new Boundaries(slices, System.nanoTime(), found);
+        return found;
     }
 
     /**
