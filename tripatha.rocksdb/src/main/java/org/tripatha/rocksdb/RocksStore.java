@@ -230,7 +230,13 @@ public final class RocksStore implements Store {
 
         @Override
         public void addSplits(final String table, final SortedSet<byte[]> splits) {
-            // Nothing to split.
+            // Nothing to split: remembered as hints for splitRows.
+            database.addSplitHints(table, splits);
+        }
+
+        @Override
+        public List<byte[]> splitRows(final String table, final int max) {
+            return TableAdmin.spread(database.splitRows(table), max);
         }
 
         @Override

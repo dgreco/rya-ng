@@ -76,7 +76,8 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
 5. **"All entities matching X" (D1): class stars in the benchmark (M10), merge joins (O22) and value ranges (O14) done.**
    - O22 reads a star's constant patterns as subject-sorted `po` ranges and intersects them. On the Accumulo test cluster that is 3 to 10 times faster than one lookup per driver row: `class-large` 1,446 → 137 ms, `class-2` 267 → 47 ms. On RocksDB, where a lookup is cheap, it gains only for lists of similar lengths, so the ratio that decides is per backend (section 4.7).
    - O14 makes a selective value condition the driver of its star: `class-value` 3,964 → 151 ms on Accumulo, `class-value-int` 1,796 → 408 ms (section 4.8). With O25 a condition most values pass leaves the star to its constant patterns.
-   - Stars in the servers (O23): D13 decided (a), after O24. On these queries the client's merge reads 50k to 400k cells in 50 to 140 ms on Accumulo, so the transfer of the lists is not the limit at 10M; it is with lists of billions.
+   - O24 reads the merges' lists as subjects only, in 4 slices of the subject space on threads of their own: `class-large` 109 → 67 ms on Accumulo, 94 → 30 ms on RocksDB (section 4.9).
+   - Stars in the servers (O23): D13 decided (a), next. On these queries the client's merge reads 50k to 400k cells in 50 to 140 ms on Accumulo, so the transfer of the lists is not the limit at 10M; it is with lists of billions.
 6. **IRI prefix codes: measured (M9), and deferred.**
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
@@ -152,7 +153,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O21 | **One range per subject:** when a window looks up two or more links of the same subject in `spo`, it reads the subject's range once and lets `BatchLookup`'s exact matching keep the cells asked for. A batch whose subject ranges return more than 64 cells per subject plus 1,024 is re-read one range per link (section 6.8) | R2 | measured (M8): `star-in` 17,594 → 8,799 ranges but 25,445 → 103,265 cells; `star-optional` 7,601 → 2,537 ranges, 9,345 → 28,772 cells. Accumulo: no change beyond noise. RocksDB: +64 % and +49 %. So `query.join.subjectranges` is **off by default**. Untested hypothesis: on a cold cache a seek is a block read and the extra cells are in the same block (M3) | M8 | 1 | Built, off by default |
 | O22 | **Merge joins of subject-sorted ranges:** for a star with constant objects (`?x a :Person ; :worksFor :Acme ; :nationality :IT`), each pattern is a `po` range sorted by subject. Stream them side by side and intersect, instead of one lookup per row. The subject space is sliced so several slices are intersected at once (section 6.10) | R2 | expected from 4.6: a sequentially read cell costs about 1/35 of a lookup on the Accumulo test cluster. To be measured on M10's class stars | M10 | 1 | Done: `SubjectMergeJoin`, on by default with a ratio per backend (35 Accumulo, 20 HBase, 8 RocksDB); measured in section 4.7. Slices in parallel and subject-only reads are O24 |
 | O23 | **Stars evaluated in the servers:** an optional subject-partitioned table, maintained like an index. A shard holds, per predicate and object, the sorted subjects of its share of the store. A server-side iterator (Accumulo) or coprocessor (HBase) intersects a star's lists inside every shard in parallel, and returns only the matching subjects (section 6.10) | R2 | the distributed join for "all entities matching X" (D1). To be measured against O22 | O22, D13 | 2 | Not started |
-| O24 | **Merge joins, part 2:** intersect a star's lists in slices of the subject space on several threads at once (cut at `spo`'s tablet splits or at sampled subjects), and read only each cell's subject instead of decoding the whole statement (section 6.10) | R2 | O22 reads one list per pattern on one thread, and decodes every cell | O22 | 1 | Not started |
+| O24 | **Merge joins, part 2:** intersect a star's lists in slices of the subject space on several threads at once (cut at `spo`'s tablet splits or at sampled subjects), and read only each cell's subject instead of decoding the whole statement (section 6.10) | R2 | O22 reads one list per pattern on one thread, and decodes every cell | O22 | 1 | Done: subjects read as bytes, no statement decoding; slices cut at `spo`'s split points (`TableAdmin.splitRows`), up to `query.join.mergeslices` (4) on threads of their own. With 4 slices merges are 1.6 to 2 times faster on Accumulo and HBase and 3 times on RocksDB (section 4.9) |
 | O25 | **A real estimate for a value range:** count the range's cells up to a cap (about 10,000) when its pattern is in a join, and use the count when the range is shorter, or assume most of the predicate when it isn't. Only the join order depends on it, so a pattern on its own needs none | R2 | O14's estimate is a fixed tenth of the predicate: `class-value-wide` (`?v > 0`, 91 % pass) is 8.2 times slower on Accumulo with it, 4.1 on RocksDB and 3.6 on HBase (section 4.8) | O14 | 1 | Done: counted up to `query.valueranges.count` (10,000) for a pattern in a join. `class-value-wide` is back within 1 to 6 % of the merge plan, and the selective stars keep their gains; a condition between the cap and the star's lists (`class-value-mid`) gets the merge plan, 1.2 to 2.75 times slower than the range would be (section 4.8) |
 
 ### 2.2 Measurements
@@ -450,6 +451,34 @@ Measured on 2026-11-17 as variants of one run per backend: `query.valueranges` o
 - **What the cap gives up:** `class-value-mid` counts past 10,000 and gets the merge plan, though its range would drive it 2.4 times faster on RocksDB, 2.75 times on HBase, and only 1.2 times on Accumulo, where its 43,907 lookups cost most. A higher cap would win it back on RocksDB and HBase, for a longer count on every wide condition in a join (about 1 µs a cell): a per-backend cap, like O22's ratio, is the next step if such conditions matter.
 - **A pattern on its own isn't counted:** the range queries read the same cells with and without the count.
 - **Nothing else changes:** on RocksDB the other 15 queries read exactly the same in all three variants.
+
+### 4.9 Merge joins in slices, reading subjects only (O24)
+
+Profiled first (2026-11-17, before O24), on `class-large`'s merge of three lists (247,677 cells):
+- **RocksDB:** 172 ms, all of it on the query thread: 44 % decoding cells into statements (`WholeRowTripleResolver.deserialize` alone 34 %), 40 % the backend's key decoding, 7 % comparing subjects as strings.
+- **Accumulo:** 176 ms, of which the query thread's CPU is 55 ms: 42 % decoding statements and 41 % the Thrift client. The rest is waiting for batches.
+
+So O24 does two things: it reads only each cell's subject, as bytes (the decoding share), and cuts the lists into slices of the subject space, intersected on threads of their own (the waiting share, and the CPU share on RocksDB). The benchmark stores of Accumulo and HBase have 3 split points, so 4 slices at most; RocksDB's come from its SST files.
+
+As variants of one run per backend, `query.join.mergeslices` 1 (subjects only, one thread), 2, 4 and 8. Reports `rocksdb-20261117-201357` (the whole suite), `accumulo-20261117-203103` and `hbase-20261117-204751`:
+
+| Query (rows) | RocksDB 1 / 2 / 4 / 8 | Accumulo 1 / 2 / 4 | HBase 1 / 2 / 4 |
+|---|---|---|---|
+| `class-2` (312) | not merged on RocksDB | 40.0 / 26.3 / **20.4 ms** | 48.3 / 36.4 / **25.0 ms** |
+| `class-3` (312) | not merged | 89 / 69 / 69 ms | 52 / 36 / **29 ms** |
+| `class-attrs` (361) | not merged | 91 / 70 / 71 ms | 42 / 29 / **23 ms** |
+| `class-large` (14,379) | 93.5 / 60.4 / **29.9** / 21.9 ms | 109 / 83 / **67 ms** | 162 / **100** / 124 ms |
+| `class-count` (1) | 92.6 / 60.3 / **28.9** / 18.6 ms | 103 / 78 / **59 ms** | 132 / 90 / **76 ms** |
+| `class-value-mid` (5,233) | 429 / 291 / 291 / 297 ms | 2,632 / 2,517 / 2,516 ms | 969 / 828 / 888 ms |
+| `class-value-wide` (51,116) | 382 / 270 / 269 / 270 ms | 2,676 / 2,579 / 2,588 ms | 1,122 / 1,137 / 1,118 ms |
+
+**What it shows:**
+- **Subjects only:** before O24 the same merges took 172 ms (RocksDB) and 176 ms (Accumulo) for `class-large` in the profiling runs; with one slice now 94 and 109 ms. The runs differ (another build shared the machine during some of them), so this is indicative; the slices below are compared within one run.
+- **Slices:** with 4, merges are 1.6 to 2 times faster on Accumulo and HBase, where they wait on the servers, and 3 times on RocksDB, where they are CPU on the client; RocksDB gains up to 4.3 times with 8. The value stars gain 0 to 32 %: most of their time is the lookups after the merge.
+- **The handoff matters:** a first version handed every match over one at a time. With 14,379 matches the query thread, waiting on an empty queue, paid a park and an unpark per match: total CPU rose 45 % and 2 slices were slower than 1 on RocksDB. Chunks of 32 doubling to 1,024 removed that: on RocksDB the total CPU now rises 9 % with 4 slices.
+- **Hence 4 slices by default** on every backend: the best or close to it everywhere, and a bound on the threads one query takes on a busy endpoint.
+- **Rows** were the same in every variant. Sliced merges read a few cells fewer: each slice stops reading as soon as one of its lists runs out. The other 18 queries read exactly the same cells (RocksDB, whole suite).
+- **At 10^12** this divides the time by a constant: the lists still all cross to one client. O23 is the answer there.
 
 ---
 
@@ -957,7 +986,7 @@ The target workload (D1) is entities of large classes selected by several proper
 - **How:** for patterns `?x p1 o1`, `?x p2 o2`, … in one join, read each `po` range in subject order and intersect them as they stream.
   - When one list is much shorter, it drives, and the others are looked up for its subjects, as today. A leapfrog intersection, seeking each list to the next candidate, is not possible on the client: the SPI's `CellScanner` and Accumulo's client scanner can't seek inside an open scan, so a probe is a new range, which is a lookup. Leapfrogging belongs in a server-side iterator (O23).
   - Patterns with unbound objects (attributes to fetch) are then batched lookups of the matching subjects, as today.
-- **Parallelism:** the subject space is cut at the tablet boundaries of `spo`, or at sampled split points, and the slices are intersected on several threads at once, each over the servers holding them.
+- **Parallelism (O24, built):** the subject space is cut at `spo`'s split points, and the slices are intersected on several threads at once. A star's `(p, o)` lists usually sit in one `po` tablet each, so the slices spread the work over threads and concurrent scans of the same servers, not over more servers.
 - **Semantics:**
   - RDF4J's own join produces the same bindings.
   - Rows come out in subject order instead of the driver's order, which SPARQL doesn't fix without `ORDER BY`.
@@ -970,7 +999,8 @@ The target workload (D1) is entities of large classes selected by several proper
     - Merging costs both lengths in sequential cells, about 1.7 µs each on the test cluster.
     - Today's batched lookups cost the driver's length in lookups, about 59 µs each.
     - So merge when the longer list is under about 35 times the driver, and look up otherwise. The ratio is a setting, measured per backend.
-  - **Slices:** all of a star's lists are cut at the same subject boundaries, taken from `spo`'s tablet splits or sampled. Each slice is one ordered scan per pattern, intersected on its own thread.
+  - **Slices (O24, built):** all of a star's lists are cut at the same subject boundaries, `spo`'s split points cut to their subjects (`TableAdmin.splitRows`: Accumulo's `listSplits`, HBase's region starts, RocksDB's split hints or the first rows of its SST files). Each slice is one ordered scan per pattern, opened on the query thread (so it is traced) and intersected on its own thread, which hands its matches over in chunks of 32 doubling to 1,024 and closes its own scans. The slices are emitted in subject order, so the rows and their order don't depend on the slicing.
+  - **Subjects only (O24, built):** each cell's subject is cut from the `po` row between the known `p 00 o 00` and the type suffix, and compared as unsigned bytes (code point order). No statement is decoded, and only matches become values.
   - **Scope:** patterns in the default scope or one named graph, constant predicates and objects, one shared subject variable. Patterns with unbound objects stay batched lookups over the merge's output, as entity prefetch does today.
   - **The type check:** each list is a `po` range with its object's row suffix (O20), so a value of another type with the same data is dropped on the server, as in a single lookup.
   - **Value conditions don't merge.** A prefix range (O13) or a value range (O14) of `po` is sorted by value, then by subject, so it can't be intersected as it streams. A star with a value condition is driven by the value range when that is short (O14), or merges its constant patterns and looks the value up per match. A later step could read a short value range into a set of subjects and filter the merge's output with it.
@@ -1013,11 +1043,11 @@ In this order, each measured on M8 before and after (on RocksDB and on the Accum
 3. **O21**, one range per subject: built and measured, off by default (no gain warm; to be tried cold, M3);
 4. **M8's follow-ups**: CPU apart from blocked threads, and settings compared back to back in one run;
 5. **O20**, the type check without a regex, and **O19**, RocksDB key decoding: done;
-6. **M10**, class-star queries in the benchmark, then **O22**, merge joins of subject-sorted ranges: done. Next, O24: slices intersected in parallel, and reading only the subjects of each cell instead of decoding whole statements;
+6. **M10**, class-star queries in the benchmark, then **O22**, merge joins of subject-sorted ranges, and **O24**, their slices intersected in parallel and subjects read without decoding statements: done;
 7. **O14**, comparisons as value ranges, with the datatype markers and the storage-version check (D12), and **O25**, their counted estimate: done;
 8. **O16** and **O17**, only if the split profile shows where the Accumulo joins' time goes;
 9. **O7**, parallel reads of one large range;
-10. **O23**, stars evaluated in the servers (D13: decided), after O24, with benchmark queries it should win (counts, selective intersections of long lists).
+10. **O23**, stars evaluated in the servers (D13: decided), next, with benchmark queries it should win (counts, selective intersections of long lists).
 
 **Exit:**
 - every change has an M8 report;

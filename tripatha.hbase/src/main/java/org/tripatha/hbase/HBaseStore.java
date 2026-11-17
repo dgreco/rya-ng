@@ -18,6 +18,7 @@ package org.tripatha.hbase;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -740,6 +741,27 @@ public final class HBaseStore implements Store {
                 return admin.getRegions(name(table)).size() - 1;
             } catch (final IOException e) {
                 throw new RyaDAOException(e);
+            }
+        }
+
+        @Override
+        public List<byte[]> splitRows(final String table, final int max) {
+            if (max <= 0) {
+                return List.of();
+            }
+            try (var locator = connection.getRegionLocator(name(table))) {
+                final List<byte[]> rows = new ArrayList<>();
+                for (final byte[] start : locator.getStartKeys()) {
+                    // The first region starts at the empty row, stored as 00.
+                    if (start.length > 0 && !(start.length == 1 && start[0] == 0)) {
+                        rows.add(start);
+                    }
+                }
+                rows.sort(Arrays::compareUnsigned);
+                return TableAdmin.spread(rows, max);
+            } catch (final IOException | RuntimeException e) {
+                log.debug("No split points for {}: {}", table, e.toString());
+                return List.of();
             }
         }
 

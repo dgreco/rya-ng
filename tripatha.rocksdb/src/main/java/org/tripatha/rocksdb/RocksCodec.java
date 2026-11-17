@@ -169,6 +169,22 @@ final class RocksCodec {
                 stored.length == TIMESTAMP_BYTES ? EMPTY : Arrays.copyOfRange(stored, TIMESTAMP_BYTES, stored.length));
     }
 
+    /** The row of a stored key: up to {@code 00 01}, with escaped {@code 00} bytes restored. */
+    static byte[] row(final byte[] key) {
+        int end = 0;
+        int zeros = 0;
+        while (end + 1 < key.length && (key[end] != 0 || key[end + 1] != 1)) {
+            if (key[end] == 0) {
+                zeros++;
+                end += 2;
+            } else {
+                end++;
+            }
+        }
+        end = Math.min(end, key.length);
+        return zeros == 0 ? Arrays.copyOf(key, end) : unescape(key, end, zeros);
+    }
+
     /** The row in {@code key[0, end)}, which holds {@code zeros} escaped {@code 00} bytes, copied run by run. */
     private static byte[] unescape(final byte[] key, final int end, final int zeros) {
         final byte[] row = new byte[end - zeros];

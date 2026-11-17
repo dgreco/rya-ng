@@ -101,6 +101,8 @@ public class SubjectMergeIT extends RyaSailITBase {
         }
         subjects.addAll(ODD);
         final SailRepository repo = repository(true, 0);
+        // While spo is empty: HBase can't split a region again before compacting it.
+        split();
         try (RepositoryConnection conn = repo.getConnection()) {
             for (int i = 0; i < subjects.size(); i++) {
                 final IRI s = VF.createIRI(subjects.get(i));
@@ -194,6 +196,7 @@ public class SubjectMergeIT extends RyaSailITBase {
         // The lists of the first query are within 1.5 times of each other: merged at any backend's ratio.
         final StoreRdfConfiguration conf = newConf();
         conf.unset(RdfCloudTripleStoreConfiguration.CONF_JOIN_MERGE_RATIO);
+        conf.setJoinMergeSlices(1); // the whole lists, as the count below expects
         conf.setAuths("A");
         final SailRepository unset = new SailRepository(newStore(conf, false));
         unset.init();
@@ -265,15 +268,43 @@ public class SubjectMergeIT extends RyaSailITBase {
     }
 
     @Test
-    public void subjectsCompareInTheirStoredOrder() {
-        final List<String> sorted = new ArrayList<>(subjects);
-        sorted.sort(SubjectMergeStep::compareCodePoints);
-        final List<String> byBytes = new ArrayList<>(subjects);
-        byBytes.sort((a, b) -> java.util.Arrays.compareUnsigned(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8)));
-        assertEquals(byBytes, sorted);
-        final List<String> utf16 = new ArrayList<>(subjects);
-        Collections.sort(utf16);
-        assertFalse(utf16.equals(byBytes), "the data must tell the two orders apart");
+    public void mergedRowsComeInTheStoredOrderOfTheirSubjects() throws Exception {
+        final String query = QUERIES.get(0);
+        for (final int slices : List.of(1, 8)) {
+            final List<String> got = new ArrayList<>();
+            for (final String row : rowsInOrder(repository(false, 1_000_000, false, slices), query)) {
+                final String x = row.substring(2, row.length() - 1);
+                if (got.isEmpty() || !got.get(got.size() - 1).equals(x)) {
+                    got.add(x); // a subject in two graphs gives two adjacent rows
+                }
+            }
+            final List<String> byBytes = new ArrayList<>(new java.util.HashSet<>(got));
+            byBytes.sort((a, b) -> java.util.Arrays.compareUnsigned(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8)));
+            assertEquals(byBytes, got, slices + " slices");
+            final List<String> utf16 = new ArrayList<>(got);
+            Collections.sort(utf16);
+            assertFalse(utf16.equals(byBytes), "the data must tell code point order from UTF-16 order");
+        }
+    }
+
+    @Test
+    public void slicedMergesGiveTheRowsOfOneSliceInTheSameOrder() throws Exception {
+        for (final boolean labelled : List.of(true, false)) {
+            final SailRepository plain = repository(labelled, 0, false, 1);
+            final SailRepository whole = repository(labelled, 1_000_000, false, 1);
+            final SailRepository sliced = repository(labelled, 1_000_000, false, 8);
+            for (final String query : QUERIES) {
+                assertEquals(rows(plain, query), rows(sliced, query), query + (labelled ? " (label A)" : ""));
+                assertEquals(rowsInOrder(whole, query), rowsInOrder(sliced, query), "the same order: " + query);
+            }
+            // Five boundaries, six slices, each read for both patterns.
+            assertEquals(12, read(sliced, QUERIES.get(0)).mergedLists());
+            assertEquals(2, read(whole, QUERIES.get(0)).mergedLists());
+            // A LIMIT closes the slices early.
+            final List<String> limited = rows(sliced, QUERIES.get(0) + " LIMIT 3");
+            assertEquals(3, limited.size());
+            assertTrue(rows(plain, QUERIES.get(0)).containsAll(limited), limited.toString());
+        }
     }
 
     // ------------------------------------------------------------------ helpers
@@ -311,8 +342,15 @@ public class SubjectMergeIT extends RyaSailITBase {
     }
 
     private SailRepository repository(final boolean labelled, final double mergeRatio, final boolean inference) {
+        return repository(labelled, mergeRatio, inference, null);
+    }
+
+    /** @param slices how many slices merges may use; null for one, the whole lists */
+    private SailRepository repository(final boolean labelled, final double mergeRatio, final boolean inference,
+            final Integer slices) {
         final StoreRdfConfiguration conf = newConf();
         conf.setJoinMergeRatio(mergeRatio);
+        conf.setJoinMergeSlices(slices == null ? 1 : slices);
         if (labelled) {
             conf.setAuths("A");
         }
@@ -320,6 +358,35 @@ public class SubjectMergeIT extends RyaSailITBase {
         repo.init();
         repositories.add(repo);
         return repo;
+    }
+
+    /**
+     * Splits spo at five subjects, among them the odd ones, so that merges can have slices: real
+     * splits on Accumulo and HBase, hints on RocksDB. Tests ask for slices with
+     * {@code repository(…, slices)}.
+     */
+    private void split() {
+        final java.util.SortedSet<byte[]> rows = new java.util.TreeSet<>(java.util.Arrays::compareUnsigned);
+        for (final String subject : List.of("urn:s15", "urn:s3", "urn:s31", ODD.get(1), ODD.get(2))) {
+            rows.add(subject.getBytes(StandardCharsets.UTF_8));
+        }
+        getStore().tables().addSplits(newConf().getTableLayoutStrategy().getSpo(), rows);
+    }
+
+    /** The rows, as text, in the order they came. */
+    private static List<String> rowsInOrder(final SailRepository repo, final String query) {
+        final List<String> rows = new ArrayList<>();
+        try (RepositoryConnection conn = repo.getConnection(); TupleQueryResult result = conn.prepareTupleQuery(query).evaluate()) {
+            while (result.hasNext()) {
+                final BindingSet bs = result.next();
+                final StringBuilder b = new StringBuilder();
+                for (final String name : new TreeSet<>(bs.getBindingNames())) {
+                    b.append(name).append('=').append(bs.getValue(name)).append(' ');
+                }
+                rows.add(b.toString());
+            }
+        }
+        return rows;
     }
 
     /** The rows, as text, sorted: a multiset. */

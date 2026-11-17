@@ -617,15 +617,32 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
         }
 
         /**
-         * The statements {@code ?s predicate object} of every graph, in the order of their
-         * subjects: one range of {@code po}. For a merge join ({@code SubjectMergeStep}), which
-         * reads only their subjects.
+         * Subjects that divide the store's subjects into about {@code slices} parts, sorted by
+         * their UTF-8 bytes, for a merge join read in slices; none when the store can't tell.
          */
-        public CloseableIteration<RyaStatement> inSubjectOrder(final IRI predicate, final Value object) {
+        public List<byte[]> subjectBoundaries(final int slices) {
+            return ryaDAO instanceof RyaStoreDAO dao ? dao.subjectBoundaries(slices) : List.of();
+        }
+
+        /**
+         * The subjects of the statements {@code ?s predicate object} of every graph, in subject
+         * order, as their UTF-8 bytes, once per statement: one range of {@code po}, or the slice of
+         * it between two subjects. For a merge join ({@code SubjectMergeStep}), which reads only
+         * subjects.
+         *
+         * @param from the first subject included, or null
+         * @param to the first subject left out, or null
+         */
+        public CloseableIteration<byte[]> subjectsInOrder(final IRI predicate, final Value object, final byte[] from,
+                final byte[] to) {
             storeLookups++;
+            if (!(ryaDAO.getQueryEngine() instanceof org.tripatha.store.query.RyaStoreQueryEngine engine)
+                    || !(conf instanceof StoreRdfConfiguration storeConf)) {
+                throw new QueryEvaluationException("Merge joins need Tripatha's store query engine");
+            }
             try {
-                return ryaDAO.getQueryEngine().query(new RyaStatement(null, RdfToRyaConversions.convertIRI(predicate),
-                        RdfToRyaConversions.convertValue(object)), conf);
+                return engine.subjects(RdfToRyaConversions.convertIRI(predicate), RdfToRyaConversions.convertValue(object),
+                        from, to, storeConf);
             } catch (final RyaDAOException e) {
                 throw new QueryEvaluationException(e);
             }

@@ -15,8 +15,17 @@
  */
 package org.tripatha.rdftriplestore.evaluation;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
@@ -26,24 +35,52 @@ import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.query.BindingSet;
 import org.eclipse.rdf4j.query.MutableBindingSet;
+import org.eclipse.rdf4j.query.QueryEvaluationException;
 import org.eclipse.rdf4j.query.algebra.StatementPattern;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryEvaluationStep;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.QueryEvaluationContext;
-import org.tripatha.api.domain.RyaStatement;
+import org.tripatha.api.domain.RyaIRI;
 import org.tripatha.api.resolver.RyaToRdfConversions;
 import org.tripatha.rdftriplestore.RdfCloudTripleStoreConnection.StoreTripleSource;
 import org.tripatha.store.trace.StoreTrace;
 
 /**
- * Evaluates a {@link SubjectMergeJoin}: reads each pattern's statements in subject order, one
- * range of {@code po} each, and returns the subjects found in every list.
+ * Evaluates a {@link SubjectMergeJoin}: reads each pattern's subjects in order, one range of
+ * {@code po} each, and returns the subjects found in every list.
  *
  * <p>The rows are those of the patterns' join. A subject with {@code n1} statements in the first
  * list (several graphs, or one statement under several labels), {@code n2} in the second and so
  * on gives {@code n1 × n2 × …} rows, as the nested loop would. When the subject is already bound,
  * as on the right side of an OPTIONAL evaluated per row, the patterns are joined as before.
+ *
+ * <p><b>Subjects only</b> (SCALE-STUDY.md O24): the lists give each cell's subject as its UTF-8
+ * bytes, without decoding statements, and they are compared as unsigned bytes, which is code
+ * point order and so the stored order. Only matching subjects become values.
+ *
+ * <p><b>Slices</b> (O24): up to {@code query.join.mergeslices} slices of the subject space, cut at
+ * the store's split points ({@code RyaStoreDAO.subjectBoundaries}). Every list is read once per
+ * slice, as the range of its subjects in that slice, and each slice is intersected on a thread of
+ * its own. Its matches come back in chunks through a bounded queue, and the slices are emitted in subject
+ * order, so the rows are those of one slice, in the same order. The scans are all opened on the
+ * query thread, so the trace reports them; a slice's thread reads its scans and closes them.
  */
 final class SubjectMergeStep implements QueryEvaluationStep {
+    /** Threads intersecting slices: daemons, kept a minute when idle. */
+    private static final ExecutorService SLICE_THREADS = Executors.newCachedThreadPool(r -> {
+        final Thread t = new Thread(r, "tripatha-merge-slice");
+        t.setDaemon(true);
+        return t;
+    });
+    /** Chunks of matches a slice's thread may hold ahead of the query thread. */
+    private static final int QUEUED = 8;
+    /**
+     * Matches are handed over in chunks, from 32 (so a LIMIT's first rows come early) doubling
+     * to 1,024: one at a time, a query thread waiting on an empty queue costs a park and an unpark
+     * per match on both threads.
+     */
+    private static final int FIRST_CHUNK = 32;
+    private static final int MAX_CHUNK = 1024;
+
     private final SubjectMergeJoin node;
     private final StoreTripleSource<?> source;
     private final QueryEvaluationStep nestedLoop;
@@ -72,11 +109,13 @@ final class SubjectMergeStep implements QueryEvaluationStep {
         return new Merge(bindings);
     }
 
-    /** The intersection of the lists, opened on the first read. */
+    /** The rows of the intersection, opened on the first read. */
     private final class Merge extends LookAheadIteration<BindingSet> {
         private final BindingSet bindings;
-        private final List<CloseableIteration<RyaStatement>> lists = new ArrayList<>();
-        private RyaStatement[] heads;
+        private List<Intersection> slices;
+        /** One per slice when they run on threads of their own; null for one slice. */
+        private List<SliceTask> tasks;
+        private int current;
         private Value subject;
         private long repeats;
 
@@ -86,7 +125,7 @@ final class SubjectMergeStep implements QueryEvaluationStep {
 
         @Override
         protected BindingSet getNextElement() {
-            if (heads == null) {
+            if (slices == null) {
                 open();
             }
             while (repeats == 0) {
@@ -102,16 +141,120 @@ final class SubjectMergeStep implements QueryEvaluationStep {
 
         private void open() {
             final List<StatementPattern> patterns = node.getPatterns();
-            heads = new RyaStatement[patterns.size()];
+            final int wanted = Math.max(1, source.getConf().getJoinMergeSlices());
+            final List<byte[]> bounds = wanted > 1 ? source.subjectBoundaries(wanted) : List.of();
+            slices = new ArrayList<>(bounds.size() + 1);
             try (StoreTrace.Reason why = StoreTrace.reason(() -> "merge join: the subjects of " + patterns.size()
-                    + " constant patterns on ?" + node.getSubjectName() + ", read in order and intersected")) {
-                for (final StatementPattern sp : patterns) {
-                    lists.add(source.inSubjectOrder((IRI) sp.getPredicateVar().getValue(), sp.getObjectVar().getValue()));
+                    + " constant patterns on ?" + node.getSubjectName() + ", read in order and intersected"
+                    + (bounds.isEmpty() ? "" : ", in " + (bounds.size() + 1) + " slices"))) {
+                for (int i = 0; i <= bounds.size(); i++) {
+                    final byte[] from = i == 0 ? null : bounds.get(i - 1);
+                    final byte[] to = i == bounds.size() ? null : bounds.get(i);
+                    final List<CloseableIteration<byte[]>> lists = new ArrayList<>(patterns.size());
+                    slices.add(new Intersection(lists));
+                    for (final StatementPattern sp : patterns) {
+                        lists.add(source.subjectsInOrder((IRI) sp.getPredicateVar().getValue(), sp.getObjectVar().getValue(),
+                                from, to));
+                    }
+                }
+            } catch (final RuntimeException e) {
+                for (final Intersection slice : slices) {
+                    slice.closeQuietly(e);
+                }
+                slices = List.of();
+                throw e;
+            }
+            if (slices.size() > 1) {
+                tasks = new ArrayList<>(slices.size());
+                for (final Intersection slice : slices) {
+                    final SliceTask task = new SliceTask(slice);
+                    tasks.add(task);
+                    SLICE_THREADS.execute(task);
                 }
             }
-            for (int i = 0; i < heads.length; i++) {
-                heads[i] = next(i);
+        }
+
+        /** Moves to the next subject every list has, and how many rows it gives; false when none is left. */
+        private boolean nextMatch() {
+            if (tasks == null) {
+                final Intersection only = slices.isEmpty() ? null : slices.get(0);
+                if (only == null || !only.advance()) {
+                    return false;
+                }
+                subject = value(only.subject());
+                repeats = only.repeats();
+                return true;
             }
+            while (current < tasks.size()) {
+                final Match match = tasks.get(current).take();
+                if (match == null) {
+                    current++;
+                    continue;
+                }
+                subject = value(match.subject());
+                repeats = match.repeats();
+                return true;
+            }
+            return false;
+        }
+
+        @Override
+        protected void handleClose() {
+            final List<Intersection> opened = slices;
+            if (opened == null) {
+                return;
+            }
+            if (tasks == null) {
+                RuntimeException failure = null;
+                for (final Intersection slice : opened) {
+                    failure = slice.closeQuietly(failure);
+                }
+                if (failure != null) {
+                    throw failure;
+                }
+                return;
+            }
+            for (final SliceTask task : tasks) {
+                task.stop();
+            }
+        }
+    }
+
+    private static Value value(final byte[] subject) {
+        return RyaToRdfConversions.convertResource(new RyaIRI(new String(subject, StandardCharsets.UTF_8)));
+    }
+
+    /** A subject every list of a slice has, and how many rows it gives. */
+    private record Match(byte[] subject, long repeats) {
+    }
+
+    /** A slice's thread failed: its exception, for the query thread. */
+    private record Failure(Throwable cause) {
+    }
+
+    /** The end of a slice's matches. */
+    private static final Object END = new Object();
+
+    /**
+     * The subjects every list of one slice has, in order, each with the product of its counts in
+     * the lists. Used by one thread at a time.
+     */
+    static final class Intersection {
+        private final List<CloseableIteration<byte[]>> lists;
+        private byte[][] heads;
+        private byte[] subject;
+        private long repeats;
+
+        Intersection(final List<CloseableIteration<byte[]>> lists) {
+            this.lists = lists;
+        }
+
+        byte[] subject() {
+            return subject;
+        }
+
+        long repeats() {
+            return repeats;
         }
 
         /**
@@ -120,92 +263,185 @@ final class SubjectMergeStep implements QueryEvaluationStep {
          *
          * @return false when a list has run out
          */
-        private boolean nextMatch() {
-            String target = null;
-            for (final RyaStatement head : heads) {
+        boolean advance() {
+            if (heads == null) {
+                heads = new byte[lists.size()][];
+                for (int i = 0; i < heads.length; i++) {
+                    heads[i] = next(i);
+                }
+            }
+            byte[] target = null;
+            for (final byte[] head : heads) {
                 if (head == null) {
                     return false;
                 }
-                final String s = head.getSubject().getData();
-                if (target == null || compareCodePoints(s, target) > 0) {
-                    target = s;
+                if (target == null || Arrays.compareUnsigned(head, target) > 0) {
+                    target = head;
                 }
             }
             boolean agreed;
             do {
                 agreed = true;
                 for (int i = 0; i < heads.length; i++) {
-                    while (compareCodePoints(heads[i].getSubject().getData(), target) < 0) {
+                    while (Arrays.compareUnsigned(heads[i], target) < 0) {
                         heads[i] = next(i);
                         if (heads[i] == null) {
                             return false;
                         }
                     }
-                    final String s = heads[i].getSubject().getData();
-                    if (!s.equals(target)) {
-                        target = s;
+                    if (!Arrays.equals(heads[i], target)) {
+                        target = heads[i];
                         agreed = false;
                     }
                 }
             } while (!agreed);
-            subject = RyaToRdfConversions.convertResource(heads[0].getSubject());
             long rows = 1;
             for (int i = 0; i < heads.length; i++) {
                 long count = 0;
-                while (heads[i] != null && heads[i].getSubject().getData().equals(target)) {
+                while (heads[i] != null && Arrays.equals(heads[i], target)) {
                     count++;
                     heads[i] = next(i);
                 }
                 rows = Math.multiplyExact(rows, count);
             }
+            subject = target;
             repeats = rows;
             return true;
         }
 
-        private RyaStatement next(final int list) {
-            final CloseableIteration<RyaStatement> it = lists.get(list);
+        private byte[] next(final int list) {
+            final CloseableIteration<byte[]> it = lists.get(list);
             return it.hasNext() ? it.next() : null;
         }
 
-        @Override
-        protected void handleClose() {
-            RuntimeException failure = null;
-            for (final CloseableIteration<RyaStatement> it : lists) {
+        /** Closes every list; returns the first failure, added to {@code failure} when there is one. */
+        RuntimeException closeQuietly(RuntimeException failure) {
+            for (final CloseableIteration<byte[]> it : lists) {
                 try {
                     it.close();
                 } catch (final RuntimeException e) {
                     if (failure == null) {
                         failure = e;
-                    } else {
+                    } else if (failure != e) {
                         failure.addSuppressed(e);
                     }
                 }
             }
-            if (failure != null) {
-                throw failure;
-            }
+            return failure;
         }
     }
 
     /**
-     * Compares two strings by code point, which is the order of their UTF-8 bytes and so of the
-     * stored rows. {@link String#compareTo} compares UTF-16 units, which puts characters above
-     * U+FFFF before U+E000 to U+FFFF.
+     * One slice intersected on a thread of its own. Whoever claims it first owns its scans: its
+     * thread when it starts, or the query thread when the merge is closed before it started.
      */
-    static int compareCodePoints(final String a, final String b) {
-        final int n = Math.min(a.length(), b.length());
-        for (int i = 0; i < n; i++) {
-            char x = a.charAt(i);
-            char y = b.charAt(i);
-            if (x != y) {
-                if (x >= '\uD800' && y >= '\uD800') {
-                    // Surrogates (U+D800 to U+DFFF) stand for code points above every BMP character.
-                    x = (char) (x >= '' ? x - 0x800 : x + 0x2000);
-                    y = (char) (y >= '' ? y - 0x800 : y + 0x2000);
+    private static final class SliceTask implements Runnable {
+        private final Intersection slice;
+        private final BlockingQueue<Object> queue = new ArrayBlockingQueue<>(QUEUED);
+        /** The chunk the query thread is reading, and where in it. */
+        private List<Match> chunk = List.of();
+        private int read;
+        private final AtomicBoolean claimed = new AtomicBoolean();
+        private final AtomicBoolean stopped = new AtomicBoolean();
+        private final CountDownLatch done = new CountDownLatch(1);
+
+        SliceTask(final Intersection slice) {
+            this.slice = slice;
+        }
+
+        @Override
+        public void run() {
+            if (!claimed.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                int size = FIRST_CHUNK;
+                List<Match> matches = new ArrayList<>(size);
+                while (!stopped.get() && slice.advance()) {
+                    matches.add(new Match(slice.subject(), slice.repeats()));
+                    if (matches.size() >= size) {
+                        put(matches);
+                        size = Math.min(MAX_CHUNK, size * 2);
+                        matches = new ArrayList<>(size);
+                    }
                 }
-                return x - y;
+                if (!matches.isEmpty()) {
+                    put(matches);
+                }
+                put(END);
+            } catch (final Throwable t) {
+                put(new Failure(t));
+            } finally {
+                final RuntimeException failure = slice.closeQuietly(null);
+                if (failure != null && !stopped.get()) {
+                    put(new Failure(failure));
+                }
+                done.countDown();
             }
         }
-        return a.length() - b.length();
+
+        private void put(final Object item) {
+            try {
+                while (!stopped.get()) {
+                    if (queue.offer(item, 50, TimeUnit.MILLISECONDS)) {
+                        return;
+                    }
+                }
+            } catch (final InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        /** @return the slice's next match, or null at its end */
+        @SuppressWarnings("unchecked")
+        Match take() {
+            if (read < chunk.size()) {
+                return chunk.get(read++);
+            }
+            final Object item;
+            try {
+                item = queue.take();
+            } catch (final InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new QueryEvaluationException("Interrupted while merging", e);
+            }
+            if (item == END) {
+                return null;
+            }
+            if (item instanceof List<?> next) {
+                chunk = (List<Match>) next;
+                read = 1;
+                return chunk.get(0);
+            }
+            if (item instanceof Failure f) {
+                if (f.cause() instanceof RuntimeException r) {
+                    throw r;
+                }
+                if (f.cause() instanceof Error err) {
+                    throw err;
+                }
+                throw new QueryEvaluationException(f.cause());
+            }
+            throw new IllegalStateException("Unexpected item: " + item);
+        }
+
+        /** Stops the slice and waits until its scans are closed. */
+        void stop() {
+            stopped.set(true);
+            if (claimed.compareAndSet(false, true)) {
+                // Never started: its scans are ours to close.
+                final RuntimeException failure = slice.closeQuietly(null);
+                done.countDown();
+                if (failure != null) {
+                    throw failure;
+                }
+                return;
+            }
+            try {
+                done.await();
+            } catch (final InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 }
