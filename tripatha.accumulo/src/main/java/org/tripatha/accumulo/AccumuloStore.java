@@ -93,7 +93,8 @@ public final class AccumuloStore implements Store {
 
     /** Accumulo's default key size constraint. */
     private static final int MAX_KEY_BYTES = 1_048_576;
-    private static final Capabilities CAPABILITIES = new Capabilities(true, true, true, true, MAX_KEY_BYTES);
+    /** A lookup costs about 35 cells read in sequence, measured on the test cluster (SCALE-STUDY.md 4.6, O22). */
+    private static final Capabilities CAPABILITIES = new Capabilities(true, true, true, true, MAX_KEY_BYTES, 35);
 
     private final AccumuloClient client;
     private final boolean ownsClient;
@@ -329,9 +330,9 @@ public final class AccumuloStore implements Store {
             }
             out.add(setting);
         }
-        if (spec.rowRegex() != null) {
+        if (spec.rowFilterRegex() != null) {
             final IteratorSetting setting = new IteratorSetting(11, "ri", RegExFilter.class.getName());
-            RegExFilter.setRegexs(setting, spec.rowRegex(), null, null, null, false);
+            RegExFilter.setRegexs(setting, spec.rowFilterRegex(), null, null, null, false);
             out.add(setting);
         }
         for (final ServerIterator it : spec.iterators()) {

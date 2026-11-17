@@ -127,6 +127,9 @@ public class RyaStoreConfiguration {
         conf.setMaintainStats(props.stats());
         conf.setJoinBatchSize(props.joinBatchSize());
         conf.setJoinEntityPrefetch(props.entityPrefetch());
+        if (props.joinMergeRatio() != null) {
+            conf.setJoinMergeRatio(props.joinMergeRatio());
+        }
         conf.setTextIndex(props.textIndex());
         conf.setTextIndexPredicates(props.textIndexPredicates());
         conf.setGeoIndex(props.geoIndex());

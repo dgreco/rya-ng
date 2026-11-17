@@ -48,6 +48,7 @@ final class RocksScan implements CellScanner {
     private final ScanSpec spec;
     private final List<byte[][]> bounds;
     private final Pattern rowRegex;
+    private final byte[] rowSuffix;
     private final Pattern qualifierRegex;
     /** Whether each distinct visibility seen so far is visible. */
     private final Map<ByteBuffer, Boolean> visible = new HashMap<>();
@@ -68,6 +69,7 @@ final class RocksScan implements CellScanner {
             bounds.add(new byte[][] {RocksCodec.lowerBound(r), RocksCodec.upperBound(r)});
         }
         this.rowRegex = spec.rowRegex() == null ? null : Pattern.compile(spec.rowRegex());
+        this.rowSuffix = spec.rowSuffix();
         this.qualifierRegex = spec.qualifierRegex() == null ? null : Pattern.compile(spec.qualifierRegex());
         database.retain();
         this.snapshot = database.db().getSnapshot();
@@ -144,6 +146,9 @@ final class RocksScan implements CellScanner {
                 || (spec.maxTimestamp() != null && cell.timestamp() > spec.maxTimestamp())) {
             return false;
         }
+        if (rowSuffix != null && !endsWith(cell.row(), rowSuffix)) {
+            return false;
+        }
         if (rowRegex != null && !rowRegex.matcher(new String(cell.row(), StandardCharsets.UTF_8)).matches()) {
             return false;
         }
@@ -162,5 +167,10 @@ final class RocksScan implements CellScanner {
         database.db().releaseSnapshot(snapshot);
         snapshot.close();
         database.release();
+    }
+
+    private static boolean endsWith(final byte[] row, final byte[] suffix) {
+        final int from = row.length - suffix.length;
+        return from >= 0 && Arrays.equals(row, from, row.length, suffix, 0, suffix.length);
     }
 }

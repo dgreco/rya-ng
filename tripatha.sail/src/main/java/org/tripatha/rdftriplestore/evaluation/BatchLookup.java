@@ -41,6 +41,7 @@ import org.tripatha.api.resolver.RyaContext;
 import org.tripatha.api.resolver.RyaToRdfConversions;
 import org.tripatha.api.resolver.UnsupportedValueException;
 import org.tripatha.api.resolver.RyaTripleContext;
+import org.tripatha.store.trace.StoreTrace;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.Statement;
@@ -57,9 +58,25 @@ import org.eclipse.rdf4j.model.Statement;
  *
  * <p>Within a group each stored cell is counted once (cells differ by qualifier, visibility and
  * timestamp as well as by statement, as in a single lookup).
+ *
+ * <p>With {@code query.join.subjectranges} on (it is off by default), a subject asked for by two
+ * or more keys in {@code spo} (the links of an entity chain, for example) is read as one range,
+ * its whole subject, instead of one range per key: its statements are neighbouring rows, so that
+ * saves seeks, and the exact matching keeps the answers the same. On the warm join benchmark it
+ * read about four times the cells for no gain (SCALE-STUDY.md O21); it may pay where seeks are
+ * block reads, on a cold cache.
+ * If those ranges return more than {@value #SUBJECT_RANGE_CELLS} cells per subject read whole,
+ * plus {@value #SUBJECT_RANGE_SLACK}, a subject with many statements is among them, and the
+ * group is read again one range per key.
  */
 public final class BatchLookup {
     private static final RyaContext TYPES = RyaContext.getInstance();
+    /** Cells a subject range may return per subject, on average, before the batch is read range by range. */
+    static final int SUBJECT_RANGE_CELLS = 64;
+    /** Cells any batch of subject ranges may return on top of that. */
+    static final int SUBJECT_RANGE_SLACK = 1024;
+    private static final long OVER_LIMIT = -1;
+    private static final long OVER_BUDGET = -2;
 
     private BatchLookup() {
     }
@@ -87,42 +104,81 @@ public final class BatchLookup {
 
         final Map<LookupKey, List<Statement>> results = new HashMap<>();
         long held = 0;
-        for (final Group group : groups.values()) {
-            for (final LookupKey key : group.keys) {
-                results.put(key, new ArrayList<>());
+        final boolean subjectRanges = conf.isJoinSubjectRanges();
+        for (final Map.Entry<GroupId, Group> e : groups.entrySet()) {
+            final Group group = e.getValue();
+            final List<RyaStatement> bySubject = subjectRanges && e.getKey().layout() == TABLE_LAYOUT.SPO
+                    ? group.subjectRanges() : null;
+            if (bySubject != null) {
+                final long budget = (long) SUBJECT_RANGE_CELLS * group.collapsedSubjects + SUBJECT_RANGE_SLACK;
+                final long matched = scan(dao, conf, group, bySubject, results, limit - held, budget);
+                if (matched == OVER_LIMIT) {
+                    return null;
+                }
+                if (matched != OVER_BUDGET) {
+                    held += matched;
+                    continue;
+                }
+                StoreTrace.note("batched lookup", () -> "subject ranges returned over " + budget
+                        + " cells: reading this batch one range per lookup");
             }
-            final Set<CellId> seen = new HashSet<>();
-            try (CloseableIteration<RyaStatement> found = dao.getQueryEngine().batchQuery(group.patterns, conf)) {
-                while (found.hasNext()) {
-                    final RyaStatement stored = found.next();
-                    final ByteBuffer object = encode(stored.getObject());
-                    if (object == null || !seen.add(CellId.of(stored, object))) {
+            final long matched = scan(dao, conf, group, group.patterns, results, limit - held, Long.MAX_VALUE);
+            if (matched == OVER_LIMIT) {
+                return null;
+            }
+            held += matched;
+        }
+        return results;
+    }
+
+    /**
+     * Reads a group's patterns with one batch scan, and gives each stored statement to the group's
+     * keys it matches exactly, after clearing their lists.
+     *
+     * @return the statements given to keys; {@link #OVER_LIMIT} if more than {@code limit}; or
+     *         {@link #OVER_BUDGET} if the scan returned more than {@code budget} cells
+     */
+    private static <C extends RdfCloudTripleStoreConfiguration> long scan(final RyaDAO<C> dao, final C conf, final Group group,
+            final List<RyaStatement> patterns, final Map<LookupKey, List<Statement>> results, final long limit, final long budget) {
+        for (final LookupKey key : group.keys) {
+            results.put(key, new ArrayList<>());
+        }
+        long held = 0;
+        long read = 0;
+        final Set<CellId> seen = new HashSet<>();
+        try (CloseableIteration<RyaStatement> found = dao.getQueryEngine().batchQuery(patterns, conf)) {
+            while (found.hasNext()) {
+                final RyaStatement stored = found.next();
+                if (++read > budget) {
+                    return OVER_BUDGET;
+                }
+                final ByteBuffer object = encode(stored.getObject());
+                if (object == null || !seen.add(CellId.of(stored, object))) {
+                    continue;
+                }
+                Statement converted = null;
+                for (final Map.Entry<Shape, Map<Projection, List<LookupKey>>> byShape : group.index.entrySet()) {
+                    final Shape shape = byShape.getKey();
+                    if (shape.defaultGraphOnly && stored.getContext() != null) {
                         continue;
                     }
-                    Statement converted = null;
-                    for (final Map.Entry<Shape, Map<Projection, List<LookupKey>>> byShape : group.index.entrySet()) {
-                        final Shape shape = byShape.getKey();
-                        if (shape.defaultGraphOnly && stored.getContext() != null) {
-                            continue;
-                        }
-                        final List<LookupKey> matching = byShape.getValue().get(Projection.of(shape, stored, object));
-                        if (matching == null) {
-                            continue;
-                        }
-                        if (converted == null) {
-                            converted = RyaToRdfConversions.convertStatement(stored);
-                        }
-                        for (final LookupKey key : matching) {
-                            results.get(key).add(converted);
-                            if (++held > limit) {
-                                return null;
-                            }
+                    final List<LookupKey> matching = byShape.getValue().get(Projection.of(shape, stored, object));
+                    if (matching == null) {
+                        continue;
+                    }
+                    if (converted == null) {
+                        converted = RyaToRdfConversions.convertStatement(stored);
+                    }
+                    for (final LookupKey key : matching) {
+                        results.get(key).add(converted);
+                        if (++held > limit) {
+                            return OVER_LIMIT;
                         }
                     }
                 }
             }
         }
-        return results;
+        return held;
     }
 
     private static TABLE_LAYOUT layoutOf(final RyaTripleContext tripleContext, final RyaStatement pattern,
@@ -218,6 +274,8 @@ public final class BatchLookup {
     private static final class Group {
         final List<LookupKey> keys = new ArrayList<>();
         final List<RyaStatement> patterns = new ArrayList<>();
+        /** How many subjects {@link #subjectRanges()} read whole. */
+        int collapsedSubjects;
         final Map<Shape, Map<Projection, List<LookupKey>>> index = new LinkedHashMap<>();
         private final Set<RyaStatement> distinctPatterns = new HashSet<>();
 
@@ -228,6 +286,34 @@ public final class BatchLookup {
             }
             index.computeIfAbsent(target.shape, s -> new HashMap<>())
                     .computeIfAbsent(target.projection, p -> new ArrayList<>()).add(key);
+        }
+
+        /**
+         * The patterns with each subject that has two or more of them replaced by the subject's
+         * whole range (same graph): its statements are neighbouring rows of {@code spo}, so one seek
+         * reads them all, and the exact matching keeps only what each key asks for. {@code null} if
+         * no subject has two patterns.
+         */
+        List<RyaStatement> subjectRanges() {
+            final Map<String, List<RyaStatement>> bySubject = new LinkedHashMap<>();
+            for (final RyaStatement pattern : patterns) {
+                bySubject.computeIfAbsent(pattern.getSubject().getData(), k -> new ArrayList<>()).add(pattern);
+            }
+            if (bySubject.size() == patterns.size()) {
+                return null;
+            }
+            final List<RyaStatement> ranges = new ArrayList<>(bySubject.size());
+            collapsedSubjects = 0;
+            for (final List<RyaStatement> same : bySubject.values()) {
+                if (same.size() == 1) {
+                    ranges.add(same.get(0));
+                } else {
+                    final RyaStatement first = same.get(0);
+                    ranges.add(new RyaStatement(first.getSubject(), null, null, first.getContext()));
+                    collapsedSubjects++;
+                }
+            }
+            return ranges;
         }
     }
 

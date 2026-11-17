@@ -31,13 +31,17 @@ import java.util.Set;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 
 import com.google.common.base.Preconditions;
+import com.google.common.primitives.Bytes;
 
+import org.tripatha.api.RdfCloudTripleStoreConstants;
 import org.tripatha.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import org.tripatha.api.RdfCloudTripleStoreUtils;
+import org.tripatha.api.domain.RyaAnyTypeRange;
 import org.tripatha.api.domain.RyaIRI;
 import org.tripatha.api.domain.RyaRange;
 import org.tripatha.api.domain.RyaStatement;
 import org.tripatha.api.domain.RyaType;
+import org.tripatha.api.domain.RyaValueRange;
 import org.tripatha.api.layout.TableLayoutStrategy;
 import org.tripatha.api.persist.RyaDAOException;
 import org.tripatha.api.persist.query.RyaQueryEngine;
@@ -78,6 +82,9 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
         if (conf == null) {
             conf = configuration;
         }
+        if (stmt.getObject() instanceof RyaValueRange range) {
+            return queryValueRange(stmt, range, conf);
+        }
         try {
             TriplePatternStrategy strategy = ryaContext.retrieveStrategy(stmt);
             final TABLE_LAYOUT layout;
@@ -93,9 +100,15 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
                 range = KeyRange.all();
                 strategy = ryaContext.retrieveStrategy(layout);
             }
-            final TripleRowRegex regex = strategy.buildRegex(conf.getRegexSubject(), conf.getRegexPredicate(),
-                    conf.getRegexObject(), null, objectTypeInfo(stmt.getObject()));
-            final ScanSpec spec = spec(stmt.getContext(), stmt.getQualifer(), regex, conf, conf.getBatchSize());
+            // The object's type check alone is "the row ends with 01 and the type", a byte suffix; any
+            // other row condition (or the hashed layout) keeps the regular expression.
+            final byte[] typeInfo = objectTypeInfo(stmt.getObject());
+            final boolean typeOnly = typeInfo != null && conf.getRegexSubject() == null && conf.getRegexPredicate() == null
+                    && conf.getRegexObject() == null && !conf.isPrefixRowsWithHash();
+            final TripleRowRegex regex = typeOnly ? null : strategy.buildRegex(conf.getRegexSubject(), conf.getRegexPredicate(),
+                    conf.getRegexObject(), null, typeInfo);
+            final ScanSpec spec = spec(stmt.getContext(), stmt.getQualifer(), regex, typeOnly ? typeInfo : null, conf,
+                    conf.getBatchSize());
             final CellScanner cells;
             try (StoreTrace.Reason why = StoreTrace.reason(() -> "lookup " + TraceText.pattern(stmt) + " on " + layout)) {
                 cells = store.scan(table(layout, conf), range, spec);
@@ -106,6 +119,91 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
         } catch (final Exception e) {
             throw new RyaDAOException(e);
         }
+    }
+
+    /**
+     * The statements {@code ?s p ?o} whose object is in a range of one datatype's values
+     * (SCALE-STUDY.md O14): one scan of po from {@code p 00 start} to {@code p 00 stop 00 FF},
+     * keeping the rows whose object has the range's type. An open end reaches the first or last
+     * row of the predicate, and the type check keeps that type's.
+     */
+    private CloseableIteration<RyaStatement> queryValueRange(final RyaStatement stmt, final RyaValueRange range,
+            final StoreRdfConfiguration conf) {
+        Preconditions.checkArgument(stmt.getSubject() == null && stmt.getPredicate() != null
+                && !(stmt.getPredicate() instanceof RyaRange), "A value range needs a predicate and no subject: %s", stmt);
+        try {
+            final CellScanner cells;
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "lookup " + TraceText.pattern(stmt) + " on PO")) {
+                cells = valueRangeScan(stmt.getPredicate(), stmt.getContext(), stmt.getQualifer(), range, conf, conf.getBatchSize());
+            }
+            return limit(new RyaStatementCellIterator(TABLE_LAYOUT.PO, ryaContext, cells), conf);
+        } catch (final RyaDAOException e) {
+            throw e;
+        } catch (final Exception e) {
+            throw new RyaDAOException(e);
+        }
+    }
+
+    /**
+     * Counts the cells of {@code ?s predicate ?o} in these value ranges, in every graph, stopping
+     * at {@code cap} (SCALE-STUDY.md O25): the cells a lookup of the ranges would read. The cells
+     * are counted, not decoded, and the ranges share the cap.
+     *
+     * @return the count, or {@code cap} when the ranges hold that many cells or more
+     */
+    public long countValueRanges(final RyaIRI predicate, final List<RyaValueRange> ranges, final long cap,
+            StoreRdfConfiguration conf) {
+        Preconditions.checkArgument(cap > 0, "The cap must be positive");
+        if (conf == null) {
+            conf = configuration;
+        }
+        long counted = 0;
+        try {
+            for (final RyaValueRange range : ranges) {
+                // One batch holds the rest of the cap, so a range is one round trip.
+                final int batch = (int) Math.min(Integer.MAX_VALUE - 1, cap - counted) + 1;
+                try (CellScanner cells = valueRangeScan(predicate, null, null, range, conf, batch)) {
+                    while (counted < cap && cells.hasNext()) {
+                        cells.next();
+                        counted++;
+                    }
+                }
+                if (counted >= cap) {
+                    return cap;
+                }
+            }
+            return counted;
+        } catch (final RyaDAOException e) {
+            throw e;
+        } catch (final Exception e) {
+            throw new RyaDAOException(e);
+        }
+    }
+
+    /**
+     * One scan of po from {@code p 00 start} to {@code p 00 stop 00 FF}, keeping the rows whose
+     * object has the range's type. An open end reaches the first or last row of the predicate,
+     * and the type check keeps that type's.
+     */
+    private CellScanner valueRangeScan(final RyaIRI predicate, final RyaIRI context, final String qualifier,
+            final RyaValueRange range, final StoreRdfConfiguration conf, final Integer batchSize) throws Exception {
+        // The hashed layout puts a hash before the predicate, which these rows don't have.
+        Preconditions.checkArgument(!Boolean.TRUE.equals(conf.isPrefixRowsWithHash()),
+                "Value ranges don't support the hashed row layout");
+        final byte[] prefix = Bytes.concat(predicate.getData().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                RdfCloudTripleStoreConstants.DELIM_BYTES);
+        final byte[] startData = range.getStartData();
+        final byte[] stopData = range.getStopData();
+        final byte[] start = startData == null ? prefix : Bytes.concat(prefix, startData);
+        final byte[] stop = stopData == null ? Bytes.concat(prefix, RdfCloudTripleStoreConstants.LAST_BYTES)
+                : Bytes.concat(prefix, stopData, RdfCloudTripleStoreConstants.DELIM_BYTES, RdfCloudTripleStoreConstants.LAST_BYTES);
+        final byte[] typeInfo = { RdfCloudTripleStoreConstants.TYPE_DELIM_BYTE, range.getMarker() };
+        final boolean typeOnly = conf.getRegexSubject() == null && conf.getRegexPredicate() == null
+                && conf.getRegexObject() == null;
+        final TripleRowRegex regex = typeOnly ? null : ryaContext.retrieveStrategy(TABLE_LAYOUT.PO).buildRegex(
+                conf.getRegexSubject(), conf.getRegexPredicate(), conf.getRegexObject(), null, typeInfo);
+        final ScanSpec spec = spec(context, qualifier, regex, typeOnly ? typeInfo : null, conf, batchSize);
+        return store.scan(table(TABLE_LAYOUT.PO, conf), KeyRange.closed(start, stop), spec);
     }
 
     /**
@@ -147,10 +245,10 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
                     + (patterns == 1 ? "" : "s") + " on " + batchLayout);
             try {
                 if (ranges.size() > conf.getMaxRangesForScanner()) {
-                    final ScanSpec spec = spec(context, null, regex, conf, null).toBuilder().threads(numThreads(conf)).build();
+                    final ScanSpec spec = spec(context, null, regex, null, conf, null).toBuilder().threads(numThreads(conf)).build();
                     return limit(new RyaStatementCellIterator(layout, ryaContext, store.batchScan(table, ranges, spec)), conf);
                 }
-                final ScanSpec spec = spec(context, null, regex, conf, null);
+                final ScanSpec spec = spec(context, null, regex, null, conf, null);
                 final List<CellScanner> scanners = new ArrayList<>(ranges.size());
                 try {
                     for (final KeyRange range : ranges) {
@@ -225,8 +323,8 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
     }
 
     private static byte[] objectTypeInfo(final RyaType object) throws Exception {
-        if (object == null) {
-            return null;
+        if (object == null || object instanceof RyaAnyTypeRange) {
+            return null; // no object, or a range of any type: no type check
         }
         final RyaType typed = object instanceof RyaRange ? ((RyaRange) object).getStart() : object;
         return RyaContext.getInstance().serializeType(typed)[1];
@@ -239,10 +337,10 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
 
     /**
      * What to read: the context's column family (and the qualifier's column, or a qualifier
-     * filter without a context), the TTL window, the row regex and any extra iterators.
+     * filter without a context), the TTL window, the row regex or suffix and any extra iterators.
      */
     private static ScanSpec spec(final RyaIRI context, final String qualifier, final TripleRowRegex tripleRowRegex,
-            final StoreRdfConfiguration conf, final Integer batchSize) {
+            final byte[] rowSuffix, final StoreRdfConfiguration conf, final Integer batchSize) {
         final ScanSpec.Builder spec = ScanSpec.builder(conf.getStoreAuths()).batchSize(batchSize);
         if (context != null && qualifier != null) {
             spec.column(utf8(context.getData()), utf8(qualifier));
@@ -262,6 +360,9 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
         }
         if (tripleRowRegex != null) {
             spec.rowRegex(tripleRowRegex.getRow());
+        }
+        if (rowSuffix != null) {
+            spec.rowSuffix(rowSuffix);
         }
         for (final ServerIterator it : conf.getServerIterators()) {
             spec.iterator(it);

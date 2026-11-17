@@ -34,6 +34,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
@@ -79,14 +80,20 @@ import org.tripatha.store.trace.TraceText;
  * <ul>
  *   <li>{@code spo}, {@code po}, {@code osp}: every statement, once per table, so that any
  *       statement pattern is a range scan on one of them;</li>
- *   <li>{@code ns}: namespace prefixes, plus the storage version;</li>
- *   <li>{@code eval}: cardinality counters used for join ordering (see {@link EvalStatsMutations});</li>
+ *   <li>{@code ns}: namespace prefixes, plus the storage version and whether the store's
+ *       datatype markers are complete;</li>
+ *   <li>{@code eval}: cardinality counters used for join ordering (see {@link EvalStatsMutations}),
+ *       and the datatype markers (see {@link DatatypeMarkers});</li>
  *   <li>{@code graphs}: one marker per named graph that has received statements;</li>
  *   <li>{@code text}, {@code geo}: the full-text and geospatial indexes, when enabled
  *       (see {@link IndexManager}).</li>
  * </ul>
  *
  * <p>The DAO does not own the {@link Store}: whoever supplied it closes it.
+ *
+ * <p>A DAO writes only to a store whose storage version is at most its own ({@code VERSION}):
+ * a newer store may rely on writes this code doesn't make, such as datatype markers. It can
+ * still read one, and every write method throws.
  */
 public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceManager<StoreRdfConfiguration>, AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(RyaStoreDAO.class);
@@ -95,6 +102,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
     private static final byte[] VERSION_ROW = utf8("tripatha");
     private static final byte[] VERSION_CF = utf8(INFO_VERSION);
     private static final byte[] NAMESPACE_CF = utf8(INFO_NAMESPACE);
+    private static final byte[] DATATYPES_CF = utf8(DatatypeMarkers.FLAG_CF);
     private static final byte[] EMPTY = new byte[0];
 
     /** Counters summed in memory before they are written by one {@link #add(Iterator)} call. */
@@ -118,6 +126,10 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
     private TableLayoutStrategy tables;
     private RyaStoreQueryEngine queryEngine;
     private IndexManager indexes;
+    /** Whether the store's datatype markers are complete: it was created by code that writes them. */
+    private volatile boolean datatypeMarkers;
+    /** Why writes are refused (the store is newer than this code), or null. */
+    private volatile String writesRefused;
 
     public RyaStoreDAO() {
     }
@@ -165,7 +177,21 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
             bwGraphs = writer.table(tables.getGraphs());
 
             queryEngine = new RyaStoreQueryEngine(store, conf);
-            writeVersionIfMissing();
+            final String version = getVersion();
+            writesRefused = isNewer(version, VERSION.stringValue()) ? "This store has storage version " + version
+                    + ", newer than " + VERSION.stringValue() + ", the newest this code writes: it may rely on writes"
+                    + " this code doesn't make, so it is read-only here. Use a newer Tripatha to write to it." : null;
+            if (version == null && storeCreated) {
+                // Every statement of a store created now gets its datatype markers.
+                bwNs.write(new RowMutation(VERSION_ROW).put(DATATYPES_CF, EMPTY, EMPTY, utf8("1")));
+                bwNs.write(new RowMutation(VERSION_ROW).put(VERSION_CF, EMPTY, EMPTY, utf8(VERSION.stringValue())));
+                writer.flush();
+            }
+            datatypeMarkers = readDatatypesFlag();
+            if (!datatypeMarkers) {
+                logger.info("The datatype markers of the store {} are incomplete (it was created before them):"
+                        + " comparison filters read their predicates' whole ranges", tables.getSpo());
+            }
             indexes = new IndexManager(store, conf, writer, storeCreated);
             isInitialized.set(true);
         } catch (final Exception e) {
@@ -182,11 +208,65 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
         }
     }
 
-    private void writeVersionIfMissing() throws Exception {
-        if (getVersion() == null) {
-            bwNs.write(new RowMutation(VERSION_ROW).put(VERSION_CF, EMPTY, EMPTY, utf8(VERSION.stringValue())));
-            writer.flush();
+    private boolean readDatatypesFlag() {
+        final ScanSpec spec = ScanSpec.builder(Auths.NONE).column(DATATYPES_CF, EMPTY).build();
+        try (CellScanner scanner = store.scan(tables.getNs(), KeyRange.row(VERSION_ROW), spec)) {
+            return scanner.hasNext();
         }
+    }
+
+    /**
+     * Whether {@code stored} is a newer storage version than {@code own}, comparing the numbers
+     * between dots. A version that isn't such numbers is taken as newer.
+     */
+    static boolean isNewer(final String stored, final String own) {
+        if (stored == null) {
+            return false;
+        }
+        final String[] a = stored.trim().split("\\.");
+        final String[] b = own.split("\\.");
+        try {
+            for (int i = 0; i < Math.max(a.length, b.length); i++) {
+                final long x = i < a.length ? Long.parseLong(a[i]) : 0;
+                final long y = i < b.length ? Long.parseLong(b[i]) : 0;
+                if (x != y) {
+                    return x > y;
+                }
+            }
+            return false;
+        } catch (final NumberFormatException e) {
+            return true;
+        }
+    }
+
+    private void checkWritable() {
+        final String refused = writesRefused;
+        if (refused != null) {
+            throw new RyaDAOException(refused);
+        }
+    }
+
+    /**
+     * Whether the store's datatype markers are complete, so that {@link #objectDatatypes} can be
+     * trusted: the store was created by code that writes them.
+     */
+    public boolean hasDatatypeMarkers() {
+        return datatypeMarkers;
+    }
+
+    /**
+     * The datatypes of the objects of {@code predicate}, among the statements the configuration's
+     * labels can see (SCALE-STUDY.md O14).
+     *
+     * @return the datatype IRIs, read from the markers; empty when they are unknown, in a store
+     *         created before the markers
+     */
+    public Optional<Set<String>> objectDatatypes(final RyaIRI predicate, final StoreRdfConfiguration aconf) {
+        if (!datatypeMarkers) {
+            return Optional.empty();
+        }
+        final Auths auths = (aconf != null ? aconf : conf).getStoreAuths();
+        return Optional.of(DatatypeMarkers.read(store, tables.getEval(), predicate.getData(), auths));
     }
 
     @Override
@@ -209,14 +289,36 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
      */
     @Override
     public synchronized void add(final Iterator<RyaStatement> statements) {
+        add(statements, EvalStatsMutations.CounterPolicy.ALL);
+    }
+
+    /**
+     * Adds statements like {@link #add(Iterator)}, leaving out the counters {@code policy} skips.
+     *
+     * <p>With {@link EvalStatsMutations.CounterPolicy#ALL} the counters are written early once
+     * 50,000 are pending, so memory stays bounded. With any other policy
+     * the counters of the whole call are summed before any is written, so the policy sees each
+     * counter's total for the call: pass bounded batches that hold every statement of their
+     * subjects (the loader passes whole blocks of entities).
+     */
+    public synchronized void add(final Iterator<RyaStatement> statements, final EvalStatsMutations.CounterPolicy policy) {
+        checkWritable();
+        final boolean writeEarly = policy == EvalStatsMutations.CounterPolicy.ALL;
         final EvalStatsMutations.CounterBatch counts = maintainStats ? new EvalStatsMutations.CounterBatch() : null;
         final Set<GraphMarkerKey> markers = new HashSet<>();
+        final Set<DatatypeMarkers.Key> datatypes = new HashSet<>();
         Exception failure = null;
         try {
             while (statements.hasNext()) {
                 final RyaStatement stmt = statements.next();
                 checkStorable(stmt);
                 final Map<TABLE_LAYOUT, RowMutation> rows = mutationsFactory.serialize(stmt);
+                // Buffered before the rows it stands for. Not a guarantee that it lands first: a
+                // failed flush can leave rows without it, until they are added again.
+                final DatatypeMarkers.Key datatype = DatatypeMarkers.Key.of(stmt);
+                if (datatypes.add(datatype)) {
+                    bwEval.write(datatype.mutation());
+                }
                 bwSpo.write(rows.get(TABLE_LAYOUT.SPO));
                 bwPo.write(rows.get(TABLE_LAYOUT.PO));
                 bwOsp.write(rows.get(TABLE_LAYOUT.OSP));
@@ -225,7 +327,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                 }
                 if (counts != null) {
                     counts.add(stmt, 1);
-                    if (counts.size() >= MAX_PENDING_COUNTERS) {
+                    if (writeEarly && counts.size() >= MAX_PENDING_COUNTERS) {
                         bwEval.write(counts.drain());
                     }
                 }
@@ -237,7 +339,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
         // Count what was handed to the writers, even if a later statement failed.
         if (counts != null && counts.size() > 0) {
             try {
-                bwEval.write(counts.drain());
+                bwEval.write(counts.drain(policy));
             } catch (final Exception e) {
                 if (failure == null) {
                     failure = e;
@@ -289,6 +391,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
      */
     @Override
     public synchronized void delete(final Iterator<RyaStatement> patterns, final StoreRdfConfiguration aconf) {
+        checkWritable();
         while (patterns.hasNext()) {
             deleteMatches(patterns.next(), st -> true, aconf);
         }
@@ -298,6 +401,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
     @Override
     public synchronized void delete(final RyaStatement pattern, final Predicate<RyaStatement> filter,
             final StoreRdfConfiguration aconf) {
+        checkWritable();
         deleteMatches(pattern, filter, aconf);
         flushIfNeeded();
     }
@@ -342,6 +446,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
 
     @Override
     public synchronized void dropGraph(final StoreRdfConfiguration aconf, final RyaIRI... graphs) {
+        checkWritable();
         final Auths auths = (aconf != null ? aconf : conf).getStoreAuths();
         try {
             writer.flush();
@@ -378,8 +483,13 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                     store.deleteVisible(tables.getGraphs(), markerRows, plain, writerOptions);
                 }
                 if (all) {
-                    // Everything visible is gone, so are the counters for it.
-                    store.deleteVisible(tables.getEval(), List.of(KeyRange.all()), plain, writerOptions);
+                    // Everything visible is gone, so are the counters for it. Not the datatype
+                    // markers: a writer adding statements meanwhile may have written its own already.
+                    final ScanSpec.Builder counters = ScanSpec.builder(auths).threads(NUM_THREADS);
+                    for (final String family : EvalStatsMutations.COUNTER_FAMILIES) {
+                        counters.family(utf8(family));
+                    }
+                    store.deleteVisible(tables.getEval(), List.of(KeyRange.all()), counters.build(), writerOptions);
                 }
             }
         } catch (final RyaDAOException e) {
@@ -410,7 +520,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                 for (final Map.Entry<String, List<Cell>> graph : markers.entrySet()) {
                     if (graphHasData(graph.getKey(), auths)) {
                         graphs.add(new RyaIRI(graph.getKey()));
-                    } else {
+                    } else if (writesRefused == null) {
                         // Nothing visible is left in this graph: forget the markers we can see.
                         for (final Cell key : graph.getValue()) {
                             bwGraphs.write(new RowMutation(key.row()).delete(key.family(), key.qualifier(), key.visibility(),
@@ -419,7 +529,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                         removedStale = true;
                     }
                 }
-                if (removedStale) {
+                if (removedStale && writesRefused == null) {
                     writer.flush();
                 }
                 return new CloseableIteratorIteration<>(graphs.iterator());
@@ -465,6 +575,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
 
     @Override
     public synchronized void addNamespace(final String pfx, final String namespace) {
+        checkWritable();
         try {
             bwNs.write(new RowMutation(utf8(pfx)).put(NAMESPACE_CF, EMPTY, EMPTY, utf8(namespace)));
             if (flushEachUpdate) {
@@ -492,6 +603,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
 
     @Override
     public synchronized void removeNamespace(final String pfx) {
+        checkWritable();
         try {
             bwNs.write(new RowMutation(utf8(pfx)).delete(NAMESPACE_CF, EMPTY, EMPTY));
             if (flushEachUpdate) {
@@ -523,13 +635,17 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
 
     /**
      * Deletes all data visible with the configuration's auths from every Tripatha table, then
-     * rewrites the storage version.
+     * rewrites the storage version and the datatype-marker flag as they were. Statements under
+     * labels the auths don't cover stay, and so do their markers.
      */
     @Override
     public synchronized void purge(final RdfCloudTripleStoreConfiguration configuration) {
+        checkWritable();
         final ScanSpec spec = ScanSpec.builder(Auths.of(configuration.getAuths())).threads(NUM_THREADS).build();
         try {
             flush();
+            final String version = isInitialized.get() ? getVersion() : null;
+            final boolean flagged = isInitialized.get() && readDatatypesFlag();
             for (final String table : getTables()) {
                 if (store.tables().exists(table)) {
                     store.deleteVisible(table, List.of(KeyRange.all()), spec,
@@ -537,7 +653,13 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                 }
             }
             if (isInitialized.get()) {
-                writeVersionIfMissing();
+                if (flagged) {
+                    bwNs.write(new RowMutation(VERSION_ROW).put(DATATYPES_CF, EMPTY, EMPTY, utf8("1")));
+                }
+                if (version != null) {
+                    bwNs.write(new RowMutation(VERSION_ROW).put(VERSION_CF, EMPTY, EMPTY, utf8(version)));
+                }
+                writer.flush();
                 indexes.rewriteRecords();
             }
         } catch (final RyaDAOException e) {
@@ -610,6 +732,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
 
     /** Rebuilds every enabled index from the statement tables. */
     public synchronized void rebuildIndexes() {
+        checkWritable();
         try {
             flush();
             indexes.rebuildAll();

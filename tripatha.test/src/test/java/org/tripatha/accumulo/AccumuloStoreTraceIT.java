@@ -159,8 +159,9 @@ public class AccumuloStoreTraceIT extends AccumuloITBase {
         for (final String t : List.of("spo", "po", "osp", "graphs")) {
             assertEquals(1, byTable.get(getTablePrefix() + t).mutations(), t);
         }
-        // Six counters for all graphs and six for g1, in one mutation per counter row.
-        assertEquals(12, byTable.get(getTablePrefix() + "eval").cells());
+        // Six counters for all graphs and six for g1, in one mutation per counter row, plus the
+        // datatype marker of the predicate.
+        assertEquals(13, byTable.get(getTablePrefix() + "eval").cells());
         assertEquals(flush.tables().stream().mapToLong(TraceEvent.TableWrites::mutations).sum(),
                 only(TraceEvent.Summary.class).mutations());
     }

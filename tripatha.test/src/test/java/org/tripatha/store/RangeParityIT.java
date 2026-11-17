@@ -114,6 +114,11 @@ class RangeParityIT extends StoreITBase {
                 ScanSpec.builder(Auths.of("A", "B")).family(b("g2")).column(b(""), b("")).build(),
                 ScanSpec.builder(Auths.of("A", "B")).rowRegex("a.*").build(),
                 ScanSpec.builder(Auths.of("A", "B")).rowRegex("a\u0000.*").build(),
+                ScanSpec.builder(Auths.of("A", "B")).rowSuffix(b("b")).build(),
+                ScanSpec.builder(Auths.of("A", "B")).rowSuffix(b("\u0001")).build(),
+                ScanSpec.builder(Auths.of("A", "B")).rowSuffix(b(".\u0001")).build(),
+                ScanSpec.builder(Auths.of("A", "B")).rowSuffix(b("x.y\u0001\b")).build(),
+                ScanSpec.builder(Auths.of("A", "B")).rowSuffix(b("b")).rowRegex("a.*").build(),
                 ScanSpec.builder(Auths.of("A", "B")).qualifierRegex("q").build(),
                 ScanSpec.builder(Auths.of("A", "B")).timestamps(1050L, null).build(),
                 ScanSpec.builder(Auths.of("A", "B")).timestamps(null, 1050L).build(),
@@ -174,6 +179,11 @@ class RangeParityIT extends StoreITBase {
                 continue;
             }
             if (spec.rowRegex() != null && !Pattern.compile(spec.rowRegex()).matcher(new String(c.row(), StandardCharsets.UTF_8)).matches()) {
+                continue;
+            }
+            final byte[] suffix = spec.rowSuffix();
+            if (suffix != null && (c.row().length < suffix.length
+                    || !Arrays.equals(c.row(), c.row().length - suffix.length, c.row().length, suffix, 0, suffix.length))) {
                 continue;
             }
             if (spec.qualifierRegex() != null

@@ -619,6 +619,9 @@ Design rules:
   | `SERVER_REGEX` (row and qualifier regex filters) | yes (Java regex) | yes (Java regex) | RE2 only, so patterns behave differently |
   | `SCAN_ITERATORS` (arbitrary `IteratorSetting`s) | yes | no | no |
   | `MAX_ROW_BYTES` | 1 MB per key | 32,767 | 4 KB |
+  | `lookupCost` (cells read in sequence that cost as much as one lookup: the default merge-join ratio, SCALE-STUDY.md O22) | 35, measured | 20, measured | not measured |
+
+  RocksDB, an embedded backend added later (section 10), has `lookupCost` 8: a lookup there is a seek, not a round trip.
 
   A store refuses to open with settings a provider cannot honour. Examples: labels on a provider without `LABELS`, or `setAdditionalIterators` without `SCAN_ITERATORS`. Labels are never emulated on the client: that would let a bug leak data.
 

@@ -32,6 +32,7 @@ import org.apache.hadoop.io.Text;
 import org.tripatha.store.spi.RowMutation;
 import org.junit.jupiter.api.Test;
 
+import org.tripatha.store.EvalStatsMutations;
 import org.tripatha.store.StoreRdfConfiguration;
 import org.tripatha.store.RyaTableMutationsFactory;
 import org.tripatha.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
@@ -90,7 +91,7 @@ class SplitPlannerTest {
         conf.setGeoIndex(true);
         final EntityGenerator generator = new EntityGenerator(GenConfig.defaults(42, 1_000_000));
         final int splits = 15;
-        final Map<String, SortedSet<Text>> plan = SplitPlanner.plan(generator, conf, splits);
+        final Map<String, SortedSet<Text>> plan = SplitPlanner.plan(generator, conf, splits, EvalStatsMutations.CounterPolicy.SKIP_SUBJECT_ONES);
         assertEquals(List.of("t_spo", "t_po", "t_osp", "t_eval", "t_text", "t_geo"), List.copyOf(plan.keySet()));
         assertEquals(splits, plan.get("t_spo").size());
         assertTrue(plan.get("t_geo").size() <= splits / 2);

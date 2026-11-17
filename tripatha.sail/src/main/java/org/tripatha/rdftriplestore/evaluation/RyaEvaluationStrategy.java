@@ -185,13 +185,20 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
                 || sp instanceof FixedStatementPattern || sp instanceof TransitivePropertySP) {
             return null;
         }
-        // An indexed pattern, or one read as a range of triple terms, is a plain store lookup
-        // only once its subject or object is bound.
-        if ((sp instanceof IndexedStatementPattern || TripleTermRangeSource.prefixFor(sp) != null)
+        // An indexed pattern, or one read as a range of triple terms, object prefixes or values,
+        // is a plain store lookup only once its subject or object is bound.
+        if ((sp instanceof IndexedStatementPattern || sp instanceof ValueRangePattern
+                || TripleTermRangeSource.prefixFor(sp) != null || objectPrefix(sp) != null)
                 && !(boundByLeft(node, sp.getSubjectVar()) || boundByLeft(node, sp.getObjectVar()))) {
             return null;
         }
         return sp;
+    }
+
+    /** The prefix a {@code STRSTARTS} filter requires of the pattern's object, when prefix ranges are on. */
+    private String objectPrefix(final StatementPattern sp) {
+        return tripleSource instanceof StoreTripleSource<?> source && source.getConf().isPrefixRanges()
+                ? ObjectPrefixSource.prefixFor(sp) : null;
     }
 
     private static boolean boundByLeft(final Join node, final Var var) {
@@ -232,13 +239,47 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
                 }
             };
         }
+        if (node instanceof ValueRangePattern ranged && tripleSource instanceof StoreTripleSource<?> source) {
+            return new StatementPatternQueryEvaluationStep(node, context, new ValueRangeSource(source, ranged));
+        }
         if (tripleSource instanceof StoreTripleSource<?> source) {
             final String termPrefix = TripleTermRangeSource.prefixFor(node);
             if (termPrefix != null) {
                 return new StatementPatternQueryEvaluationStep(node, context, new TripleTermRangeSource(source, termPrefix));
             }
+            final String objectPrefix = objectPrefix(node);
+            if (objectPrefix != null) {
+                return new StatementPatternQueryEvaluationStep(node, context, new ObjectPrefixSource(source, objectPrefix));
+            }
         }
         return super.prepare(node, context);
+    }
+
+    /** Adds the one node type RDF4J's dispatch doesn't know: a {@link SubjectMergeJoin}. */
+    @Override
+    public QueryEvaluationStep precompile(final TupleExpr expr, final QueryEvaluationContext context) {
+        if (expr instanceof SubjectMergeJoin merge) {
+            return prepare(merge, context);
+        }
+        return super.precompile(expr, context);
+    }
+
+    /**
+     * A merge join of a star's constant patterns ({@link SubjectMergeStep}). The nested loop of
+     * the same patterns serves rows that already bind the subject, and any triple source but the
+     * store's.
+     */
+    private QueryEvaluationStep prepare(final SubjectMergeJoin node, final QueryEvaluationContext context) {
+        QueryEvaluationStep nestedLoop = null;
+        for (final StatementPattern sp : node.getPatterns()) {
+            final QueryEvaluationStep left = nestedLoop;
+            final QueryEvaluationStep right = precompile(sp, context);
+            nestedLoop = left == null ? right : bindings -> JoinIterator.getInstance(left, right, bindings);
+        }
+        if (!(tripleSource instanceof StoreTripleSource<?> source)) {
+            return nestedLoop;
+        }
+        return new SubjectMergeStep(node, source, nestedLoop, context);
     }
 
     /** A triple term in a pattern: matched in memory when it is already bound, else read from the store. */

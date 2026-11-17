@@ -51,11 +51,17 @@ import org.tripatha.store.spi.RowMutation;
  *
  * <p>The counts drive join ordering only, so they may drift (re-inserting an existing
  * statement counts it twice; dropping a graph does not adjust the all-graphs counters).
+ *
+ * <p>A batch may leave some counters out ({@link CounterPolicy}): the planner reads a missing
+ * counter as 1, so a counter whose final total is 1 changes no estimate.
  */
 public final class EvalStatsMutations {
     /** Column family of the named-graph marker rows. */
     public static final String GRAPH_CF = "g";
     public static final byte[] GRAPH_CF_BYTES = GRAPH_CF.getBytes(StandardCharsets.UTF_8);
+    /** The column families of the six counters, which leave out the datatype markers ({@link DatatypeMarkers}). */
+    public static final List<String> COUNTER_FAMILIES = List.of(SUBJECT_CF, PRED_CF, OBJ_CF, SUBJECTPRED_CF,
+            PREDOBJECT_CF, SUBJECTOBJECT_CF);
 
     private static final byte[] EMPTY = new byte[0];
 
@@ -71,6 +77,33 @@ public final class EvalStatsMutations {
      * @param visibility the counted statement's visibility, one char per byte (ISO-8859-1)
      */
     public record CounterKey(String row, String family, String graph, String visibility) {
+    }
+
+    /**
+     * Which counters a {@link CounterBatch} writes. The planner reads a missing counter as 1
+     * ({@code RdfCloudTripleStoreEvaluationStatistics}), so leaving out a counter whose final
+     * total is 1 changes no estimate. Most subject counters are such: a subject has a few
+     * statements, and rarely two with the same predicate or the same object.
+     */
+    public enum CounterPolicy {
+        /** Write every counter. */
+        ALL,
+        /**
+         * Leave out a subject's counters ({@code s}, {@code sp}, {@code so}) whose sum is 1. Only
+         * exact when that sum is the final total: the batch must hold every statement of each of
+         * its subjects, and the store none. The loader's blocks hold whole entities, and an
+         * entity's subjects appear in no other entity.
+         */
+        SKIP_SUBJECT_ONES;
+
+        /** Whether this policy leaves out the counter {@code key} with the sum {@code sum}. */
+        public boolean skips(final CounterKey key, final long sum) {
+            return this == SKIP_SUBJECT_ONES && sum == 1 && isSubjectCounter(key.family());
+        }
+
+        private static boolean isSubjectCounter(final String family) {
+            return family.equals(SUBJECT_CF) || family.equals(SUBJECTPRED_CF) || family.equals(SUBJECTOBJECT_CF);
+        }
     }
 
     /** The counters a statement adds to: six, plus six more for a named-graph statement. */
@@ -119,13 +152,21 @@ public final class EvalStatsMutations {
 
         /** The pending sums as mutations (one per row; zero sums are dropped), and clears them. */
         public List<RowMutation> drain() {
+            return drain(CounterPolicy.ALL);
+        }
+
+        /**
+         * The pending sums as mutations (one per row), without zero sums and without the counters
+         * {@code policy} leaves out, and clears them.
+         */
+        public List<RowMutation> drain(final CounterPolicy policy) {
             final Map<String, RowMutation> byRow = new LinkedHashMap<>();
             for (final Map.Entry<CounterKey, long[]> e : sums.entrySet()) {
                 final long sum = e.getValue()[0];
-                if (sum == 0) {
+                final CounterKey key = e.getKey();
+                if (sum == 0 || policy.skips(key, sum)) {
                     continue;
                 }
-                final CounterKey key = e.getKey();
                 final RowMutation m = byRow.computeIfAbsent(key.row(),
                         row -> new RowMutation(row.getBytes(StandardCharsets.UTF_8)));
                 m.addToCounter(key.family().getBytes(StandardCharsets.UTF_8),

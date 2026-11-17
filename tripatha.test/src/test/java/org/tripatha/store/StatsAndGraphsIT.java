@@ -105,6 +105,10 @@ public class StatsAndGraphsIT extends StoreITBase {
                     expected.merge(cell(m.row(), u.family(), u.qualifier(), u.visibility()), 1L, Long::sum);
                 }
             }
+            // One datatype marker per predicate, object type and label, written once by the one add.
+            expected.put(cell(p.getData().getBytes(StandardCharsets.UTF_8), DatatypeMarkers.FAMILY.getBytes(StandardCharsets.UTF_8),
+                    o.getDataType().stringValue().getBytes(StandardCharsets.UTF_8),
+                    label == null ? new byte[0] : label.getBytes(StandardCharsets.UTF_8)), 1L);
         }
         dao.add(batch.iterator());
         dao.flush();
@@ -121,6 +125,52 @@ public class StatsAndGraphsIT extends StoreITBase {
     }
 
     /** A graph dropped and then written again is listed again, even when writes are batched. */
+    /**
+     * Skipping subject counters of 1 uses the totals of the whole call, even past the 50,000
+     * pending counters at which a plain add writes early: a subject whose statements straddle that
+     * point isn't taken for two subjects of one statement each. Other counters are all written.
+     */
+    @Test
+    public void skippingSubjectOnesUsesTheTotalsOfTheWholeCall() throws Exception {
+        grantAuthorizations("A");
+        final RyaIRI straddler = new RyaIRI(NS + "straddler");
+        final RyaIRI mixed = new RyaIRI(NS + "mixed");
+        final List<RyaStatement> batch = new ArrayList<>();
+        batch.add(new RyaStatement(straddler, NAME, new RyaType("first")));
+        for (int i = 0; i < 10_000; i++) {
+            // Six counters each: 60,000 pending before the straddler's second statement.
+            batch.add(new RyaStatement(new RyaIRI(NS + "single" + i), NAME, new RyaType("v" + i)));
+        }
+        batch.add(new RyaStatement(straddler, NAME, new RyaType("second")));
+        batch.add(new RyaStatement(mixed, NAME, new RyaType("m1")));
+        batch.add(new RyaStatement(mixed, KNOWS, BOB));
+        batch.add(new RyaStatement(mixed, KNOWS, ALICE, null, null, "A".getBytes(StandardCharsets.UTF_8), null, 1L));
+        dao.add(batch.iterator(), EvalStatsMutations.CounterPolicy.SKIP_SUBJECT_ONES);
+        dao.flush();
+
+        final StoreRdfConfiguration withA = new StoreRdfConfiguration(conf);
+        withA.setAuths("A");
+        assertEquals(2.0, card(withA, CARDINALITY_OF.SUBJECT, straddler.getData()));
+        assertEquals(2.0, card(withA, CARDINALITY_OF.SUBJECTPREDICATE, straddler.getData(), NAME.getData()));
+        assertEquals(-1.0, card(withA, CARDINALITY_OF.SUBJECTOBJECT, straddler.getData(), "first"));
+        assertEquals(-1.0, card(withA, CARDINALITY_OF.SUBJECT, NS + "single0"));
+        // Not subject counters: written even when they are 1.
+        assertEquals(1.0, card(withA, CARDINALITY_OF.OBJECT, "v0"));
+        assertEquals(1.0, card(withA, CARDINALITY_OF.PREDICATEOBJECT, NAME.getData(), "v0"));
+        assertEquals(10_003.0, card(withA, CARDINALITY_OF.PREDICATE, NAME.getData()));
+        // Per label: mixed's unlabelled count (2) is written, its one statement under A isn't.
+        assertEquals(2.0, card(withA, CARDINALITY_OF.SUBJECT, mixed.getData()));
+        assertEquals(2.0, card(conf, CARDINALITY_OF.SUBJECT, mixed.getData()));
+    }
+
+    private double card(final StoreRdfConfiguration c, final CARDINALITY_OF of, final String... values) {
+        final List<Value> list = new ArrayList<>();
+        for (final String v : values) {
+            list.add(v.startsWith(NS) ? VF.createIRI(v) : VF.createLiteral(v));
+        }
+        return stats.getCardinality(c, of, list);
+    }
+
     @Test
     public void markerRewrittenAfterDropGraph() {
         dao.add(new RyaStatement(ALICE, KNOWS, BOB, G1));

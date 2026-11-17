@@ -66,13 +66,14 @@ public final class Prepare {
                 out.println("No splits: a RocksDB store is one local database.");
             } else if (splits > 0) {
                 out.println("Planning " + splits + " splits per table (" + servers + " servers)…");
-                final Map<String, SortedSet<Text>> plan = SplitPlanner.plan(generator, conf, splits);
+                final Map<String, SortedSet<Text>> plan = SplitPlanner.plan(generator, conf, splits, o.statsOnes());
                 SplitPlanner.apply(store, plan);
             }
 
             if (stored == null) {
                 final List<RyaStatement> reference = ReferenceData.statements(generator);
-                dao.add(reference.iterator());
+                // One call: each reference subject's statements are all in it, and in no entity.
+                dao.add(reference.iterator(), o.statsOnes());
                 dao.flush();
                 out.println("Wrote " + reference.size() + " reference statements (ontology, countries, categories, dataset description).");
             } else {

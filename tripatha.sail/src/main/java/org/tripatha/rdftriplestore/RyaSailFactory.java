@@ -23,6 +23,7 @@ import static java.util.Objects.requireNonNull;
 
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 
+import org.tripatha.api.RdfCloudTripleStoreConfiguration;
 import org.tripatha.rdftriplestore.inference.InferenceEngine;
 import org.tripatha.store.RyaStoreDAO;
 import org.tripatha.store.RyaStoreEvalStatsDAO;
@@ -42,6 +43,10 @@ import org.tripatha.store.spi.Store;
  * repo.init();
  * </pre>
  *
+ * <p>When {@code query.join.mergeratio} isn't set, it is set to the store's
+ * {@link org.tripatha.store.spi.Capabilities#lookupCost()}: merge joins weigh their reads with
+ * what a lookup costs on that backend.
+ *
  * <p>The caller keeps ownership of the {@link Store} and closes it after shutting down the sail
  * or repository.
  */
@@ -53,6 +58,9 @@ public final class RyaSailFactory {
     public static RdfCloudTripleStore<StoreRdfConfiguration> createSail(final Store store, final StoreRdfConfiguration conf) {
         requireNonNull(store, "store");
         requireNonNull(conf, "conf");
+        if (conf.get(RdfCloudTripleStoreConfiguration.CONF_JOIN_MERGE_RATIO) == null) {
+            conf.setJoinMergeRatio(store.capabilities().lookupCost());
+        }
         final RdfCloudTripleStore<StoreRdfConfiguration> sail = new RdfCloudTripleStore<>();
         sail.setConf(conf);
         sail.setRyaDAO(new RyaStoreDAO(store, conf));

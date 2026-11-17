@@ -21,9 +21,11 @@ package org.tripatha.rdftriplestore.evaluation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -44,6 +46,8 @@ import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.tripatha.store.trace.StoreTrace;
+import org.tripatha.store.trace.TraceEvent;
 
 /**
  * For every key, a batch must return exactly what a single lookup of that key returns, even when
@@ -127,6 +131,67 @@ public class BatchLookupIT extends RyaSailITBase {
         assertEquals(1, batch.get(defaultGraph).size());
         assertEquals(1, batch.get(named).size());
         assertMatchesSingleLookups(batch);
+    }
+
+    /** With subject ranges on, a subject asked for by several keys is read as one range; the answers stay those of single lookups. */
+    @Test
+    public void aSubjectAskedForSeveralTimesIsReadOnce() {
+        conf.setJoinSubjectRanges(true);
+        dao.add(new RyaStatement(new RyaIRI("urn:s"), new RyaIRI("urn:q"), new RyaType("x")));
+        dao.add(new RyaStatement(new RyaIRI("urn:s"), new RyaIRI("urn:r"), new RyaType("y")));
+        final List<LookupKey> keys = List.of(LookupKey.of(S, P, null), LookupKey.of(S, VF.createIRI("urn:q"), null),
+                LookupKey.of(S, P, VF.createIRI("urn:o")), LookupKey.of(S, VF.createIRI("urn:r"), null), LookupKey.of(V, P, null));
+        final List<Integer> ranges = new ArrayList<>();
+        final Map<LookupKey, List<Statement>> batch = traced(ranges, new ArrayList<>(), () -> BatchLookup.fetch(dao, conf, keys, 1000));
+        assertEquals(2, ranges.stream().mapToInt(Integer::intValue).sum(), "one range for urn:s, one for urn:v: " + ranges);
+        assertEquals(2, batch.get(keys.get(0)).size());
+        assertEquals(1, batch.get(keys.get(1)).size());
+        assertMatchesSingleLookups(batch);
+
+        conf.setJoinSubjectRanges(false);
+        final List<Integer> perKey = new ArrayList<>();
+        final Map<LookupKey, List<Statement>> plain = traced(perKey, new ArrayList<>(), () -> BatchLookup.fetch(dao, conf, keys, 1000));
+        assertEquals(5, perKey.stream().mapToInt(Integer::intValue).sum(), perKey.toString());
+        assertEquals(batch, plain);
+    }
+
+    /** A subject with many statements makes the subject range too costly: the batch is read one range per key. */
+    @Test
+    public void aSubjectWithManyStatementsIsReadRangeByRange() {
+        conf.setJoinSubjectRanges(true);
+        final RyaIRI hub = new RyaIRI("urn:hub");
+        final List<RyaStatement> many = new ArrayList<>();
+        for (int i = 0; i < 2_000; i++) {
+            many.add(new RyaStatement(hub, new RyaIRI("urn:many"), new RyaType("v" + i)));
+        }
+        many.add(new RyaStatement(hub, new RyaIRI("urn:name"), new RyaType("Hub")));
+        many.add(new RyaStatement(hub, new RyaIRI("urn:age"), new RyaType("5")));
+        dao.add(many.iterator());
+        final IRI h = VF.createIRI("urn:hub");
+        final List<LookupKey> keys = List.of(LookupKey.of(h, VF.createIRI("urn:name"), null), LookupKey.of(h, VF.createIRI("urn:age"), null));
+        final List<Integer> ranges = new ArrayList<>();
+        final List<String> notes = new ArrayList<>();
+        final Map<LookupKey, List<Statement>> batch = traced(ranges, notes, () -> BatchLookup.fetch(dao, conf, keys, 1000));
+        assertEquals(List.of(1, 1, 1), ranges, "the subject range, then one range per key");
+        assertTrue(notes.stream().anyMatch(n -> n.contains("one range per lookup")), notes.toString());
+        assertEquals(1, batch.get(keys.get(0)).size());
+        assertEquals(1, batch.get(keys.get(1)).size());
+        assertMatchesSingleLookups(batch);
+    }
+
+    private static Map<LookupKey, List<Statement>> traced(final List<Integer> ranges, final List<String> notes,
+            final java.util.function.Supplier<Map<LookupKey, List<Statement>>> fetch) {
+        try (StoreTrace.Scope scope = StoreTrace.start(event -> {
+            if (event instanceof TraceEvent.ScanStart scan) {
+                ranges.add(scan.rangeCount());
+            } else if (event instanceof TraceEvent.Note note) {
+                notes.add(note.text());
+            }
+        })) {
+            final Map<LookupKey, List<Statement>> batch = fetch.get();
+            assertNotNull(batch);
+            return batch;
+        }
     }
 
     private Map<LookupKey, List<Statement>> fetch(final LookupKey... keys) {

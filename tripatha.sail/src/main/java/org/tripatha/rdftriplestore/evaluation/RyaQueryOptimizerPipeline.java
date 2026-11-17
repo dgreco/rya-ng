@@ -23,6 +23,7 @@ import java.util.List;
 
 import java.util.ArrayList;
 
+
 import org.tripatha.store.index.IndexCatalog;
 import org.tripatha.api.RdfCloudTripleStoreConfiguration;
 import org.tripatha.rdftriplestore.evaluation.index.IndexSearchOptimizer;
@@ -41,8 +42,8 @@ import org.eclipse.rdf4j.query.algebra.evaluation.optimizer.RegexAsStringFunctio
 import org.eclipse.rdf4j.query.algebra.evaluation.optimizer.StandardQueryOptimizerPipeline;
 
 /**
- * RDF4J's standard optimizer pipeline (as of 6.1), with Tripatha's graph-size, inference and index
- * rewrites inserted after the tree is normalized and before join ordering. Join ordering
+ * RDF4J's standard optimizer pipeline (as of 6.1), with Tripatha's graph-size, inference, index
+ * and value-range rewrites inserted after the tree is normalized and before join ordering. Join ordering
  * therefore runs once, on the final tree, using Tripatha's cardinality statistics.
  */
 public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
@@ -52,6 +53,8 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
     private final InferenceOptimizer inference;
     private final IndexSearchOptimizer indexSearch;
     private final GraphSizeOptimizer graphSizes;
+    private final RdfCloudTripleStoreConfiguration conf;
+    private final ValueRangeOptimizer valueRanges;
 
     /** Without secondary indexes. */
     public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
@@ -61,7 +64,7 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
 
     /**
      * @param indexes the secondary indexes queries may use
-     * @param conf the query's configuration (whether to use the indexes); ignored without indexes
+     * @param conf the query's configuration (whether to use the indexes, merge joins); null for neither
      */
     public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
             final EvaluationStatistics statistics, final InferenceOptimizer inference, final IndexCatalog indexes,
@@ -76,12 +79,26 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
     public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
             final EvaluationStatistics statistics, final InferenceOptimizer inference, final IndexCatalog indexes,
             final RdfCloudTripleStoreConfiguration conf, final GraphSizeOptimizer graphSizes) {
+        this(strategy, tripleSource, statistics, inference, indexes, conf, graphSizes, null);
+    }
+
+    /**
+     * @param valueRangeStore the store's datatype markers and range counts, under the query's
+     *        labels; null narrows no comparison to value ranges
+     */
+    public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
+            final EvaluationStatistics statistics, final InferenceOptimizer inference, final IndexCatalog indexes,
+            final RdfCloudTripleStoreConfiguration conf, final GraphSizeOptimizer graphSizes,
+            final ValueRangeOptimizer.Store valueRangeStore) {
+        this.valueRanges = valueRangeStore == null || conf == null ? null
+                : new ValueRangeOptimizer(conf, valueRangeStore, statistics);
         this.strategy = strategy;
         this.tripleSource = tripleSource;
         this.statistics = statistics;
         this.inference = inference;
         this.indexSearch = indexes == IndexCatalog.NONE || conf == null ? null : new IndexSearchOptimizer(indexes, conf);
         this.graphSizes = graphSizes;
+        this.conf = conf;
     }
 
     @Override
@@ -112,6 +129,11 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
             // which then sees the much smaller indexed patterns.
             optimizers.add(indexSearch);
         }
+        if (valueRanges != null) {
+            // After the index search, which has its own way of narrowing a filtered pattern;
+            // before join ordering, which then sees the narrowed estimate.
+            optimizers.add(valueRanges);
+        }
         optimizers.addAll(List.of(
                 new QueryJoinOptimizer(statistics, strategy.isTrackResultSize(), tripleSource),
                 TripleTermOptimizer.order(),
@@ -120,9 +142,11 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
                 StandardQueryOptimizerPipeline.FILTER_IN_VALUES_OPTIMIZER,
                 new FilterOptimizer(statistics),
                 StandardQueryOptimizerPipeline.ORDER_LIMIT_OPTIMIZER,
-                // Last: gives every join of a chain a statement pattern on its right, which is
-                // what the batched join and the entity prefetch work on.
-                new LeftDeepJoinOptimizer()));
+                // Gives every join of a chain a statement pattern on its right, which is what the
+                // batched join and the entity prefetch work on.
+                new LeftDeepJoinOptimizer(),
+                // Last: a star's merge becomes the driver of the left-deep chain.
+                new SubjectMergeOptimizer(statistics, conf, !strategy.isTrackResultSize() && !strategy.isTrackTime())));
         return optimizers;
     }
 }

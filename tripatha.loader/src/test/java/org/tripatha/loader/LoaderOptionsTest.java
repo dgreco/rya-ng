@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
+import org.tripatha.store.EvalStatsMutations.CounterPolicy;
 import org.tripatha.store.spi.Durability;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -53,6 +54,7 @@ class LoaderOptionsTest {
         assertEquals(Durability.DEFAULT, o.durability());
         assertEquals(-1, o.splits());
         assertTrue(o.stats());
+        assertEquals(CounterPolicy.SKIP_SUBJECT_ONES, o.statsOnes());
         assertFalse(o.textIndex());
         assertFalse(o.resume());
         assertEquals(0, o.maxRate());
@@ -130,6 +132,8 @@ class LoaderOptionsTest {
         assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--resume=maybe"));
         assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--class-weights", "Person"));
         assertThrows(IllegalArgumentException.class, () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--threads"));
+        assertThrows(IllegalArgumentException.class,
+                () -> parse("load", "--table-prefix", "t_", "--entities", "10", "--stats-ones", "drop").statsOnes());
     }
 
     @Test
@@ -293,6 +297,14 @@ class LoaderOptionsTest {
         assertFalse(again.geoIndex());
         assertFalse(again.stats());
         assertEquals(8, again.threads(), "load settings are not part of the dataset");
+
+        // Writing every counter is part of the dataset too; skipping the subject ones is the default.
+        final LoaderOptions keep = parse("prepare", "--table-prefix", "t_", "--entities", "10", "--stats-ones", "keep");
+        assertTrue(keep.datasetArgs().endsWith(" --stats-ones keep"), keep.datasetArgs());
+        final List<String> keepArgs = new ArrayList<>(List.of("load"));
+        keepArgs.addAll(List.of(keep.datasetArgs().split(" ")));
+        assertEquals(CounterPolicy.ALL, LoaderOptions.parse(keepArgs.toArray(new String[0]), Map.of()).statsOnes());
+        assertFalse(parse("prepare", "--table-prefix", "t_", "--entities", "10").datasetArgs().contains("stats-ones"));
     }
 
     @Test

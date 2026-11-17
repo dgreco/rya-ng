@@ -111,6 +111,9 @@ public class RdfCloudTripleStoreEvaluationStatistics<C extends RdfCloudTripleSto
         @Override
         protected double getCardinality(final StatementPattern sp) {
             final double plain = plainCardinality(sp);
+            if (sp instanceof ValueRangePattern ranged) {
+                return ranged.estimate(plain);
+            }
             return sp instanceof IndexedStatementPattern ? Math.max(1, plain * IndexedStatementPattern.SELECTIVITY) : plain;
         }
 
@@ -185,7 +188,9 @@ public class RdfCloudTripleStoreEvaluationStatistics<C extends RdfCloudTripleSto
                     for (final Statement statement : statements) {
                         final List<Value> values = new ArrayList<Value>();
                         values.add(statement.getSubject());
-                        fspCard  += rdfEvalStatsDAO.getCardinality(conf, cardinality_of, values, context);
+                        // A missing counter (-1) counts as 1, as in the single-pattern estimates below.
+                        final double card = rdfEvalStatsDAO.getCardinality(conf, cardinality_of, values, context);
+                        fspCard += card >= 0 ? card : 1;
                     }
                     return fspCard;
                 }

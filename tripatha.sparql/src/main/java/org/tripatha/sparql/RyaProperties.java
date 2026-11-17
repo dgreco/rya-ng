@@ -42,6 +42,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *        scan; 1 turns batching off.
  * @param entityPrefetch whether the attributes a query reads for a batch of entities (its joins
  *        and OPTIONALs on them) are fetched together in one batch scan.
+ * @param joinMergeRatio how much longer than a star's shortest constant pattern another may be
+ *        and still be merged with it (read in subject order and intersected) instead of looked
+ *        up per row; 0 turns merge joins off, unset takes the backend's own figure.
  * @param textIndex whether to keep the full-text index that speeds up {@code text:matches}.
  * @param textIndexPredicates the predicates whose text literals are indexed; empty for all.
  * @param geoIndex whether to keep the geospatial index that speeds up GeoSPARQL filters.
@@ -61,6 +64,7 @@ public record RyaProperties(
         @DefaultValue("true") boolean stats,
         @DefaultValue("1000") int joinBatchSize,
         @DefaultValue("true") boolean entityPrefetch,
+        Double joinMergeRatio,
         @DefaultValue("false") boolean textIndex,
         @DefaultValue List<String> textIndexPredicates,
         @DefaultValue("false") boolean geoIndex,

@@ -16,7 +16,9 @@
 package org.tripatha.store.spi;
 
 import java.util.ArrayList;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * How to read: with which labels, which columns, and which server-side filters. Immutable;
@@ -32,6 +34,7 @@ public final class ScanSpec {
     private final List<byte[]> families;
     private final List<Column> columns;
     private final String rowRegex;
+    private final byte[] rowSuffix;
     private final String qualifierRegex;
     private final Long minTimestamp;
     private final Long maxTimestamp;
@@ -44,6 +47,7 @@ public final class ScanSpec {
         this.families = List.copyOf(b.families);
         this.columns = List.copyOf(b.columns);
         this.rowRegex = b.rowRegex;
+        this.rowSuffix = b.rowSuffix == null ? null : b.rowSuffix.clone();
         this.qualifierRegex = b.qualifierRegex;
         this.minTimestamp = b.minTimestamp;
         this.maxTimestamp = b.maxTimestamp;
@@ -81,6 +85,28 @@ public final class ScanSpec {
         return rowRegex;
     }
 
+    /**
+     * Only rows ending with these bytes; null for any. The query engine uses it for the object's
+     * type check: a statement row ends with {@code 01} and its object's type marker.
+     */
+    public byte[] rowSuffix() {
+        return rowSuffix == null ? null : rowSuffix.clone();
+    }
+
+    /**
+     * The row conditions as one Java regular expression over the row read as UTF-8, matched as a
+     * whole, for a backend that filters rows by regular expression; null when there are none. The
+     * suffix becomes {@code [\s\S]*} and the quoted suffix: linear, unlike a pattern with several
+     * open groups.
+     */
+    public String rowFilterRegex() {
+        if (rowSuffix == null) {
+            return rowRegex;
+        }
+        final String suffix = "[\\s\\S]*" + Pattern.quote(new String(rowSuffix, StandardCharsets.UTF_8));
+        return rowRegex == null ? suffix : "(?=" + suffix + "\\z)(?:" + rowRegex + ")";
+    }
+
     /** Only cells whose qualifier matches this Java regular expression as a whole; null for any. */
     public String qualifierRegex() {
         return qualifierRegex;
@@ -116,6 +142,7 @@ public final class ScanSpec {
         b.families.addAll(families);
         b.columns.addAll(columns);
         b.rowRegex = rowRegex;
+        b.rowSuffix = rowSuffix;
         b.qualifierRegex = qualifierRegex;
         b.minTimestamp = minTimestamp;
         b.maxTimestamp = maxTimestamp;
@@ -131,6 +158,7 @@ public final class ScanSpec {
         private final List<byte[]> families = new ArrayList<>();
         private final List<Column> columns = new ArrayList<>();
         private String rowRegex;
+        private byte[] rowSuffix;
         private String qualifierRegex;
         private Long minTimestamp;
         private Long maxTimestamp;
@@ -149,6 +177,11 @@ public final class ScanSpec {
 
         public Builder column(final byte[] family, final byte[] qualifier) {
             columns.add(new Column(family, qualifier));
+            return this;
+        }
+
+        public Builder rowSuffix(final byte[] suffix) {
+            this.rowSuffix = suffix == null ? null : suffix.clone();
             return this;
         }
 

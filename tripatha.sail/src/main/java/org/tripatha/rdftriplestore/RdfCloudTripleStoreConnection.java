@@ -26,6 +26,8 @@ import org.eclipse.rdf4j.common.iteration.LookAheadIteration;
 import java.util.HashSet;
 import org.tripatha.api.domain.RyaType;
 import org.tripatha.api.domain.RyaTypeRange;
+import org.tripatha.api.domain.RyaValueRange;
+import org.eclipse.rdf4j.common.iteration.UnionIteration;
 import org.tripatha.api.domain.RyaSchema;
 import org.tripatha.api.domain.RyaTripleTerm;
 import org.tripatha.api.resolver.impl.TripleTermResolver;
@@ -40,6 +42,7 @@ import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
 
@@ -50,6 +53,7 @@ import org.tripatha.store.RyaStoreEvalStatsDAO;
 import org.tripatha.store.RyaStoreDAO;
 import org.tripatha.store.index.IndexCatalog;
 import org.tripatha.api.RdfCloudTripleStoreConfiguration;
+import org.tripatha.api.domain.RyaAnyTypeRange;
 import org.tripatha.api.domain.RyaIRI;
 import org.tripatha.api.domain.RyaStatement;
 import org.tripatha.api.domain.StatementMetadata;
@@ -64,6 +68,7 @@ import org.tripatha.rdftriplestore.evaluation.RdfCloudTripleStoreEvaluationStati
 import org.tripatha.rdftriplestore.evaluation.RyaDefaultStatistics;
 import org.tripatha.rdftriplestore.evaluation.RyaEvaluationStrategy;
 import org.tripatha.rdftriplestore.evaluation.RyaQueryOptimizerPipeline;
+import org.tripatha.rdftriplestore.evaluation.ValueRangeOptimizer;
 import org.tripatha.rdftriplestore.inference.InferenceEngine;
 import org.tripatha.rdftriplestore.inference.InferenceOptimizer;
 import org.tripatha.rdftriplestore.namespace.NamespaceManager;
@@ -256,13 +261,31 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 : new RyaDefaultStatistics();
         final RyaEvaluationStrategy strategy = new RyaEvaluationStrategy(tripleSource, dataset, inferenceEngine, statistics);
         final IndexCatalog indexes = ryaDAO instanceof RyaStoreDAO accumulo ? accumulo.getIndexCatalog() : IndexCatalog.NONE;
+        // The datatypes of a predicate's objects (the markers) and the counts of value ranges,
+        // read with this query's labels.
+        final ValueRangeOptimizer.Store valueRangeStore = ryaDAO instanceof RyaStoreDAO dao
+                && queryConf instanceof StoreRdfConfiguration storeConf ? new ValueRangeOptimizer.Store() {
+                    @Override
+                    public Optional<Set<String>> datatypes(final IRI predicate) {
+                        return dao.objectDatatypes(RdfToRyaConversions.convertIRI(predicate), storeConf);
+                    }
+
+                    @Override
+                    public long count(final IRI predicate, final List<RyaValueRange> ranges, final long cap) {
+                        try (StoreTrace.Reason why = StoreTrace.reason(() -> "value ranges: count the cells, up to " + cap
+                                + ", to order the joins")) {
+                            return dao.getQueryEngine().countValueRanges(RdfToRyaConversions.convertIRI(predicate), ranges, cap,
+                                    storeConf);
+                        }
+                    }
+                } : null;
         // Graph sizes come from the counters, read with this query's authorizations.
         final GraphSizeOptimizer graphSizes = new GraphSizeOptimizer(
                 rdfEvalStatsDAO instanceof RyaStoreEvalStatsDAO stats && queryConf instanceof StoreRdfConfiguration accumuloConf
                         ? () -> stats.graphSizes(accumuloConf)
                         : null);
         strategy.setOptimizerPipeline(new RyaQueryOptimizerPipeline(strategy, tripleSource, statistics,
-                new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf, graphSizes));
+                new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf, graphSizes, valueRangeStore));
         try {
             final TupleExpr parsed = tupleExpr;
             StoreTrace.plan("parsed", parsed::toString);
@@ -549,6 +572,62 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 // U+10FFFF: no text sorts after its UTF-8.
                 return inGraphs(contexts, graph -> new RyaStatement(null, p, new RyaTypeRange(new RyaType(RyaSchema.TRIPLE_TERM, prefix),
                         new RyaType(RyaSchema.TRIPLE_TERM, prefix + "\uDBFF\uDFFF")), RdfToRyaConversions.convertResource(graph)));
+            }
+        }
+
+        /**
+         * The statements with this predicate (any, if {@code null}) whose object's data starts with
+         * {@code prefix}, whatever the object's type: the range of {@code po} (or {@code osp}) that
+         * holds them. Only for a caller that checks each object itself, as a {@code STRSTARTS}
+         * filter does.
+         */
+        public CloseableIteration<? extends Statement> getStatementsWithObjectPrefix(final IRI predicate, final String prefix,
+                final Resource... contexts) throws QueryEvaluationException {
+            storeLookups++;
+            final RyaIRI p = predicate == null ? null : RdfToRyaConversions.convertIRI(predicate);
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "STRSTARTS: only objects starting with \"" + prefix + "\" are read")) {
+                return inGraphs(contexts, graph -> new RyaStatement(null, p, RyaAnyTypeRange.startingWith(prefix),
+                        RdfToRyaConversions.convertResource(graph)));
+            }
+        }
+
+        /**
+         * The statements with this predicate whose object is in one of the ranges of values
+         * ({@code ValueRangePattern}): one range of {@code po} per range. Only for a caller that
+         * checks each object itself, as the comparison filter the ranges were made for does.
+         *
+         * @param condition the comparisons, for the trace
+         */
+        public CloseableIteration<? extends Statement> getStatementsInValueRanges(final IRI predicate,
+                final List<RyaValueRange> ranges, final String condition, final Resource... contexts)
+                throws QueryEvaluationException {
+            storeLookups++;
+            final RyaIRI p = RdfToRyaConversions.convertIRI(predicate);
+            final List<CloseableIteration<Statement>> parts = new ArrayList<>(ranges.size());
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "value ranges: only objects with " + condition + " are read, "
+                    + ranges.size() + " range" + (ranges.size() == 1 ? "" : "s"))) {
+                for (final RyaValueRange range : ranges) {
+                    parts.add(inGraphs(contexts, graph -> new RyaStatement(null, p, range, RdfToRyaConversions.convertResource(graph))));
+                }
+            } catch (final RuntimeException e) {
+                parts.forEach(CloseableIteration::close);
+                throw e;
+            }
+            return parts.size() == 1 ? parts.get(0) : new UnionIteration<>(parts);
+        }
+
+        /**
+         * The statements {@code ?s predicate object} of every graph, in the order of their
+         * subjects: one range of {@code po}. For a merge join ({@code SubjectMergeStep}), which
+         * reads only their subjects.
+         */
+        public CloseableIteration<RyaStatement> inSubjectOrder(final IRI predicate, final Value object) {
+            storeLookups++;
+            try {
+                return ryaDAO.getQueryEngine().query(new RyaStatement(null, RdfToRyaConversions.convertIRI(predicate),
+                        RdfToRyaConversions.convertValue(object)), conf);
+            } catch (final RyaDAOException e) {
+                throw new QueryEvaluationException(e);
             }
         }
 

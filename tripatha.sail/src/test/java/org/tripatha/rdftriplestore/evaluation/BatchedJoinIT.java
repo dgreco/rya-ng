@@ -48,6 +48,8 @@ import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.tripatha.store.trace.StoreTrace;
+import org.tripatha.store.trace.TraceEvent;
 
 /**
  * Batched join lookups must give exactly the results of one lookup per row, and must
@@ -173,6 +175,38 @@ public class BatchedJoinIT extends RyaSailITBase {
         assertEquals(1, batched.getPrefetchCount());
         assertEquals(1, batched.getStoreLookupCount(), "only the left-hand scan goes to the store");
         assertEquals(perRow.getStoreLookupCount() - 1, batched.getCacheHitCount());
+    }
+
+    /**
+     * Windows of left rows start at 64 and double up to the batch size: 300 rows take three
+     * fetches (64, 128, then the 108 left), and a LIMIT stops after the first window's lookups.
+     */
+    @Test
+    public void windowsStartSmallAndDouble() {
+        final StringBuilder data = new StringBuilder("INSERT DATA {\n");
+        for (int i = 0; i < 300; i++) {
+            data.append("<urn:w").append(i).append("> <urn:links> <urn:t").append(i).append("> . <urn:t").append(i)
+                    .append("> <urn:label> \"t").append(i).append("\" .\n");
+        }
+        try (RepositoryConnection conn = repository(1000, true).getConnection()) {
+            conn.prepareUpdate(data.append('}').toString()).execute();
+        }
+        final StoreTripleSource<StoreRdfConfiguration> all = evaluate("SELECT * WHERE { ?a <urn:links> ?b . ?b <urn:label> ?l }", 1000);
+        assertEquals(3, all.getPrefetchCount(), "windows of 64, 128 and the 108 rows left");
+        assertEquals(300, all.getCacheHitCount());
+        assertEquals(1, all.getStoreLookupCount(), "only the left-hand scan goes to the store");
+
+        final List<Integer> ranges = new ArrayList<>();
+        try (StoreTrace.Scope scope = StoreTrace.start(event -> {
+            if (event instanceof TraceEvent.ScanStart scan && scan.reason().contains("batched join")) {
+                ranges.add(scan.rangeCount());
+            }
+        })) {
+            final StoreTripleSource<StoreRdfConfiguration> limited = evaluate(
+                    "SELECT * WHERE { ?a <urn:links> ?b . ?b <urn:label> ?l } LIMIT 10", 1000);
+            assertEquals(1, limited.getPrefetchCount());
+        }
+        assertEquals(List.of(64), ranges, "the first window's lookups only");
     }
 
     // ------------------------------------------------------------------ helpers

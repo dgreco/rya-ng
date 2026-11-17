@@ -26,7 +26,11 @@ package org.tripatha.store.spi;
  * @param serverRegex row and qualifier regular expressions evaluated by the server (Java syntax)
  * @param scanIterators arbitrary server-side scan iterators ({@link ScanSpec#iterators()})
  * @param maxRowBytes the longest row the backend accepts
+ * @param lookupCost about how many cells read in sequence cost as much as one lookup (one range
+ *        of a batch scan). Not a capability but a measured cost: the query planner's default
+ *        for merge joins ({@code query.join.mergeratio}, SCALE-STUDY.md O22). A server round
+ *        trip per batch makes it large; an embedded store, small.
  */
 public record Capabilities(boolean labels, boolean serverCombine, boolean serverRegex, boolean scanIterators,
-        int maxRowBytes) {
+        int maxRowBytes, double lookupCost) {
 }

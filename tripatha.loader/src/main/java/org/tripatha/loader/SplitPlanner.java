@@ -58,9 +58,13 @@ public final class SplitPlanner {
     private SplitPlanner() {
     }
 
-    /** Split points per table name. Tables that get none are left out. */
+    /**
+     * Split points per table name. Tables that get none are left out.
+     *
+     * @param counters the counters the load will write, so {@code eval}'s split points follow its rows
+     */
     public static Map<String, SortedSet<Text>> plan(final EntityGenerator generator, final StoreRdfConfiguration conf,
-            final int splits) {
+            final int splits, final EvalStatsMutations.CounterPolicy counters) {
         final TableLayoutStrategy tables = conf.getTableLayoutStrategy();
         final RyaTableMutationsFactory factory = new RyaTableMutationsFactory(RyaTripleContext.getInstance(conf));
         final SecondaryIndex text = conf.isTextIndex() ? new TextIndex(conf.getTextIndexPredicates()) : null;
@@ -93,7 +97,8 @@ public final class SplitPlanner {
                     counts.add(st, 1);
                 }
                 if (conf.isMaintainStats()) {
-                    addRows(rows.get(tables.getEval()), counts.drain());
+                    // Per entity, like a load's blocks: the entity's subject counters are final.
+                    addRows(rows.get(tables.getEval()), counts.drain(counters));
                 }
             }
         } catch (final Exception e) {

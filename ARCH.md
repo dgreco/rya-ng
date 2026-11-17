@@ -423,9 +423,9 @@ All tables are named `<prefix><suffix>`. The default prefix is `tripatha_`.
 | `spo` | subject `00` predicate `00` object `01` type | graph IRI, empty for the default graph | qualifier, normally empty | statement's label | metadata, normally empty | patterns with a known subject |
 | `po` | predicate `00` object `00` subject `01` type | same | same | same | same | patterns with a known predicate |
 | `osp` | object `00` subject `00` predicate `01` type | same | same | same | same | patterns with a known object |
-| `eval` | one value, or two joined by `00` | which counter: `s`, `p`, `o`, `sp`, `po`, `so` | empty (all graphs) or a graph IRI | statement's label | a count as decimal text, summed server side | cardinality statistics ([section 11](#11-statistics-and-join-ordering)) |
+| `eval` | one value, or two joined by `00` | which counter: `s`, `p`, `o`, `sp`, `po`, `so`; or `t`, a datatype marker | empty (all graphs) or a graph IRI; for `t`, the object's datatype IRI | statement's label | a count as decimal text, summed server side | cardinality statistics ([section 11](#11-statistics-and-join-ordering)); for `t`, the datatypes of a predicate's objects ([section 12.9](#129-comparisons-as-value-ranges)) |
 | `graphs` | graph IRI | `g` | empty | statement's label | empty | named-graph markers |
-| `ns` | a prefix, or `tripatha` | `namespace`, `version` or `index` | empty, or the index id | none | namespace IRI, `1.0.0`, or index state | namespaces, storage version, index state |
+| `ns` | a prefix, or `tripatha` | `namespace`, `version`, `datatypes` or `index` | empty, or the index id | none | namespace IRI, `1.1.0`, `1`, or index state | namespaces, storage version, whether the datatype markers are complete, index state |
 | `text` | word `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | full-text index (optional, [section 15](#15-text-and-geo-search)) |
 | `geo` | geohash cell `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | geospatial index (optional) |
 
@@ -559,7 +559,7 @@ flowchart TD
 
 | Addition | When | How |
 |---|---|---|
-| object-type check | the object is bound | The range ignores the type suffix, so values of different types with the same data bytes fall in the same range: the string `"800000012a"` and the integer `42` both encode to `800000012a`. A server-side `RegExFilter` (priority 11, named `ri`) built by `AbstractTriplePatternStrategy.buildRegex` keeps only rows ending in the object's own type suffix. |
+| object-type check | the object is bound | The range ignores the type suffix, so values of different types with the same data bytes fall in the same range: the string `"800000012a"` and the integer `42` both encode to `800000012a`. So the scan keeps only rows ending in the object's own type suffix (`01` and the marker, or `01` datatype IRI `01 08`). It is a row suffix in the `ScanSpec`:<br>• **RocksDB** compares the bytes.<br>• **Accumulo and HBase** filter on the server with an equivalent linear expression, `[\s\S]*` and the quoted suffix. On Accumulo this is a `RegExFilter` at priority 11, named `ri`.<br>A row regex from the configuration (`query.regex.*`), or the hashed layout, still uses `AbstractTriplePatternStrategy.buildRegex`'s full expression. |
 | graph restriction | the pattern has a context | `fetchColumnFamily(graph)` |
 | qualifier | the pattern has a qualifier | `fetchColumn`, or a `RegExFilter` on the qualifier (priority 8) |
 | time to live | `query.ttl` is set | a `TimestampFilter` (priority 9) keeping cells newer than now minus the TTL |
@@ -630,7 +630,7 @@ For `ex:alice ex:age 42` in graph `ex:g1`, with statistics and both indexes on:
 |---|---|---|
 | `spo`, `po`, `osp` | 1 each | the rows of [section 7.2](#72-row-keys-of-the-statement-tables) |
 | `graphs` | 1 | row `http://ex.org/g1`, family `g`. Written once per `add` call for each graph and label, not once per statement. |
-| `eval` | 12 | 6 counters (`s`, `p`, `o`, `sp`, `po`, `so`) for all graphs, and 6 more for graph `ex:g1` |
+| `eval` | 13 | 6 counters (`s`, `p`, `o`, `sp`, `po`, `so`) for all graphs, 6 more for graph `ex:g1`, and the datatype marker of `ex:age` for `xsd:integer`. The marker is written once per `add` call for each predicate, datatype and label, whether or not statistics are on. |
 | `text` | 0 | `42` is not a string, so the text index ignores it |
 | `geo` | 0 | not a `geo:wktLiteral` |
 
@@ -641,6 +641,13 @@ A label such as `"Colosseo di Roma"@it` adds one `text` entry per distinct word.
 `EvalStatsMutations.CounterBatch` adds up the counter deltas of a whole `add` call in memory: one entry per distinct counter key (row, family, graph, label). It writes one cell per key, holding the sum. The combiner on the server adds cells up the same way, so writing `+3` once equals writing `+1` three times.
 
 The batch is written early once it holds 50,000 keys (`MAX_PENDING_COUNTERS`), so memory stays bounded. The Sail adds statements one call at a time, so this summing pays off only for bulk callers, such as the loader, that pass thousands of statements per call.
+
+**Leaving counters of 1 out.** The planner reads a missing counter as 1 ([section 11.2](#112-how-a-patterns-cardinality-is-estimated)), so a counter whose total is 1 changes no estimate. Most subject counters are such: a subject rarely has two statements with the same object (`so`) or the same predicate (`sp`).
+
+`add(statements, CounterPolicy.SKIP_SUBJECT_ONES)` leaves out the `s`, `sp` and `so` cells whose sum for the call is 1, label by label.
+- **When it is exact:** only when the call holds every statement of its subjects. So with this policy the whole call's counters are summed before any is written, without the early write at 50,000 keys.
+- **Who uses it:** the loader passes whole blocks of entities, which meet that condition ([section 18.3](#183-load)).
+- **What it saves:** about half of the counter cells it sends.
 
 ### 9.4 Flushing, threads and transactions
 
@@ -654,11 +661,16 @@ The batch is written early once it holds 50,000 keys (`MAX_PENDING_COUNTERS`), s
 `RyaStoreDAO.init()`:
 1. creates any missing tables;
 2. checks that the summing combiner is attached to `eval`, and attaches it if not. Listing a table's iterators needs `ALTER_TABLE`, so for a user without it the check is skipped;
-3. writes the storage version (`ns` row `tripatha`, family `version`) only if it is missing;
-4. opens the batch writers and the query engine;
+3. opens the batch writers and the query engine;
+4. reads the storage version (`ns` row `tripatha`, family `version`):
+   - **on a store it has just created,** it writes version `1.1.0` and the `datatypes` flag, which says that every statement of the store has its datatype markers ([section 12.9](#129-comparisons-as-value-ranges));
+   - **on any other store,** it writes neither. A store created before the markers keeps its version (`1.0.0`, or none) and has no flag, so comparisons there read whole predicates;
+   - **on a store whose version is newer than its own,** it opens read-only: every write method (`add`, `delete`, `dropGraph`, `purge`, namespaces, index rebuilds) throws. A newer store may rely on writes this code doesn't make, as a 1.1.0 store relies on the markers. Versions compare number by number between the dots;
 5. creates the `IndexManager`, which opens, creates or validates the index tables ([section 15.6](#156-index-lifecycle)).
 
 `init()` writes nothing when the store is already set up, so a read-only account (such as an endpoint user) can open it.
+
+The version check came with the markers, so a build from before it isn't stopped from writing to a 1.1.0 store, and its statements would have no markers. No such build is deployed: the project is a pre-release snapshot.
 
 ---
 
@@ -698,7 +710,8 @@ SPARQL `CLEAR` and `DROP` call `clearInternal`, which calls `dropGraph(conf, gra
 
 1. **Statement and index tables.** In `spo`, `po`, `osp` and the active index tables, it deletes the whole range, restricted to the column families of the given graphs. A `null` graph means the default graph (empty family). No graphs at all means everything. The index tables use the graph as column family too, so the same delete clears them.
 2. **Graph markers.** It deletes the markers of the named graphs, or all of them.
-3. **Counters.** Only when dropping everything, it also deletes the visible `eval` counters. A single-graph drop leaves the all-graphs counters too high, which only affects join ordering.
+3. **Counters.** Only when dropping everything, it also deletes the visible `eval` counters, family by family. A single-graph drop leaves the all-graphs counters too high, which only affects join ordering.
+4. **Not the datatype markers.** A writer adding statements meanwhile may have written its marker before this delete reached it, and a deleted marker would hide its statements from comparisons. A marker for a type with no values left only narrows less.
 
 ### 10.3 Listing graphs: the `graphs` table
 
@@ -706,7 +719,7 @@ SPARQL `CLEAR` and `DROP` call `clearInternal`, which calls `dropGraph(conf, gra
 
 ### 10.4 Purge and destroy
 
-- **`purge(conf)`** deletes everything visible from every table, then writes the storage version and the index state records again.
+- **`purge(conf)`** deletes everything visible from every table, then writes back the storage version and the `datatypes` flag it found, and the index state records. Exactly what it found: statements under labels the purger lacks stay, so a store without complete markers mustn't come out of a purge with the flag.
 - **`dropAndDestroy()`** deletes the tables.
 
 ---
@@ -767,6 +780,7 @@ The two-value counters (`sp`, `po`, `so`) are used because `query.usecompositeca
 
 More rules:
 - **Indexed patterns:** an `IndexedStatementPattern` ([section 15](#15-text-and-geo-search)) gets its plain estimate times 0.001 (`SELECTIVITY`), but at least 1.
+- **Value ranges:** a `ValueRangePattern` ([section 12.9](#129-comparisons-as-value-ranges)) in a join is estimated at the number of cells its ranges hold, counted up to `query.valueranges.count` (10,000). A range that reaches the cap gets the larger of the cap and its plain estimate. A pattern that isn't counted (on its own, or with the cap at 0) gets a tenth of its plain estimate. 1 when no value can match.
 - **Filters:** a `Filter` node is estimated at a tenth of its argument.
 - **Joins:** a `Join` is estimated at the larger of its two sides.
 
@@ -785,6 +799,9 @@ The counters only influence join order, never results, so some drift is accepted
 - **Re-inserts:** re-inserting an existing statement counts it twice, although Accumulo stores it once.
 - **Graph drops:** dropping one graph doesn't adjust the all-graphs counters.
 - **Failed loads:** a load that fails part way may have written counters for blocks it writes again on resume.
+- **Left-out counters of 1** ([section 9.3](#93-counters-are-summed-before-they-are-written)):
+  - Re-adding such a statement online reads 1 instead of 2.
+  - A subject with one statement under label `A` and more under other labels reads the others only, one less.
 
 **Switches:**
 - `query.usestats=false` makes queries use RDF4J's own heuristic, with Tripatha's adjustments for inference and indexed patterns (`RyaDefaultStatistics`).
@@ -891,7 +908,7 @@ Results are lazy: Accumulo is scanned as the result writer asks for rows, so `LI
 
 ### 12.3 The optimizer pipeline
 
-`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with six Tripatha steps added (marked ★):
+`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with nine Tripatha steps added (marked ★):
 
 ```mermaid
 flowchart TD
@@ -901,29 +918,35 @@ flowchart TD
     o3a --> o3b["★ GraphSizeOptimizer<br/>stats:approxSize patterns from the counters (section 11.4)"]
     o3b --> o4["★ InferenceOptimizer<br/>15 OWL/RDFS rewrites (section 14)"]
     o4 --> o5["★ IndexSearchOptimizer<br/>text and geo patterns (section 15)<br/>only when the store has indexes"]
-    o5 --> o6["QueryJoinOptimizer<br/>join order from Tripatha statistics (section 11)"]
+    o5 --> o5b["★ ValueRangeOptimizer<br/>comparisons narrow patterns to value ranges (section 12.9)"]
+    o5b --> o6["QueryJoinOptimizer<br/>join order from Tripatha statistics (section 11)"]
     o6 --> o6b["★ TripleTermOptimizer.order<br/>each triple-term pattern right after what binds its term (section 12.7)"]
     o6b --> o7["IterativeEvaluationOptimizer, FilterOptimizer,<br/>FilterInValuesOptimizer, FilterOptimizer,<br/>OrderLimitOptimizer"]
     o7 --> o8["★ LeftDeepJoinOptimizer<br/>right-nested joins become left-deep (section 13)"]
+    o8 --> o9["★ SubjectMergeOptimizer<br/>a star's constant patterns become one merge join (section 13.6)"]
 ```
 
 **Where the Tripatha steps sit:**
 - **Graph sizes** are filled in before inference, which leaves the in-memory pattern they produce alone.
 - **Inference** runs after the tree is normalized and before join ordering. Join ordering therefore runs once, on the final tree, and sees the patterns inference created.
 - **The index rewrite** runs after inference, so sub-properties added by inference are searched too. It runs before join ordering, which then sees the much smaller indexed patterns.
+- **The value-range rewrite** runs after it: a pattern an index already narrows is left alone. Join ordering then sees the narrowed estimate.
 
 ### 12.4 The evaluation strategy
 
-`RyaEvaluationStrategy` extends RDF4J's `DefaultEvaluationStrategy` and changes four `prepare` methods (`Join`, `LeftJoin`, `StatementPattern`, `TripleRef`):
+`RyaEvaluationStrategy` extends RDF4J's `DefaultEvaluationStrategy` and changes four `prepare` methods (`Join`, `LeftJoin`, `StatementPattern`, `TripleRef`). It also overrides `precompile`, for the one node type of its own, `SubjectMergeJoin`, which RDF4J's dispatch would refuse:
 
 | Node | Step used |
 |---|---|
+| `SubjectMergeJoin` (a star's constant patterns) | `SubjectMergeStep`, which intersects their subject-sorted lists ([section 13.6](#136-merge-joins-a-stars-constant-patterns-intersected)) |
 | `Join` or `LeftJoin` topping a chain of attribute lookups | the chain's own steps over an `EntityPrefetchStep` ([section 13.5](#135-entity-prefetch-a-chain-of-joins-at-once)) |
 | `Join` whose right side is a plain statement pattern (optionally under filters) | `BatchedJoinStep` ([section 13](#13-batched-joins)); otherwise RDF4J's own join |
 | `IndexedStatementPattern` | RDF4J's `StatementPatternQueryEvaluationStep`, reading through an `IndexTripleSource` ([section 15](#15-text-and-geo-search)) |
 | `FixedStatementPattern` | matched against its in-memory list of ontology statements ([section 14](#14-inference)) |
 | `TripleRef` (a triple-term pattern) | `TripleRefStep` ([section 12.7](#127-triple-terms)) |
 | a `StatementPattern` whose object is a triple term with a constant subject | RDF4J's `StatementPatternQueryEvaluationStep`, reading through a `TripleTermRangeSource` ([section 12.7](#127-triple-terms)) |
+| a `StatementPattern` whose object a `STRSTARTS` filter constrains | RDF4J's `StatementPatternQueryEvaluationStep`, reading through an `ObjectPrefixSource` ([section 12.8](#128-strstarts-as-a-prefix-range)) |
+| `ValueRangePattern` (a pattern whose object comparisons bound) | RDF4J's `StatementPatternQueryEvaluationStep`, reading through a `ValueRangeSource` ([section 12.9](#129-comparisons-as-value-ranges)) |
 | `TransitivePropertySP` | the closure computed by `InferenceEngine.findTransitiveProperty` when one end is bound; otherwise a plain lookup |
 | any other node | RDF4J's default |
 
@@ -972,6 +995,79 @@ RDF4J's own step for `TripleRef` lists every triple term in the store. Tripatha 
 
 The statistics count a triple term like any other object, and estimate a `TripleRef` high, so join ordering starts from the other patterns. Inference ignores triple terms.
 
+### 12.8 `STRSTARTS` as a prefix range
+
+`?p :sku ?s FILTER(STRSTARTS(?s, "SKU-AB"))` would read every `:sku` statement for the filter to keep a few. `ObjectPrefixSource` reads only the statements whose object starts with the prefix instead.
+
+**When it applies** (`ObjectPrefixSource.prefixFor`):
+- **The pattern:** its subject and object are variables, and its predicate is an IRI (a range of `po`) or a variable (a range of `osp`).
+- **The filter:** a `Filter` above the pattern, reached through joins and filters only, so it applies to every row the pattern contributes to. Not across an `OPTIONAL`, a `UNION` or a subquery.
+- **The condition:** it has a conjunct `STRSTARTS(?o, "constant")` on the pattern's object, with a non-empty constant.
+- **The settings:** `query.prefixranges` is on, which is the default.
+
+**Why the answers can't change:**
+- **The filter stays** and decides every row; the range only skips rows it would reject.
+- **Every match is inside the range.** `STRSTARTS(?o, "abc")` is true only for a string or language-tagged string starting with `abc`. Both are stored as their text first: `abc-1`, or `abc-2@en` for a language-tagged one.
+- **Everything else fails anyway.** For numbers, dates, booleans, IRIs and triple terms the function is an error, which a filter treats as false.
+- **No type check.** The range is a `RyaAnyTypeRange`, for which `RyaStoreQueryEngine` adds none, so both kinds of string are read in one scan.
+
+**Not `STRSTARTS(STR(?o), …)`.** `STR` of the number 42 is `"42"`, but numbers, dates and booleans are stored in encodings of their own, outside that range.
+
+**At run time,** when the pattern's subject or object is bound (in a join, for example), the lookup is already narrow and goes to the store as usual. In a batched join such a pattern is batched only once its subject or object is bound, like an indexed pattern.
+
+**Tests:** `ObjectPrefixIT` compares every query with the setting on and off.
+
+### 12.9 Comparisons as value ranges
+
+`?obs :hasResult ?v FILTER(?v > 60)` would read every `:hasResult` statement for the filter to keep a few. A `ValueRangePattern` reads only the results above 60 instead, a little widened (SCALE-STUDY.md O14).
+
+**Why a range is possible:**
+- Within one predicate, `po` rows sort by the object's data bytes.
+- For `xsd:int`, `xsd:short`, `xsd:long`, `xsd:integer`, `xsd:double`, `xsd:float` and `xsd:dateTime`, mango's encodings sort like the values ([section 7.3](#73-value-encoding)): negatives first, `-INF` to `INF` and then NaN for doubles, UTC milliseconds for date-times.
+- Not the others:
+  - `xsd:decimal`, `xsd:date` and other custom datatypes store their lexical text;
+  - `xsd:byte` stores the two hex digits of its unsigned byte, so its negative values sort after the positive ones.
+
+**What has to be known: the datatypes of the predicate's objects.** The type is the last part of a `po` row, after the subject, so nothing in the row layout groups them. The counters can be turned off. So every `add` writes a **datatype marker**: an `eval` counter cell per predicate, datatype and label, in family `t` (`DatatypeMarkers`).
+- **When written:** once per call and key, as graph markers are, whether or not statistics are on, and before the rows it stands for.
+- **When removed:** only by a purge. Deletes and `dropGraph` leave them ([section 10.2](#102-dropping-graphs-dropgraph)).
+- **Who sees them:** a reader sees a marker under the same labels as the statements it stands for, so it learns only the types of statements it may see. A type is present when any of its visible cells holds more than zero: markers only receive +1 deltas, and HBase's increment mode resets a purged counter to zero instead of deleting it.
+- **Trusted only when complete:** that is, in a store created by code that writes them, which `init()` flags in `ns` ([section 9.5](#95-opening-a-store)). A store without the flag is never narrowed.
+- **Not atomic:** an `add` whose flush fails can leave rows without their marker, until they are added again (the loader's resume does). Like every partial write, it isn't transactional.
+
+**When it applies** (`ValueRangeOptimizer`, after the index search and before join ordering):
+- **The pattern:** a plain `StatementPattern` (not one inference or an index built) with a variable subject, an IRI predicate, and the compared variable as its object, used nowhere else in it.
+- **The filter:** above the pattern, reached through joins, unions, the left side of an `OPTIONAL` or a `MINUS`, and extensions that don't bind the variable, as with the indexes ([section 15.7](#157-the-query-side-step-by-step)).
+- **The conditions:** conjuncts `<`, `<=`, `>`, `>=` or `=` between the variable and a constant number or `xsd:dateTime`, on either side.
+- **The datatypes:** read once per query and predicate, under the query's labels. Every one of them must sort like its values and be comparable with the constants (numbers with numbers, date-times with date-times). Otherwise the pattern is left as it is.
+- **The settings:** `query.valueranges` is on, which is the default. There is no result limit (`query.limit`), no hashed row layout and no row regular expression.
+
+**The ranges** (`ValueRanges`): one per datatype, each a scan of `po` from `p 00 start` to `p 00 stop 00 FF`, keeping the rows of that type with the type check of [section 8.2](#82-what-the-scan-adds-on-top-of-the-range). A range only has to hold every value the filter can keep, so its bounds are widened on purpose:
+- **Numbers.** RDF4J compares two numbers in a common type, rounding both to a float or a double when either is one. So the long 2^60 + 100 equals the double 2^60. Each bound is widened by 2^-20 of the constant plus 2^-120, more than that rounding, then floored or ceiled into the type's own values and clamped to its range.
+- **NaN.** RDF4J orders doubles with `Double.compare`, which puts NaN above every number, so `?v > 60` keeps a NaN. A double or float range without an upper bound runs past `INF` to the type's last data.
+- **Date-times** are stored as UTC milliseconds and read back with a `Z`. A constant without a time zone is read as UTC: XSD compares a value with a zone and one without only beyond 14 hours, on the side that reading gives, and in between the comparison is an error, which the filter rejects. The bounds are widened by a second.
+- **What bounds nothing:** a constant that is NaN, infinite, ill-typed, or a date-time outside the years 1 to 9999, and `!=`. Leaving a condition out only widens the ranges.
+- **What reads nothing:** contradictory bounds (`?v > 10 && ?v < 5`), or a type no value of which can match (a byte above 200) gets no range.
+- **When there are no ranges at all:** when a type's range would be open at both ends, as a byte's always is. The types share the predicate's rows, so each range also reads, and drops, the other types' rows whose data falls in it, and a range open at both ends costs a whole scan.
+
+**Why the answers can't change:** the filter stays and decides every row, and each range is a superset of the values the filter keeps. `ValueRangesTest` checks this against RDF4J's own comparisons, in strict and standard mode, for every narrowed type and every kind of constant, edges included.
+
+**At run time,** a `ValueRangeSource` reads the ranges one after the other, through `StoreTripleSource` with the usual graph semantics. When the pattern's subject or object is bound (in a join, say), the lookup is already narrow and goes to the store as usual. In a batched join such a pattern is batched only once its subject or object is bound, like an indexed pattern.
+
+**The estimate** decides whether the range drives a star, so it is counted (SCALE-STUDY.md O25):
+- **When:** the pattern is in a join (looking up through filters and the left side of `OPTIONAL`s), and the statistics are the store's. A pattern on its own needs no estimate, so it isn't counted.
+- **How:** `RyaStoreQueryEngine.countValueRanges` counts the cells of the ranges without decoding them, through the same scan specification as the lookup (labels, TTL, server iterators), in every graph, up to `query.valueranges.count` (10,000). The types share the cap, and each range is one round trip. A count is made once per query, predicate and ranges, never kept across queries.
+- **What it gives:**
+  - a range shorter than the cap is estimated at its count, so a selective condition drives its star;
+  - one that reaches the cap is estimated as if it weren't narrowed (at least the cap), so a condition most values pass leaves the star to its constant patterns.
+  - A range of 10,000 to about half its predicate would often still drive well, and gets the old plan instead: the cap's cost (SCALE-STUDY.md section 4.8).
+- **Without a count** (`query.valueranges.count=0`), the estimate is a tenth of the predicate's count ([section 11.2](#112-how-a-patterns-cardinality-is-estimated)).
+- **In plans:** the pattern's signature shows the count, or "at least 10000 cells".
+
+**Tests:**
+- `ValueRangeIT` compares every query with the setting on and off, with and without a label and with inference.
+- `DatatypeMarkersIT` checks the markers, the flag, the version check and what a range reads, on each backend.
+
 ---
 
 ## 13. Batched joins
@@ -995,7 +1091,7 @@ sequenceDiagram
     participant QE as RyaStoreQueryEngine
     participant R as Right step (RDF4J's own)
     loop until the left side is exhausted
-        BJ->>L: read up to 1000 left rows
+        BJ->>L: read a window of left rows<br/>(64, then doubling up to 1000)
         BJ->>BJ: for each row, the lookup the right side will make<br/>(LookupKey: s, p, o, contexts)
         BJ->>TS: prefetch(keys)
         TS->>BL: fetch(dao, conf, keys, limit)
@@ -1015,6 +1111,8 @@ sequenceDiagram
 ```
 
 The right side is still RDF4J's own statement-pattern step, run once per left row. Only where its statements come from changes, so join semantics (optional variables, repeated variables, graph scopes) stay RDF4J's.
+
+**Window sizes.** The first window is 64 left rows, and each next one doubles, up to `query.join.batchsize`, as entity prefetch does ([section 13.5](#135-entity-prefetch-a-chain-of-joins-at-once)). A query that stops early, such as one with a `LIMIT`, fetches the lookups of a small window instead of a whole batch.
 
 ### 13.3 When a join is batched
 
@@ -1041,8 +1139,13 @@ The join then shows `algorithm: RyaBatchedJoin` in the plan. A chunk with a sing
 
    A key's answer is exactly what a single lookup would have returned.
 3. **No double counting.** Within a group, a stored cell counts once, identified by its statement, graph, qualifier, label and timestamp.
-4. **A size cap.** If more than `query.join.prefetchlimit` statements (default 100,000) would be held in memory, `fetch` returns `null`. Nothing is cached, and every key is looked up on its own.
-5. **Never a partial batch.** A key missing from the cache must mean "ask the store", never "no results". So a batch is registered whole or not at all.
+4. **One range per subject, when switched on** (`query.join.subjectranges`, off by default). In `spo`, a subject asked for by two or more keys of a group (the links of an entity chain, for example) is read as its whole range, `s 00`, instead of one range per key.
+   - **The idea:** the subject's statements are neighbouring rows, so one seek reads them all.
+   - **Why the answers don't change:** the exact matching of step 2 keeps only what each key asks for.
+   - **Large subjects:** if the group's subject ranges return more than 64 cells per subject read whole, plus 1,024, a subject with many statements is among them. The group is then read again one range per key, and the trace notes it.
+   - **Why it is off:** on the warm join benchmark it halved the ranges but read about four times the cells. Accumulo was no faster, and RocksDB was 50 to 64 % slower (SCALE-STUDY.md O21). It may pay where a seek is a block read, on a cold cache, and that is still to be measured.
+5. **A size cap.** If more than `query.join.prefetchlimit` statements (default 100,000) would be held in memory, `fetch` returns `null`. Nothing is cached, and every key is looked up on its own.
+6. **Never a partial batch.** A key missing from the cache must mean "ask the store", never "no results". So a batch is registered whole or not at all.
 
 Batches form a stack in `StoreTripleSource`, so nested batched joins each keep their own until they release it.
 
@@ -1078,6 +1181,34 @@ It is on by default: `query.join.entityprefetch`, or `tripatha.entity-prefetch` 
 **Limits.** Patterns rewritten by inference (subPropertyOf, inverseOf, symmetric and so on) are not single statement patterns any more, so they end the chain. Lookups are shared only within a window: an entity met in two windows is fetched twice.
 
 **Testing:** `EntityChainTest` covers which nodes form a chain; `EntityPrefetchIT` checks results and order against the plan without it, the store lookups it saves, halved windows, labels and inference.
+
+### 13.6 Merge joins: a star's constant patterns, intersected
+
+"All entities matching X" (SCALE-STUDY.md D1) is often a star whose objects are constants: `?x a :Person ; :worksFor :Acme ; :nationality :IT`. Join ordering drives it with the shortest pattern and looks the others up, one lookup per driver row and pattern. But each pattern is already a sorted list: in `po`, the rows of one predicate and object are `p 00 o 00 s 01 type`, in subject order. Reading the lists side by side and keeping the subjects found in all of them reads each list once, in sequence.
+
+```
+Join                                       ?x :name ?n            looked up per row, as before
+└── SubjectMergeJoin (?x, 2 lists)         read in subject order and intersected
+    ├── StatementPattern  ?x :worksFor :Acme      2,532 subjects
+    └── StatementPattern  ?x :nationality :IT    47,218 subjects
+Join … ?x a :Person                       347,303 subjects: looked up for the merge's rows instead
+```
+
+1. **Finding the star.** `SubjectMergeOptimizer` runs last, after `LeftDeepJoinOptimizer`. In each left-deep chain of plain joins it looks at the driver, the first argument join ordering chose. If that is a star pattern on `?x`, every star pattern on `?x` in the chain is a candidate. A star pattern is a plain `StatementPattern` in the default scope, with a variable subject, a constant IRI predicate and a constant IRI or literal object. The chain stops at filters, OPTIONALs and joins with a scope of their own.
+2. **Merge or look up.** A candidate's length is its `po` counter. Reading a list costs its length in cells read in sequence; looking up the shortest list's subjects in it costs that many lookups. So a candidate is merged if it is at most `query.join.mergeratio` times the shortest: about what a lookup costs in sequential cells. The rest stay joins after the merge, looked up for the merge's rows only. Inner joins commute, so moving them doesn't change the answers.
+3. **The ratio** is unset by default. `RyaSailFactory` then sets it to the store's `Capabilities.lookupCost()`: 35 on Accumulo and 20 on HBase, where a lookup is a server round trip; 8 on RocksDB, where it is a seek. Each was measured on the join benchmark (SCALE-STUDY.md 4.7). 0 turns merges off; the endpoint's setting is `tripatha.join-merge-ratio`.
+4. **The merge.** `SubjectMergeStep` opens one range per list (`StoreTripleSource.inSubjectOrder`: an ordinary `po` lookup with the object's type as a row suffix, read with the query's labels) and advances them together.
+   - Subjects are compared by code point, which is the order of their UTF-8 bytes and so of the rows. `String.compareTo` compares UTF-16 units, which puts characters above U+FFFF before U+E000 to U+FFFF.
+   - A subject with `n1` statements in one list and `n2` in the other (the same triple in several graphs, or under several labels) gives `n1 × n2` rows, as the nested loop does.
+   - Rows come out in subject order instead of the driver's. SPARQL fixes no order without `ORDER BY`, so a `LIMIT` without one may return other rows of the same answer.
+   - When the subject is already bound, as on the right of an OPTIONAL evaluated per row, the step runs the patterns' plain nested loop.
+5. **Above the merge,** `SubjectMergeJoin` binds the subject on every row (`getAssuredBindingNames`), so the attribute patterns form a `BatchedJoinStep` or an entity chain over it, as over any driver.
+
+**Not merged:** without counters (the choice needs them), with a dataset or `query.limit`, under RDF4J's result-size or time tracking, and with the hashed row layout, whose `po` rows are not in subject order. Patterns built by inference or for an index, named-graph patterns and value conditions are left alone. A prefix or value range of `po` is sorted by value, so it can't be intersected as it streams.
+
+**Measured** (SCALE-STUDY.md 4.7, 10M triples): on the Accumulo test cluster, `class-large` (three lists of 20k, 93k and 134k subjects) went from 1,446 ms and 41,284 lookups to 137 ms and 6 ranges, and `class-2` from 267 to 47 ms; on the HBase test cluster `class-large` went from 506 to 149 ms. Merging a whole class of 347k subjects into a star whose other lists are short is slower than looking it up (+20 %), which is what the ratio prevents. On RocksDB only stars of similar lengths gain (`class-large` −28 %), so its ratio is 8.
+
+**Testing:** `SubjectMergeIT` runs a set of stars with merges off and forced, with and without a label, over data with duplicates in graphs and labels, values of other types with the same data, and subjects whose UTF-16 and UTF-8 orders differ. It checks through the trace that the lists are read in order, that the attributes above are still an entity chain, and that a long list is looked up instead. `-Dtripatha.test.mergeRatio=1000000` forces merges in every IT.
 
 ---
 
@@ -1580,6 +1711,11 @@ sequenceDiagram
 
 - **Workers:** each worker thread has its own DAO, because `add` is synchronized per DAO. Its batch-writer settings come from the options (buffer, writer threads, latency, timeout, durability).
 - **Blocks:** blocks of entities (`--block-size`, default 1000) are claimed from a shared counter. Each block is written with one `add`, so its statistics counters are summed before they are sent ([section 9.3](#93-counters-are-summed-before-they-are-written)).
+- **Counters of 1:** a subject's statements all come from its own entity, so a block's `s`, `sp` and `so` sums are final totals. By default the block's add leaves out those equal to 1 (`--stats-ones skip`; `keep` writes them).
+  - `prepare` writes the reference data the same way, in one call.
+  - `SplitPlanner` and `dry-run` count as the load writes.
+  - `verify` expects no cell where a label's count is 1.
+  - `EntityGeneratorTest` checks that no subject spans two entities.
 - **Progress:** a block is recorded in the progress file only after a flush that followed it. The file is written atomically (temporary file, then rename) and carries a fingerprint of the options, so `--resume` never mixes two loads. `--resume` skips recorded blocks and writes the others again. That is harmless for the statement tables (identical keys), but the counters of blocks in flight during a failure may be counted twice.
 - **Parallelism:** `--part K --parts N` divides the entities between processes, on one or several machines.
 
@@ -1636,6 +1772,8 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 13. **One DAO, one writer thread.** Parallel writers use separate DAOs.
 14. **A triple term is never a constant `Var` of a statement pattern.** It is bound through a row (`TripleTermOptimizer.fold`); RDF4J's statement-pattern step would otherwise give one `Var` two parents.
 15. **A triple-term range only narrows.** The `TripleRef` that follows checks every result, as index searches are checked against `spo`.
+16. **Every statement of a flagged store has its datatype marker.** Every `add` writes them, only a purge removes them, and a DAO never writes to a store newer than itself. A missing marker would hide the statements of its type from comparisons.
+17. **A value range only narrows.** The filter stays and decides every row ([section 12.9](#129-comparisons-as-value-ranges)).
 
 ---
 

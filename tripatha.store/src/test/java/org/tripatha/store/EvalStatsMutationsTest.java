@@ -102,4 +102,49 @@ class EvalStatsMutationsTest {
         assertEquals(0, batch.size());
         assertTrue(batch.drain().isEmpty());
     }
+
+    /**
+     * Skipping a subject's ones leaves out exactly the s, sp and so cells whose sum is 1, label by
+     * label, and keeps every other counter, ones included.
+     */
+    @Test
+    void skipSubjectOnesLeavesOutOnlyTheSubjectCountersOfOne() {
+        final EvalStatsMutations.CounterBatch all = new EvalStatsMutations.CounterBatch();
+        final EvalStatsMutations.CounterBatch skip = new EvalStatsMutations.CounterBatch();
+        final List<RyaStatement> statements = List.of(
+                st("urn:a", "urn:name", "Alice", "urn:g", null),
+                st("urn:a", "urn:knows", "urn:b", "urn:g", null),
+                st("urn:a", "urn:knows", "urn:c", "urn:g", null),
+                st("urn:a", "urn:knows", "urn:c", "urn:g", "A"),
+                st("urn:b", "urn:name", "Bob", null, null));
+        for (final RyaStatement s : statements) {
+            all.add(s, 1);
+            skip.add(s, 1);
+        }
+        final Map<String, Long> every = cells(all.drain());
+        final Map<String, Long> kept = cells(skip.drain(EvalStatsMutations.CounterPolicy.SKIP_SUBJECT_ONES));
+
+        final Map<String, Long> expected = new TreeMap<>(every);
+        expected.entrySet().removeIf(e -> e.getValue() == 1 && isSubjectCounter(e.getKey()));
+        assertEquals(expected, kept);
+        // Kept: urn:a's totals above 1, and every non-subject counter (urn:b's object "Bob" included).
+        assertEquals(3L, kept.get("urn:a|s||"));
+        assertEquals(3L, kept.get("urn:a|s|urn:g|"));
+        assertEquals(2L, kept.get("urn:a~urn:knows|sp||"));
+        assertEquals(1L, kept.get("Bob|o||"));
+        assertEquals(1L, kept.get("urn:name~Alice|po||"));
+        // Left out: the label A cells of urn:a (one statement), urn:b's subject cells, and so cells of one.
+        assertTrue(!kept.containsKey("urn:a|s||A") && every.containsKey("urn:a|s||A"));
+        assertTrue(!kept.containsKey("urn:b|s||") && every.containsKey("urn:b|s||"));
+        assertTrue(!kept.containsKey("urn:a~Alice|so||"));
+        assertEquals(1L, every.get("urn:a~Alice|so||"));
+        // The default drain, and the ALL policy, keep everything.
+        assertTrue(every.values().stream().anyMatch(v -> v == 1));
+        assertTrue(!EvalStatsMutations.CounterPolicy.ALL.skips(new EvalStatsMutations.CounterKey("urn:b", "s", "", ""), 1));
+    }
+
+    private static boolean isSubjectCounter(final String cell) {
+        final String family = cell.split("\\|")[1];
+        return family.equals("s") || family.equals("sp") || family.equals("so");
+    }
 }

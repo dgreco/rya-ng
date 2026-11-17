@@ -62,7 +62,8 @@ public final class RocksStore implements Store {
     /** The backend's id. */
     public static final String ID = "rocksdb";
 
-    private static final Capabilities CAPABILITIES = new Capabilities(true, true, true, false, Integer.MAX_VALUE);
+    /** A lookup costs about 8 cells read in sequence: a seek, with no round trip (SCALE-STUDY.md O22). */
+    private static final Capabilities CAPABILITIES = new Capabilities(true, true, true, false, Integer.MAX_VALUE, 8);
     private static final int DELETE_BATCH = 1000;
 
     private final RocksDatabase database;
@@ -188,6 +189,9 @@ public final class RocksStore implements Store {
         }
         if (spec.rowRegex() != null) {
             out.add("row regex=" + spec.rowRegex());
+        }
+        if (spec.rowSuffix() != null) {
+            out.add("row suffix=" + java.util.HexFormat.of().formatHex(spec.rowSuffix()));
         }
         return out;
     }

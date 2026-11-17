@@ -15,9 +15,12 @@
  */
 package org.tripatha.loader;
 
+import static org.tripatha.api.RdfCloudTripleStoreConstants.SUBJECT_CF;
+
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,6 +31,8 @@ import java.util.Set;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
 
+import org.tripatha.store.EvalStatsMutations.CounterKey;
+import org.tripatha.store.EvalStatsMutations.CounterPolicy;
 import org.tripatha.store.StoreRdfConfiguration;
 import org.tripatha.store.spi.Store;
 import org.tripatha.store.visibility.VisibilityExpression;
@@ -42,7 +47,8 @@ import org.tripatha.loader.gen.SplitMix64;
 /**
  * Regenerates a random sample of entities and compares them with the store: every statement the
  * reader may see must be there, nothing else may be, and each subject's statistics counter must
- * equal its number of visible statements.
+ * equal its number of visible statements (leaving out the label cells of 1 a load with
+ * {@code --stats-ones skip} doesn't write).
  */
 public final class Verify {
     private Verify() {
@@ -75,10 +81,16 @@ public final class Verify {
         try {
             for (final long e : entities) {
                 final Map<String, Set<String>> expected = new LinkedHashMap<>();
+                // The same statements per subject and label: a counter cell is per label.
+                final Map<String, Map<String, Set<String>>> byLabel = new HashMap<>();
                 for (final RyaStatement st : generator.generate(e)) {
                     final byte[] cv = st.getColumnVisibility();
                     if (VisibilityExpression.parse(cv).isVisibleTo(readerLabels)) {
-                        expected.computeIfAbsent(st.getSubject().getData(), k -> new HashSet<>()).add(key(st));
+                        final String subject = st.getSubject().getData();
+                        expected.computeIfAbsent(subject, k -> new HashSet<>()).add(key(st));
+                        byLabel.computeIfAbsent(subject, k -> new HashMap<>())
+                                .computeIfAbsent(cv == null ? "" : new String(cv, StandardCharsets.ISO_8859_1), k -> new HashSet<>())
+                                .add(key(st));
                     }
                 }
                 for (final Map.Entry<String, Set<String>> s : expected.entrySet()) {
@@ -104,10 +116,11 @@ public final class Verify {
                     if (stats != null) {
                         final double count = stats.getCardinality(conf, CARDINALITY_OF.SUBJECT,
                                 List.of(SimpleValueFactory.getInstance().createIRI(s.getKey())));
-                        if (Math.round(count) != s.getValue().size()) {
+                        final long expectedCount = expectedSubjectCounter(s.getKey(), byLabel.get(s.getKey()), o.statsOnes());
+                        if (Math.round(count) != expectedCount) {
                             counterMismatches++;
                             note(problems, "subject counter of " + s.getKey() + " is " + Math.round(count) + ", expected "
-                                    + s.getValue().size());
+                                    + expectedCount + (expectedCount < 0 ? " (none: every label's count is 1)" : ""));
                         }
                     }
                 }
@@ -122,6 +135,23 @@ public final class Verify {
         out.printf(Locale.ROOT, "Verified %,d entities (%,d visible statements): %,d missing, %,d unexpected, %,d counter mismatches.%n",
                 entities.size(), expectedTotal, missing, extra, counterMismatches);
         return missing == 0 && extra == 0 && counterMismatches == 0;
+    }
+
+    /**
+     * What {@code getCardinality} should return for a subject, from its visible statements per
+     * label: the sum of the label cells the load wrote, or -1 when it wrote none.
+     */
+    static long expectedSubjectCounter(final String subject, final Map<String, Set<String>> byLabel, final CounterPolicy policy) {
+        long total = 0;
+        boolean written = false;
+        for (final Map.Entry<String, Set<String>> label : byLabel.entrySet()) {
+            final long n = label.getValue().size();
+            if (!policy.skips(new CounterKey(subject, SUBJECT_CF, "", label.getKey()), n)) {
+                total += n;
+                written = true;
+            }
+        }
+        return written ? total : -1;
     }
 
     private static void note(final List<String> problems, final String problem) {
