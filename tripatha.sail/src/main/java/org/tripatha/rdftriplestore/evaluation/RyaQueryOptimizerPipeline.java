@@ -20,13 +20,9 @@ package org.tripatha.rdftriplestore.evaluation;
  */
 
 import java.util.List;
-import java.util.Optional;
-import java.util.Set;
-import java.util.function.Function;
 
 import java.util.ArrayList;
 
-import org.eclipse.rdf4j.model.IRI;
 
 import org.tripatha.store.index.IndexCatalog;
 import org.tripatha.api.RdfCloudTripleStoreConfiguration;
@@ -87,15 +83,15 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
     }
 
     /**
-     * @param datatypes the datatypes of a predicate's objects, from the store's datatype markers
-     *        under the query's labels (empty when they are incomplete); null narrows no
-     *        comparison to value ranges
+     * @param valueRangeStore the store's datatype markers and range counts, under the query's
+     *        labels; null narrows no comparison to value ranges
      */
     public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
             final EvaluationStatistics statistics, final InferenceOptimizer inference, final IndexCatalog indexes,
             final RdfCloudTripleStoreConfiguration conf, final GraphSizeOptimizer graphSizes,
-            final Function<IRI, Optional<Set<String>>> datatypes) {
-        this.valueRanges = datatypes == null || conf == null ? null : new ValueRangeOptimizer(conf, datatypes);
+            final ValueRangeOptimizer.Store valueRangeStore) {
+        this.valueRanges = valueRangeStore == null || conf == null ? null
+                : new ValueRangeOptimizer(conf, valueRangeStore, statistics);
         this.strategy = strategy;
         this.tripleSource = tripleSource;
         this.statistics = statistics;

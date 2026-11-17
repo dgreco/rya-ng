@@ -780,7 +780,7 @@ The two-value counters (`sp`, `po`, `so`) are used because `query.usecompositeca
 
 More rules:
 - **Indexed patterns:** an `IndexedStatementPattern` ([section 15](#15-text-and-geo-search)) gets its plain estimate times 0.001 (`SELECTIVITY`), but at least 1.
-- **Value ranges:** a `ValueRangePattern` ([section 12.9](#129-comparisons-as-value-ranges)) gets its plain estimate times 0.1, but at least 1, and 1 when no value can match. A guess: there are no histograms.
+- **Value ranges:** a `ValueRangePattern` ([section 12.9](#129-comparisons-as-value-ranges)) in a join is estimated at the number of cells its ranges hold, counted up to `query.valueranges.count` (10,000). A range that reaches the cap gets the larger of the cap and its plain estimate. A pattern that isn't counted (on its own, or with the cap at 0) gets a tenth of its plain estimate. 1 when no value can match.
 - **Filters:** a `Filter` node is estimated at a tenth of its argument.
 - **Joins:** a `Join` is estimated at the larger of its two sides.
 
@@ -1054,7 +1054,15 @@ The statistics count a triple term like any other object, and estimate a `Triple
 
 **At run time,** a `ValueRangeSource` reads the ranges one after the other, through `StoreTripleSource` with the usual graph semantics. When the pattern's subject or object is bound (in a join, say), the lookup is already narrow and goes to the store as usual. In a batched join such a pattern is batched only once its subject or object is bound, like an indexed pattern.
 
-**The estimate** is the predicate's count times 0.1 ([section 11.2](#112-how-a-patterns-cardinality-is-estimated)). With no histograms that is a guess, and it decides whether the range drives a star: it does when the predicate has fewer than ten times as many statements as the star's shortest other pattern. A condition most values pass makes it the wrong driver (SCALE-STUDY.md section 4.8).
+**The estimate** decides whether the range drives a star, so it is counted (SCALE-STUDY.md O25):
+- **When:** the pattern is in a join (looking up through filters and the left side of `OPTIONAL`s), and the statistics are the store's. A pattern on its own needs no estimate, so it isn't counted.
+- **How:** `RyaStoreQueryEngine.countValueRanges` counts the cells of the ranges without decoding them, through the same scan specification as the lookup (labels, TTL, server iterators), in every graph, up to `query.valueranges.count` (10,000). The types share the cap, and each range is one round trip. A count is made once per query, predicate and ranges, never kept across queries.
+- **What it gives:**
+  - a range shorter than the cap is estimated at its count, so a selective condition drives its star;
+  - one that reaches the cap is estimated as if it weren't narrowed (at least the cap), so a condition most values pass leaves the star to its constant patterns.
+  - A range of 10,000 to about half its predicate would often still drive well, and gets the old plan instead: the cap's cost (SCALE-STUDY.md section 4.8).
+- **Without a count** (`query.valueranges.count=0`), the estimate is a tenth of the predicate's count ([section 11.2](#112-how-a-patterns-cardinality-is-estimated)).
+- **In plans:** the pattern's signature shows the count, or "at least 10000 cells".
 
 **Tests:**
 - `ValueRangeIT` compares every query with the setting on and off, with and without a label and with inference.

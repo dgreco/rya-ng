@@ -260,8 +260,14 @@ public final class JoinBench {
         q.add(new Query("class-value-int", "companies of one industry with at least 100 employees (xsd:integer)",
                 "SELECT ?co ?n WHERE { ?co a o:Company ; o:industry <" + c.topIndustry
                         + "> ; o:numberOfEmployees ?n FILTER(?n >= 100) }"));
+        // About 9 % of the results pass: some 22,000 values, more than the 10,000 cells a range is
+        // counted to (O25), so the count sends it to the merge plan although the range would
+        // still drive well. What the cap gives up.
+        q.add(new Query("class-value-mid", "class-value with a condition one result in eleven passes (?v > 40)",
+                "SELECT ?obs ?v WHERE { ?obs a o:Observation ; o:observedProperty <" + c.topProperty
+                        + "> ; o:hasResult ?v FILTER(?v > 40) }"));
         // The value condition keeps nine values in ten: a value range is the wrong driver here,
-        // and its fixed estimate (a tenth of the predicate) says otherwise. O14's losing side.
+        // and O14's fixed estimate (a tenth of the predicate) said otherwise. Its count (O25) doesn't.
         q.add(new Query("class-value-wide", "class-value with a condition most results pass (?v > 0)",
                 "SELECT ?obs ?v WHERE { ?obs a o:Observation ; o:observedProperty <" + c.topProperty
                         + "> ; o:hasResult ?v FILTER(?v > 0) }"));

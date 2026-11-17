@@ -34,7 +34,7 @@ import org.tripatha.api.domain.RyaValueRange;
  */
 public final class ValueRangePattern extends StatementPattern {
     /**
-     * How much the ranges are assumed to narrow the pattern down, for join ordering. A guess:
+     * How much uncounted ranges are assumed to narrow the pattern down, for join ordering. A guess:
      * there are no histograms. It makes a bounded pattern the driver of a star when its predicate
      * has fewer than ten times as many statements as the star's shortest other pattern.
      */
@@ -42,17 +42,49 @@ public final class ValueRangePattern extends StatementPattern {
 
     private final List<RyaValueRange> ranges;
     private final String condition;
+    private final Long count;
+    private final long cap;
 
     /**
      * @param original the pattern replaced; its variables are copied
      * @param ranges the ranges to read, possibly none (no stored value can match)
      * @param condition the comparisons the ranges were made for, for plans and traces
+     * @param count the cells counted in the ranges, up to {@code cap}; null when not counted
+     * @param cap the most cells counted
      */
-    public ValueRangePattern(final StatementPattern original, final List<RyaValueRange> ranges, final String condition) {
+    public ValueRangePattern(final StatementPattern original, final List<RyaValueRange> ranges, final String condition,
+            final Long count, final long cap) {
         super(original.getScope(), clone(original.getSubjectVar()), clone(original.getPredicateVar()),
                 clone(original.getObjectVar()), clone(original.getContextVar()));
         this.ranges = List.copyOf(ranges);
         this.condition = condition;
+        this.count = count;
+        this.cap = cap;
+    }
+
+    /** @return the cells counted in the ranges, up to {@link #getCap()}; null when not counted */
+    public Long getCount() {
+        return count;
+    }
+
+    /** @return the most cells counted: a count that reaches it says only that there are at least that many */
+    public long getCap() {
+        return cap;
+    }
+
+    /**
+     * The estimate for join ordering, from the pattern's estimate without the ranges: the count
+     * when the ranges hold fewer cells than the cap; at least the cap and the plain estimate when
+     * they reach it; a tenth of the plain estimate when they weren't counted.
+     */
+    public double estimate(final double plain) {
+        if (ranges.isEmpty()) {
+            return 1;
+        }
+        if (count == null) {
+            return Math.max(1, plain * SELECTIVITY);
+        }
+        return count < cap ? Math.max(1, count) : Math.max(cap, plain);
     }
 
     private static Var clone(final Var var) {
@@ -77,7 +109,8 @@ public final class ValueRangePattern extends StatementPattern {
     public String getSignature() {
         return super.getSignature() + " [" + condition + ": "
                 + (ranges.isEmpty() ? "no value can match" : ranges.stream().map(ValueRangePattern::describe)
-                        .collect(Collectors.joining(", "))) + "]";
+                        .collect(Collectors.joining(", ")))
+                + (count == null ? "" : count < cap ? "; " + count + " cells" : "; at least " + cap + " cells") + "]";
     }
 
     private static String describe(final RyaValueRange range) {
@@ -88,7 +121,8 @@ public final class ValueRangePattern extends StatementPattern {
 
     @Override
     public boolean equals(final Object other) {
-        return other instanceof ValueRangePattern o && super.equals(o) && ranges.equals(o.ranges);
+        return other instanceof ValueRangePattern o && super.equals(o) && ranges.equals(o.ranges)
+                && Objects.equals(count, o.count);
     }
 
     @Override

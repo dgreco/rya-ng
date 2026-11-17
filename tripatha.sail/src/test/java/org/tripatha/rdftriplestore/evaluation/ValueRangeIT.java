@@ -48,7 +48,9 @@ import org.tripatha.store.trace.TraceEvent;
 /**
  * A comparison filter on a pattern's object narrows the pattern's scan to value ranges (O14), and
  * answers stay those of the full scan, duplicates included: every query here is also run with
- * {@code query.valueranges} off, with and without a label, and with and without inference.
+ * {@code query.valueranges} off, with and without a label, and with and without inference. The
+ * ranges of a pattern in a join are counted to estimate it (O25), up to a cap: the answers are
+ * checked with no count, with a cap every range reaches, and with the default.
  */
 public class ValueRangeIT extends RyaSailITBase {
     private static final String XSD = "http://www.w3.org/2001/XMLSchema#";
@@ -88,9 +90,14 @@ public class ValueRangeIT extends RyaSailITBase {
             "SELECT ?s ?o ?nm WHERE { ?s <{P}> ?o OPTIONAL { ?s <urn:name> ?nm } FILTER({C}) }",
             "SELECT ?s ?o WHERE { { ?s <{P}> ?o } UNION { ?s <urn:mix> ?o } FILTER({C}) }",
             "SELECT ?o WHERE { <urn:a1> <{P}> ?o FILTER({C}) }",
-            "SELECT (COUNT(*) AS ?n) WHERE { ?s <{P}> ?o FILTER({C}) }");
+            "SELECT (COUNT(*) AS ?n) WHERE { ?s <{P}> ?o FILTER({C}) }",
+            "SELECT ?s ?o WHERE { ?s a <urn:K> ; <urn:grp> <urn:G> ; <{P}> ?o FILTER({C}) }");
 
-    private static final List<String> PREDICATES = List.of("urn:n", "urn:t", "urn:mix", "urn:str", "urn:only", "urn:big");
+    private static final List<String> PREDICATES = List.of("urn:n", "urn:t", "urn:mix", "urn:str", "urn:only", "urn:big",
+            "urn:score");
+    private static final String RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    /** The star, {@code %s} being the condition on the score. */
+    private static final String STAR = "SELECT ?x ?v WHERE { ?x a <urn:K> ; <urn:grp> <urn:G> ; <urn:score> ?v FILTER(%s) }";
 
     private static final List<String> CONDITIONS = List.of(
             "?o > 60", "?o >= 60", "?o < 60", "60 < ?o", "?o <= 60.0", "?o > 59.5", "?o > 6.0E1", "?o >= -0.0E0",
@@ -129,6 +136,22 @@ public class ValueRangeIT extends RyaSailITBase {
                 labelled.add(new RyaStatement(new RyaIRI("urn:big" + i), new RyaIRI("urn:big"),
                         new RyaType(org.eclipse.rdf4j.model.vocabulary.XSD.INT, Integer.toString(i))));
             }
+            // A star: 60 members of a class, 8 of them in a group, each with a score; and 20 high
+            // scores only label A can see.
+            for (int i = 1; i <= 60; i++) {
+                final RyaIRI k = new RyaIRI("urn:k" + i);
+                labelled.add(new RyaStatement(k, new RyaIRI(RDF_TYPE), new RyaIRI("urn:K")));
+                if (i <= 8) {
+                    labelled.add(new RyaStatement(k, new RyaIRI("urn:grp"), new RyaIRI("urn:G")));
+                }
+                labelled.add(new RyaStatement(k, new RyaIRI("urn:score"),
+                        new RyaType(org.eclipse.rdf4j.model.vocabulary.XSD.INT, Integer.toString(i))));
+            }
+            for (int i = 1; i <= 20; i++) {
+                labelled.add(new RyaStatement(new RyaIRI("urn:h" + i), new RyaIRI("urn:score"),
+                        new RyaType(org.eclipse.rdf4j.model.vocabulary.XSD.INT, Integer.toString(100 + i)), null, null,
+                        "A".getBytes(StandardCharsets.UTF_8), null, 1L));
+            }
             dao.add(labelled.iterator());
         } finally {
             dao.destroy();
@@ -142,21 +165,57 @@ public class ValueRangeIT extends RyaSailITBase {
 
     @Test
     public void narrowedScansGiveTheAnswersOfFullScans() {
-        for (final boolean inference : List.of(false, true)) {
-            for (final boolean labelled : List.of(true, false)) {
-                final SailRepository ranges = repository(labelled, true, inference);
-                final SailRepository full = repository(labelled, false, inference);
-                for (final String query : QUERIES) {
-                    for (final String predicate : PREDICATES) {
-                        for (final String condition : CONDITIONS) {
-                            final String q = query.replace("{P}", predicate).replace("{C}", condition);
-                            assertEquals(rows(full, q), rows(ranges, q),
-                                    q + (labelled ? " (label A)" : "") + (inference ? " (inference)" : ""));
+        // No count (the fixed estimate), a cap every range reaches, and the default cap.
+        for (final Integer cap : java.util.Arrays.asList(0, 3, null)) {
+            for (final boolean inference : cap == null ? List.of(false, true) : List.of(false)) {
+                for (final boolean labelled : List.of(true, false)) {
+                    final SailRepository ranges = repository(labelled, true, inference, cap);
+                    final SailRepository full = repository(labelled, false, inference, cap);
+                    for (final String query : QUERIES) {
+                        for (final String predicate : PREDICATES) {
+                            for (final String condition : CONDITIONS) {
+                                final String q = query.replace("{P}", predicate).replace("{C}", condition);
+                                assertEquals(rows(full, q), rows(ranges, q), q + (labelled ? " (label A)" : "")
+                                        + (inference ? " (inference)" : "") + " (cap " + cap + ")");
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    @Test
+    public void aCountedRangeDrivesItsStarOnlyWhenItIsShort() {
+        final String selective = String.format(STAR, "?v > 58");
+        final String wide = String.format(STAR, "?v > 0");
+        final SailRepository counted = repository(false, true, false, 10);
+        final Read narrow = read(counted, selective);
+        assertTrue(narrow.counted, "a pattern in a join is counted");
+        assertEquals("ValueRangePattern", driver(narrow.plan), narrow.plan);
+        assertTrue(narrow.plan.contains("cells]"), narrow.plan);
+        final Read broad = read(counted, wide);
+        assertTrue(broad.plan.contains("at least 10 cells"), broad.plan);
+        assertFalse(driver(broad.plan).equals("ValueRangePattern"), "60 scores pass: the group drives\n" + broad.plan);
+        // A tenth of the 60 scores, below the group's 8: the fixed estimate drives with the range.
+        assertEquals("ValueRangePattern", driver(read(repository(false, true, false, 0), wide).plan));
+        assertEquals(rows(repository(false, false, false, 10), wide), rows(counted, wide));
+    }
+
+    @Test
+    public void aCountSeesOnlyWhatTheReaderMaySee() {
+        final String selective = String.format(STAR, "?v > 58");
+        assertEquals("ValueRangePattern", driver(read(repository(false, true, false, 10), selective).plan),
+                "without label A, 4 scores are counted");
+        final Read withA = read(repository(true, true, false, 10), selective);
+        assertTrue(withA.plan.contains("at least 10 cells"), "with label A, the 20 high scores count too\n" + withA.plan);
+    }
+
+    @Test
+    public void aPatternOnItsOwnIsNotCounted() {
+        final Read alone = read(repository(true, true, false, 10), "SELECT ?s WHERE { ?s <urn:big> ?o FILTER(?o > 190) }");
+        assertTrue(alone.narrowed);
+        assertFalse(alone.counted, alone.plan);
     }
 
     @Test
@@ -198,16 +257,31 @@ public class ValueRangeIT extends RyaSailITBase {
 
     // ------------------------------------------------------------------ helpers
 
-    private record Read(boolean narrowed, long cells, String plan) {
+    private record Read(boolean narrowed, boolean counted, long cells, String plan) {
+    }
+
+    /** The first pattern of the plan, which drives its joins. */
+    private static String driver(final String plan) {
+        for (final String line : plan.split("\n")) {
+            for (final String node : List.of("ValueRangePattern", "SubjectMergeJoin", "StatementPattern")) {
+                if (line.trim().startsWith(node)) {
+                    return node;
+                }
+            }
+        }
+        return "none";
     }
 
     private static Read read(final SailRepository repo, final String query) {
+        final boolean[] counted = new boolean[1];
         final boolean[] narrowed = new boolean[1];
         final long[] cells = new long[1];
         final StringBuilder plan = new StringBuilder();
         try (StoreTrace.Scope scope = StoreTrace.start(event -> {
             if (event instanceof TraceEvent.ScanStart scan && scan.reason().contains("value ranges: only")) {
                 narrowed[0] = true;
+            } else if (event instanceof TraceEvent.ScanStart scan && scan.reason().contains("value ranges: count")) {
+                counted[0] = true;
             } else if (event instanceof TraceEvent.ScanEnd end) {
                 cells[0] += Math.max(0, end.entries());
             } else if (event instanceof TraceEvent.Plan p && p.stage().equals("optimized")) {
@@ -216,12 +290,21 @@ public class ValueRangeIT extends RyaSailITBase {
         })) {
             rows(repo, query);
         }
-        return new Read(narrowed[0], cells[0], plan.toString());
+        return new Read(narrowed[0], counted[0], cells[0], plan.toString());
     }
 
     private SailRepository repository(final boolean labelled, final boolean valueRanges, final boolean inference) {
+        return repository(labelled, valueRanges, inference, null);
+    }
+
+    /** @param cap the most cells counted to estimate a range; null for the default */
+    private SailRepository repository(final boolean labelled, final boolean valueRanges, final boolean inference,
+            final Integer cap) {
         final StoreRdfConfiguration conf = newConf();
         conf.setValueRanges(valueRanges);
+        if (cap != null) {
+            conf.setValueRangeCount(cap);
+        }
         if (labelled) {
             conf.setAuths("A");
         }

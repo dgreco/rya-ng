@@ -70,6 +70,13 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
      */
     public static final String CONF_QUERY_VALUE_RANGES = "query.valueranges";
     /**
+     * How many cells of a pattern's value ranges are counted, at most, to estimate it for join
+     * ordering (SCALE-STUDY.md O25; default 10,000). Ranges with fewer cells are estimated at
+     * their count; ranges that reach it like their whole predicate. 0 counts nothing and
+     * estimates a tenth of the predicate.
+     */
+    public static final String CONF_QUERY_VALUE_RANGE_COUNT = "query.valueranges.count";
+    /**
      * Merge joins of a star's constant patterns (SCALE-STUDY.md O22): a pattern {@code ?x p o}
      * whose list of subjects is at most this many times the shortest such list of the star is
      * read in subject order and intersected with it, instead of being looked up once per row.
@@ -784,5 +791,14 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setValueRanges(final boolean enabled) {
         setBoolean(CONF_QUERY_VALUE_RANGES, enabled);
+    }
+
+    /** @return the most cells counted to estimate a pattern's value ranges; 0 counts none. */
+    public int getValueRangeCount() {
+        return getInt(CONF_QUERY_VALUE_RANGE_COUNT, 10_000);
+    }
+
+    public void setValueRangeCount(final int cap) {
+        setInt(CONF_QUERY_VALUE_RANGE_COUNT, cap);
     }
 }

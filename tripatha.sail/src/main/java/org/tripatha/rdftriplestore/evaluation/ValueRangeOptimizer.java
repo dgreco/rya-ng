@@ -22,7 +22,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.Function;
 
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Literal;
@@ -44,7 +43,9 @@ import org.eclipse.rdf4j.query.algebra.Union;
 import org.eclipse.rdf4j.query.algebra.ValueConstant;
 import org.eclipse.rdf4j.query.algebra.ValueExpr;
 import org.eclipse.rdf4j.query.algebra.Var;
+import org.eclipse.rdf4j.query.algebra.QueryModelNode;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryOptimizer;
+import org.eclipse.rdf4j.query.algebra.evaluation.impl.EvaluationStatistics;
 import org.eclipse.rdf4j.query.algebra.helpers.AbstractSimpleQueryModelVisitor;
 import org.eclipse.rdf4j.query.algebra.helpers.TupleExprs;
 import org.tripatha.api.RdfCloudTripleStoreConfiguration;
@@ -72,28 +73,51 @@ import org.tripatha.api.domain.RyaValueRange;
  * rewritten with {@code query.valueranges} off, a result limit, the hashed row layout, or row
  * regular expressions.
  *
+ * <p><b>The estimate</b> (SCALE-STUDY.md O25): when the pattern is in a join, so that the join
+ * order depends on it, its ranges are counted up to {@code query.valueranges.count} cells
+ * (10,000), under the query's labels and in every graph. A shorter range is estimated at its
+ * count; one that reaches the cap as if it weren't narrowed. A pattern on its own, or with the
+ * count off, or without the store's statistics, isn't counted.
+ *
  * <p>The filter stays and decides every row, so answers don't change. Runs after inference and
  * the index search, before join ordering, which then sees the narrowed estimate.
  */
 public final class ValueRangeOptimizer implements QueryOptimizer {
+    /** What the optimizer reads from the store, under the query's labels. */
+    public interface Store {
+        /**
+         * @return the datatypes of the predicate's objects, as the markers record them; empty
+         *         when the store has no complete markers
+         */
+        Optional<Set<String>> datatypes(IRI predicate);
+
+        /** @return the cells of the predicate's statements in the ranges, counted up to {@code cap} */
+        long count(IRI predicate, List<RyaValueRange> ranges, long cap);
+    }
+
     private final RdfCloudTripleStoreConfiguration conf;
-    private final Function<IRI, Optional<Set<String>>> datatypes;
+    private final Store store;
+    private final EvaluationStatistics statistics;
     /** The datatypes of each predicate, read once per query. */
     private final Map<IRI, Optional<Set<String>>> read = new HashMap<>();
+    /** The count of each predicate's ranges, made once per query. */
+    private final Map<List<Object>, Long> counted = new HashMap<>();
 
     /**
      * @param conf the query's configuration
-     * @param datatypes the datatypes of a predicate's objects, as the markers record them under
-     *        the query's labels; empty when the store has no complete markers
+     * @param store the markers and the counts
+     * @param statistics the query's statistics; a range is counted only for the store's own
      */
-    public ValueRangeOptimizer(final RdfCloudTripleStoreConfiguration conf, final Function<IRI, Optional<Set<String>>> datatypes) {
+    public ValueRangeOptimizer(final RdfCloudTripleStoreConfiguration conf, final Store store,
+            final EvaluationStatistics statistics) {
         this.conf = conf;
-        this.datatypes = datatypes;
+        this.store = store;
+        this.statistics = statistics;
     }
 
     @Override
     public void optimize(final TupleExpr tupleExpr, final Dataset dataset, final BindingSet bindings) {
-        if (conf == null || datatypes == null || !conf.isValueRanges() || conf.getLimit() != null
+        if (conf == null || store == null || !conf.isValueRanges() || conf.getLimit() != null
                 || Boolean.TRUE.equals(conf.isPrefixRowsWithHash()) || conf.getRegexSubject() != null
                 || conf.getRegexPredicate() != null || conf.getRegexObject() != null) {
             return;
@@ -129,16 +153,35 @@ public final class ValueRangeOptimizer implements QueryOptimizer {
                     continue;
                 }
                 final IRI predicate = (IRI) sp.getPredicateVar().getValue();
-                final Optional<Set<String>> types = read.computeIfAbsent(predicate, datatypes);
+                final Optional<Set<String>> types = read.computeIfAbsent(predicate, store::datatypes);
                 if (types.isEmpty()) {
                     continue;
                 }
                 final List<RyaValueRange> ranges = e.getValue().ranges(types.get());
                 if (ranges != null) {
-                    sp.replaceWith(new ValueRangePattern(sp, ranges, String.join(", ", conditions.get(e.getKey()))));
+                    final long cap = conf.getValueRangeCount();
+                    final Long count = cap > 0 && !ranges.isEmpty() && inJoin(sp)
+                            && statistics instanceof RdfCloudTripleStoreEvaluationStatistics<?>
+                                    ? counted.computeIfAbsent(List.of(predicate, ranges), k -> store.count(predicate, ranges, cap))
+                                    : null;
+                    sp.replaceWith(new ValueRangePattern(sp, ranges, String.join(", ", conditions.get(e.getKey())), count, cap));
                 }
             }
         }
+    }
+
+    /**
+     * Whether the pattern is joined with something whose order relative to it is chosen, so that
+     * its estimate matters: a join above it, through filters and the left side of OPTIONALs.
+     */
+    private static boolean inJoin(final StatementPattern sp) {
+        QueryModelNode child = sp;
+        QueryModelNode parent = sp.getParentNode();
+        while (parent instanceof Filter || (parent instanceof LeftJoin left && left.getLeftArg() == child)) {
+            child = parent;
+            parent = parent.getParentNode();
+        }
+        return parent instanceof Join;
     }
 
     /** Adds the comparisons of a variable with a constant among the condition's conjuncts. */

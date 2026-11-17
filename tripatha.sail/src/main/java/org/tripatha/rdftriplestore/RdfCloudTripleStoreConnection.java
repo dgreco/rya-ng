@@ -68,6 +68,7 @@ import org.tripatha.rdftriplestore.evaluation.RdfCloudTripleStoreEvaluationStati
 import org.tripatha.rdftriplestore.evaluation.RyaDefaultStatistics;
 import org.tripatha.rdftriplestore.evaluation.RyaEvaluationStrategy;
 import org.tripatha.rdftriplestore.evaluation.RyaQueryOptimizerPipeline;
+import org.tripatha.rdftriplestore.evaluation.ValueRangeOptimizer;
 import org.tripatha.rdftriplestore.inference.InferenceEngine;
 import org.tripatha.rdftriplestore.inference.InferenceOptimizer;
 import org.tripatha.rdftriplestore.namespace.NamespaceManager;
@@ -260,18 +261,31 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 : new RyaDefaultStatistics();
         final RyaEvaluationStrategy strategy = new RyaEvaluationStrategy(tripleSource, dataset, inferenceEngine, statistics);
         final IndexCatalog indexes = ryaDAO instanceof RyaStoreDAO accumulo ? accumulo.getIndexCatalog() : IndexCatalog.NONE;
-        // The datatypes of a predicate's objects, from the markers, read with this query's labels.
-        final Function<IRI, Optional<Set<String>>> datatypes = ryaDAO instanceof RyaStoreDAO dao
-                && queryConf instanceof StoreRdfConfiguration storeConf
-                        ? p -> dao.objectDatatypes(RdfToRyaConversions.convertIRI(p), storeConf)
-                        : null;
+        // The datatypes of a predicate's objects (the markers) and the counts of value ranges,
+        // read with this query's labels.
+        final ValueRangeOptimizer.Store valueRangeStore = ryaDAO instanceof RyaStoreDAO dao
+                && queryConf instanceof StoreRdfConfiguration storeConf ? new ValueRangeOptimizer.Store() {
+                    @Override
+                    public Optional<Set<String>> datatypes(final IRI predicate) {
+                        return dao.objectDatatypes(RdfToRyaConversions.convertIRI(predicate), storeConf);
+                    }
+
+                    @Override
+                    public long count(final IRI predicate, final List<RyaValueRange> ranges, final long cap) {
+                        try (StoreTrace.Reason why = StoreTrace.reason(() -> "value ranges: count the cells, up to " + cap
+                                + ", to order the joins")) {
+                            return dao.getQueryEngine().countValueRanges(RdfToRyaConversions.convertIRI(predicate), ranges, cap,
+                                    storeConf);
+                        }
+                    }
+                } : null;
         // Graph sizes come from the counters, read with this query's authorizations.
         final GraphSizeOptimizer graphSizes = new GraphSizeOptimizer(
                 rdfEvalStatsDAO instanceof RyaStoreEvalStatsDAO stats && queryConf instanceof StoreRdfConfiguration accumuloConf
                         ? () -> stats.graphSizes(accumuloConf)
                         : null);
         strategy.setOptimizerPipeline(new RyaQueryOptimizerPipeline(strategy, tripleSource, statistics,
-                new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf, graphSizes, datatypes));
+                new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf, graphSizes, valueRangeStore));
         try {
             final TupleExpr parsed = tupleExpr;
             StoreTrace.plan("parsed", parsed::toString);

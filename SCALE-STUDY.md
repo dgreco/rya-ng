@@ -65,18 +65,18 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
    - Every optimization below reports its effect on it, before and after.
 3. **Fewer lookups (O15): done.** Batched joins start with small windows, so `LIMIT` queries stop early: `chain-limit` went from 1,003 ranges to 67.
    - O21 (one range per subject) was built and measured, and is **off by default**. It halved the ranges and read 4 times the cells: no gain on warm Accumulo, and 50 to 64 % slower on RocksDB.
-4. **Filters as key ranges (O13 and O14 done; O25 next).**
+4. **Filters as key ranges (O13, O14 and O25 done).**
    - O13: `STRSTARTS` reads only the matching prefix, so `prefix` reads 522 cells instead of 133,579.
    - O14: comparisons on numbers and date-times read one range per datatype, with the datatype markers of D12 and a storage-version check. `range-date` reads 8 cells instead of 240,443: 196 → 5.4 ms on Accumulo (section 4.8).
-   - O25: a real estimate for a value range. The fixed one makes a condition most values pass the wrong driver of a star, 8 times slower on Accumulo.
+   - O25: the ranges of a pattern in a join are counted, up to 10,000 cells, for its estimate. A condition most values pass no longer drives its star (it was 8 times slower on Accumulo with the fixed estimate).
    - **Done meanwhile:**
      - the benchmark's two blind spots (M8): it now reports CPU apart from waiting, and compares settings within one run. It shows Accumulo joins are bound by the servers, not the client;
      - the type check without a regex (O20) and RocksDB key decoding (O19): on RocksDB, range scans are 23 to 31 % faster and joins 13 to 19 %.
    - **Then,** if the split profile supports them: more lookups in flight (O16), less client work per cell (O17), and parallel reads of one large range (O7).
 5. **"All entities matching X" (D1): class stars in the benchmark (M10), merge joins (O22) and value ranges (O14) done.**
    - O22 reads a star's constant patterns as subject-sorted `po` ranges and intersects them. On the Accumulo test cluster that is 3 to 10 times faster than one lookup per driver row: `class-large` 1,446 → 137 ms, `class-2` 267 → 47 ms. On RocksDB, where a lookup is cheap, it gains only for lists of similar lengths, so the ratio that decides is per backend (section 4.7).
-   - O14 makes a selective value condition the driver of its star: `class-value` 3,964 → 151 ms on Accumulo, `class-value-int` 1,796 → 408 ms (section 4.8). A condition most values pass needs O25.
-   - Stars in the servers (O23): D13 decided (a), after O25 and O24. On these queries the client's merge reads 50k to 400k cells in 50 to 140 ms on Accumulo, so the transfer of the lists is not the limit at 10M; it is with lists of billions.
+   - O14 makes a selective value condition the driver of its star: `class-value` 3,964 → 151 ms on Accumulo, `class-value-int` 1,796 → 408 ms (section 4.8). With O25 a condition most values pass leaves the star to its constant patterns.
+   - Stars in the servers (O23): D13 decided (a), after O24. On these queries the client's merge reads 50k to 400k cells in 50 to 140 ms on Accumulo, so the transfer of the lists is not the limit at 10M; it is with lists of billions.
 6. **IRI prefix codes: measured (M9), and deferred.**
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
@@ -153,7 +153,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O22 | **Merge joins of subject-sorted ranges:** for a star with constant objects (`?x a :Person ; :worksFor :Acme ; :nationality :IT`), each pattern is a `po` range sorted by subject. Stream them side by side and intersect, instead of one lookup per row. The subject space is sliced so several slices are intersected at once (section 6.10) | R2 | expected from 4.6: a sequentially read cell costs about 1/35 of a lookup on the Accumulo test cluster. To be measured on M10's class stars | M10 | 1 | Done: `SubjectMergeJoin`, on by default with a ratio per backend (35 Accumulo, 20 HBase, 8 RocksDB); measured in section 4.7. Slices in parallel and subject-only reads are O24 |
 | O23 | **Stars evaluated in the servers:** an optional subject-partitioned table, maintained like an index. A shard holds, per predicate and object, the sorted subjects of its share of the store. A server-side iterator (Accumulo) or coprocessor (HBase) intersects a star's lists inside every shard in parallel, and returns only the matching subjects (section 6.10) | R2 | the distributed join for "all entities matching X" (D1). To be measured against O22 | O22, D13 | 2 | Not started |
 | O24 | **Merge joins, part 2:** intersect a star's lists in slices of the subject space on several threads at once (cut at `spo`'s tablet splits or at sampled subjects), and read only each cell's subject instead of decoding the whole statement (section 6.10) | R2 | O22 reads one list per pattern on one thread, and decodes every cell | O22 | 1 | Not started |
-| O25 | **A real estimate for a value range:** count the range's cells up to a cap (about 10,000) when its pattern is in a join, and use the count when the range is shorter, or assume most of the predicate when it isn't. Only the join order depends on it, so a pattern on its own needs none | R2 | O14's estimate is a fixed tenth of the predicate: `class-value-wide` (`?v > 0`, 91 % pass) is 8.2 times slower on Accumulo with it, 4.1 on RocksDB and 3.6 on HBase (section 4.8) | O14 | 1 | Not started |
+| O25 | **A real estimate for a value range:** count the range's cells up to a cap (about 10,000) when its pattern is in a join, and use the count when the range is shorter, or assume most of the predicate when it isn't. Only the join order depends on it, so a pattern on its own needs none | R2 | O14's estimate is a fixed tenth of the predicate: `class-value-wide` (`?v > 0`, 91 % pass) is 8.2 times slower on Accumulo with it, 4.1 on RocksDB and 3.6 on HBase (section 4.8) | O14 | 1 | Done: counted up to `query.valueranges.count` (10,000) for a pattern in a join. `class-value-wide` is back within 1 to 6 % of the merge plan, and the selective stars keep their gains; a condition between the cap and the star's lists (`class-value-mid`) gets the merge plan, 1.2 to 2.75 times slower than the range would be (section 4.8) |
 
 ### 2.2 Measurements
 
@@ -434,6 +434,22 @@ Measured on 2026-11-17 as variants of one run per backend: `query.valueranges` o
 - **Nothing else changes.** The 15 queries without a comparison read exactly the same scans, ranges and cells with the setting on and off (the RocksDB run covers the whole suite).
 - **The type check costs nothing visible:** each range is one scan with a row suffix, and the generator's predicates have one type each.
 - Accumulo's "off" for `class-value` (3,964 ms) is slower than the 2,141 ms measured for the same plan in 4.7. Runs on different days differ that much; compare within a run.
+
+**After O25** (a counted estimate), as three variants of one run per backend: value ranges off, O14's fixed estimate (`query.valueranges.count=0`), and the count up to 10,000 cells (the default). Reports `rocksdb-20261117-085412` (the whole suite), `accumulo-20261117-092313` and `hbase-20261117-093904`. A new query, `class-value-mid` (`hasResult > 40`, about 22,000 values pass), sits between the cap and the property list.
+
+| Query | RocksDB off / fixed / counted | Accumulo off / fixed / counted | HBase off / fixed / counted |
+|---|---|---|---|
+| `class-value` (`> 60`) | 604 / 12.0 / **8.8 ms** | 3,971 / 149 / **152 ms** | 1,106 / 25.3 / **25.6 ms** |
+| `class-value-int` (`>= 100`) | 116 / 28.9 / **21.9 ms** | 1,773 / 405 / **404 ms** | 261 / 57 / **61 ms** |
+| `class-value-mid` (`> 40`) | 605 / 255 / 609 ms | 3,965 / 3,315 / 3,986 ms | 1,167 / 408 / 1,123 ms |
+| `class-value-wide` (`> 0`) | 611 / 2,513 / **619 ms** | 3,943 / 32,326 / **3,990 ms** | 1,667 / 4,992 / **1,762 ms** |
+| `range-date` (alone, not counted) | 287 / 1.2 / 0.7 ms | 203 / 5.3 / 4.5 ms | 274 / 4.1 / 2.8 ms |
+
+- **The losing side is gone.** `class-value-wide`'s range reaches the cap, is estimated like its whole predicate, and the star merges its constant patterns as before O14: within 1 to 6 % of the plan with ranges off. The difference is the count's 10,000 cells.
+- **The selective stars keep their gains.** Their ranges count 924 and about 2,670 cells, under the cap, so they still drive: `class-value` is 26 times faster than with ranges off on Accumulo and 43 times on HBase.
+- **What the cap gives up:** `class-value-mid` counts past 10,000 and gets the merge plan, though its range would drive it 2.4 times faster on RocksDB, 2.75 times on HBase, and only 1.2 times on Accumulo, where its 43,907 lookups cost most. A higher cap would win it back on RocksDB and HBase, for a longer count on every wide condition in a join (about 1 µs a cell): a per-backend cap, like O22's ratio, is the next step if such conditions matter.
+- **A pattern on its own isn't counted:** the range queries read the same cells with and without the count.
+- **Nothing else changes:** on RocksDB the other 15 queries read exactly the same in all three variants.
 
 ---
 
@@ -836,7 +852,7 @@ A spike measures it before any product change: offline, on a 1B-triple sample, w
 **Where it fits:**
 - `ValueRangeOptimizer`, after `IndexSearchOptimizer` and before join ordering, replaces the pattern with a `ValueRangePattern` holding its ranges.
 - `RyaStoreQueryEngine` reads a `RyaValueRange` as one scan of `po`, with the type check as a row suffix, and the ranges one after the other.
-- **Estimate:** the predicate's counter times 0.1, a guess without histograms. With it, a value condition drives a star when its predicate has fewer than ten times as many statements as the star's shortest constant pattern (section 4.8 measures both sides).
+- **Estimate:** first the predicate's counter times 0.1, a guess without histograms, which made a condition most values pass drive its star (section 4.8). Now (O25) the ranges of a pattern in a join are counted up to `query.valueranges.count` (10,000) cells: a shorter range is estimated at its count, one that reaches the cap like its whole predicate. A cap of 0 restores the guess.
 
 **Tests:**
 - `ValueRangesTest` checks the bounds against RDF4J's own comparisons, strict and standard. It covers every narrowed type, integer, decimal, float and double constants, and the edges: NaN, ±INF, -0.0, the integer limits, rounding at 2^26 and 2^60, zone-less and sub-millisecond date-times, ill-typed constants.
@@ -972,7 +988,7 @@ The target workload (D1) is entities of large classes selected by several proper
   - about another copy of `po`, on disk and in writes (roughly 20 B per triple);
   - Tripatha code on the servers: an iterator jar on Accumulo's tablet servers, a second coprocessor on HBase. RocksDB has no servers, but its shards could be intersected on several local threads;
   - value filters need O14's ranges inside a posting list.
-- **When:** decided (D13, 2026-11-17): at 10^12 the transfer of the lists is the limit, though at 10M it isn't. Built after O25 and O24, off by default, Accumulo first.
+- **When:** decided (D13, 2026-11-17): at 10^12 the transfer of the lists is the limit, though at 10M it isn't. Built after O25 (done) and O24, off by default, Accumulo first.
 
 ---
 
@@ -998,10 +1014,10 @@ In this order, each measured on M8 before and after (on RocksDB and on the Accum
 4. **M8's follow-ups**: CPU apart from blocked threads, and settings compared back to back in one run;
 5. **O20**, the type check without a regex, and **O19**, RocksDB key decoding: done;
 6. **M10**, class-star queries in the benchmark, then **O22**, merge joins of subject-sorted ranges: done. Next, O24: slices intersected in parallel, and reading only the subjects of each cell instead of decoding whole statements;
-7. **O14**, comparisons as value ranges, with the datatype markers and the storage-version check (D12): done. Next, O25: a counted estimate, so a condition most values pass doesn't drive a star;
+7. **O14**, comparisons as value ranges, with the datatype markers and the storage-version check (D12), and **O25**, their counted estimate: done;
 8. **O16** and **O17**, only if the split profile shows where the Accumulo joins' time goes;
 9. **O7**, parallel reads of one large range;
-10. **O23**, stars evaluated in the servers (D13: decided), after O25 and O24, with benchmark queries it should win (counts, selective intersections of long lists).
+10. **O23**, stars evaluated in the servers (D13: decided), after O24, with benchmark queries it should win (counts, selective intersections of long lists).
 
 **Exit:**
 - every change has an M8 report;

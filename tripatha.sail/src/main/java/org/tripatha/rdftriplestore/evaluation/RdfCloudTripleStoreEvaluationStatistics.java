@@ -112,7 +112,7 @@ public class RdfCloudTripleStoreEvaluationStatistics<C extends RdfCloudTripleSto
         protected double getCardinality(final StatementPattern sp) {
             final double plain = plainCardinality(sp);
             if (sp instanceof ValueRangePattern ranged) {
-                return ranged.getRanges().isEmpty() ? 1 : Math.max(1, plain * ValueRangePattern.SELECTIVITY);
+                return ranged.estimate(plain);
             }
             return sp instanceof IndexedStatementPattern ? Math.max(1, plain * IndexedStatementPattern.SELECTIVITY) : plain;
         }
