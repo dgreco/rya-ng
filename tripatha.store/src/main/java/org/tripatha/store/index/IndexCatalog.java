@@ -51,4 +51,9 @@ public interface IndexCatalog {
 
     /** The index table. */
     String table(IndexType type);
+
+    /** The entity index's layout (its shards), when it is enabled; null otherwise. */
+    default EntityIndex entityIndex() {
+        return null;
+    }
 }

@@ -94,7 +94,7 @@ public final class TracedScans {
             columns.add("family " + TraceText.bytes(f));
         }
         return trace.scanStarted(op, table, shown, ranges.size(), columns, List.copyOf(filters), spec.auths().toString(),
-                trace.reason());
+                StoreTrace.reasonFor(trace));
     }
 
     /** Counts what a read returns and the time spent in it, and reports its end once. */

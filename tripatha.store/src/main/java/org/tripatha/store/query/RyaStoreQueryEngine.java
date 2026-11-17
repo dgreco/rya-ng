@@ -193,6 +193,43 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
         }
     }
 
+    /**
+     * The subjects filed under one term (a predicate and an object) in one shard of the entity
+     * index (SCALE-STUDY.md O23), in subject order, once per posting: so a subject with several
+     * statements (graphs, labels) comes once per statement, as in a po range.
+     *
+     * @param shardRow the shard's row ({@code EntityIndex.shardRows})
+     * @param term the term ({@code EntityIndex.term})
+     */
+    public CloseableIteration<byte[]> entitySubjects(final byte[] shardRow, final byte[] term, StoreRdfConfiguration conf) {
+        if (conf == null) {
+            conf = configuration;
+        }
+        final ScanSpec.Builder spec = ScanSpec.builder(conf.getStoreAuths()).batchSize(conf.getBatchSize()).family(term);
+        final Long ttl = conf.getTtl();
+        if (ttl != null) {
+            final Long now = conf.getStartTime();
+            spec.timestamps((now != null ? now : System.currentTimeMillis()) - ttl, now);
+        }
+        final CellScanner cells = store.scan(conf.getTableLayoutStrategy().getEntity(), KeyRange.row(shardRow), spec.build());
+        return new CloseableIteration<>() {
+            @Override
+            public boolean hasNext() {
+                return cells.hasNext();
+            }
+
+            @Override
+            public byte[] next() {
+                return org.tripatha.store.index.EntityIndex.subject(cells.next().qualifier());
+            }
+
+            @Override
+            public void close() {
+                cells.close();
+            }
+        };
+    }
+
     /** The subject bytes of po rows {@code p 00 object 00 subject typeInfo}. */
     private static final class SubjectIterator implements CloseableIteration<byte[]> {
         private final CellScanner cells;

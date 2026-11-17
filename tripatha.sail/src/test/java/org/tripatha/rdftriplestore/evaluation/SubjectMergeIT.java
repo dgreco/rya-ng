@@ -44,6 +44,8 @@ import org.tripatha.api.domain.RyaStatement;
 import org.tripatha.rdftriplestore.RdfCloudTripleStore;
 import org.tripatha.store.RyaStoreDAO;
 import org.tripatha.store.StoreRdfConfiguration;
+import org.tripatha.store.index.IndexType;
+import org.tripatha.store.index.IndexVerifier;
 import org.tripatha.store.trace.StoreTrace;
 import org.tripatha.store.trace.TraceEvent;
 
@@ -196,7 +198,8 @@ public class SubjectMergeIT extends RyaSailITBase {
         // The lists of the first query are within 1.5 times of each other: merged at any backend's ratio.
         final StoreRdfConfiguration conf = newConf();
         conf.unset(RdfCloudTripleStoreConfiguration.CONF_JOIN_MERGE_RATIO);
-        conf.setJoinMergeSlices(1); // the whole lists, as the count below expects
+        conf.setJoinMergeSlices(1); // the whole lists of po, as the count below expects
+        conf.setUseIndex(false);
         conf.setAuths("A");
         final SailRepository unset = new SailRepository(newStore(conf, false));
         unset.init();
@@ -288,6 +291,37 @@ public class SubjectMergeIT extends RyaSailITBase {
     }
 
     @Test
+    public void starsReadFromTheEntityIndexGiveTheAnswersOfNestedLoops() throws Exception {
+        // Built over the loaded data (BUILDING, then rebuilt: READY), in 4 shards.
+        final StoreRdfConfiguration indexed = newConf();
+        indexed.setEntityIndex(true);
+        indexed.setEntityIndexShards(4);
+        indexed.setRebuildIndexes(true);
+        newDao(indexed).destroy();
+        assertTrue(IndexVerifier.verify(getStore(), indexed, IndexType.ENTITY).isClean());
+        for (final boolean labelled : List.of(true, false)) {
+            // The index table exists now: every store opens with the index on, this one without using it.
+            final SailRepository plain = indexed(labelled, 0, 1, false);
+            for (final int threads : List.of(1, 3)) {
+                final SailRepository fromIndex = indexed(labelled, 1_000_000, threads, true);
+                for (final String query : QUERIES) {
+                    assertEquals(rows(plain, query), rows(fromIndex, query), query + (labelled ? " (label A)" : "")
+                            + ", " + threads + " threads");
+                }
+                final String[] reason = new String[1];
+                try (StoreTrace.Scope scope = StoreTrace.start(event -> {
+                    if (event instanceof TraceEvent.ScanStart scan && scan.reason().contains("merge join")) {
+                        reason[0] = scan.reason();
+                    }
+                })) {
+                    rows(fromIndex, QUERIES.get(0));
+                }
+                assertTrue(reason[0] != null && reason[0].contains("entity index"), String.valueOf(reason[0]));
+            }
+        }
+    }
+
+    @Test
     public void slicedMergesGiveTheRowsOfOneSliceInTheSameOrder() throws Exception {
         for (final boolean labelled : List.of(true, false)) {
             final SailRepository plain = repository(labelled, 0, false, 1);
@@ -351,10 +385,28 @@ public class SubjectMergeIT extends RyaSailITBase {
         final StoreRdfConfiguration conf = newConf();
         conf.setJoinMergeRatio(mergeRatio);
         conf.setJoinMergeSlices(slices == null ? 1 : slices);
+        // The lists of po, whose scans these tests count, even when -Dtripatha.test.indexes keeps the entity index.
+        conf.setUseIndex(false);
         if (labelled) {
             conf.setAuths("A");
         }
         final SailRepository repo = new SailRepository(newStore(conf, inference));
+        repo.init();
+        repositories.add(repo);
+        return repo;
+    }
+
+    /** A store with the entity index on, used by queries or not. */
+    private SailRepository indexed(final boolean labelled, final double mergeRatio, final int threads, final boolean useIndex) {
+        final StoreRdfConfiguration conf = newConf();
+        conf.setEntityIndex(true);
+        conf.setJoinMergeRatio(mergeRatio);
+        conf.setJoinMergeSlices(threads);
+        conf.setUseIndex(useIndex);
+        if (labelled) {
+            conf.setAuths("A");
+        }
+        final SailRepository repo = new SailRepository(newStore(conf, false));
         repo.init();
         repositories.add(repo);
         return repo;

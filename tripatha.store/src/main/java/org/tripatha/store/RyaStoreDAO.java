@@ -55,7 +55,10 @@ import org.tripatha.api.persist.RyaDAO;
 import org.tripatha.api.persist.RyaDAOException;
 import org.tripatha.api.persist.RyaNamespaceManager;
 import org.tripatha.api.resolver.RyaTripleContext;
+import org.tripatha.api.RdfCloudTripleStoreConstants;
+import org.tripatha.store.index.EntityIndex;
 import org.tripatha.store.index.IndexCatalog;
+import org.tripatha.store.index.IndexType;
 import org.tripatha.store.index.IndexManager;
 import org.tripatha.store.query.RyaStoreQueryEngine;
 import org.tripatha.store.spi.Auths;
@@ -190,9 +193,11 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                     + ", newer than " + VERSION.stringValue() + ", the newest this code writes: it may rely on writes"
                     + " this code doesn't make, so it is read-only here. Use a newer Tripatha to write to it." : null;
             if (version == null && storeCreated) {
-                // Every statement of a store created now gets its datatype markers.
+                // Every statement of a store created now gets its datatype markers, and its
+                // entity postings when that index is on: older code writes neither.
                 bwNs.write(new RowMutation(VERSION_ROW).put(DATATYPES_CF, EMPTY, EMPTY, utf8("1")));
-                bwNs.write(new RowMutation(VERSION_ROW).put(VERSION_CF, EMPTY, EMPTY, utf8(VERSION.stringValue())));
+                bwNs.write(new RowMutation(VERSION_ROW).put(VERSION_CF, EMPTY, EMPTY, utf8(conf.isEntityIndex()
+                        ? RdfCloudTripleStoreConstants.VERSION_WITH_ENTITY_INDEX : RdfCloudTripleStoreConstants.VERSION_WITH_MARKERS)));
                 writer.flush();
             }
             datatypeMarkers = readDatatypesFlag();
@@ -201,6 +206,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                         + " comparison filters read their predicates' whole ranges", tables.getSpo());
             }
             indexes = new IndexManager(store, conf, writer, storeCreated);
+            raiseVersionForEntityIndex();
             isInitialized.set(true);
         } catch (final Exception e) {
             if (writer != null) {
@@ -213,6 +219,22 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                 writer = null;
             }
             throw e instanceof RyaDAOException r ? r : new RyaDAOException(e);
+        }
+    }
+
+    /**
+     * With the entity index on, raises the store's version to 1.2.0: code from before the index
+     * would add statements without their postings, and the index's matches are answers.
+     */
+    private void raiseVersionForEntityIndex() throws Exception {
+        if (!indexes.isActive(IndexType.ENTITY) || writesRefused != null) {
+            return;
+        }
+        final String version = getVersion();
+        if (version == null || isNewer(RdfCloudTripleStoreConstants.VERSION_WITH_ENTITY_INDEX, version)) {
+            bwNs.write(new RowMutation(VERSION_ROW).put(VERSION_CF, EMPTY, EMPTY,
+                    utf8(RdfCloudTripleStoreConstants.VERSION_WITH_ENTITY_INDEX)));
+            writer.flush();
         }
     }
 
@@ -351,6 +373,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
             while (statements.hasNext()) {
                 final RyaStatement stmt = statements.next();
                 checkStorable(stmt);
+                indexes.check(stmt);
                 final Map<TABLE_LAYOUT, RowMutation> rows = mutationsFactory.serialize(stmt);
                 // Buffered before the rows it stands for. Not a guarantee that it lands first: a
                 // failed flush can leave rows without it, until they are added again.
@@ -494,9 +517,19 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                     + (graphs.length == 1 ? " " : "s ") + Arrays.stream(graphs)
                             .map(g -> g == null ? "(default)" : "<" + g.getData() + ">").collect(Collectors.joining(", ")));
             try (why) {
-                // Index entries use the graph as column family too, so the same deletes clear them.
+                // The text and geo indexes use the graph as column family too, so the same deletes
+                // clear them. The entity index files postings under their term: they are found by
+                // the graph in their qualifier instead.
                 final List<String> statementTables = new ArrayList<>(List.of(tables.getSpo(), tables.getPo(), tables.getOsp()));
                 statementTables.addAll(indexes.activeTables());
+                if (!all && indexes.isActive(IndexType.ENTITY)) {
+                    statementTables.remove(tables.getEntity());
+                    for (final RyaIRI graph : graphs) {
+                        final ScanSpec postings = ScanSpec.builder(auths).threads(NUM_THREADS)
+                                .qualifierRegex(EntityIndex.graphQualifierRegex(graph)).build();
+                        store.deleteVisible(tables.getEntity(), List.of(KeyRange.all()), postings, writerOptions);
+                    }
+                }
                 final ScanSpec.Builder statements = ScanSpec.builder(auths).threads(NUM_THREADS);
                 if (!all) {
                     for (final RyaIRI graph : graphs) {
@@ -760,7 +793,8 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
     /** @return the names of every table this DAO uses (index tables included, enabled or not). */
     public List<String> getTables() {
         final TableLayoutStrategy t = tables != null ? tables : conf.getTableLayoutStrategy();
-        return List.of(t.getSpo(), t.getPo(), t.getOsp(), t.getNs(), t.getEval(), t.getGraphs(), t.getText(), t.getGeo());
+        return List.of(t.getSpo(), t.getPo(), t.getOsp(), t.getNs(), t.getEval(), t.getGraphs(), t.getText(), t.getGeo(),
+                t.getEntity());
     }
 
     /** The secondary indexes, for queries. */

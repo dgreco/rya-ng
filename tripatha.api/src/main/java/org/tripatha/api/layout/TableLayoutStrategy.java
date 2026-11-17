@@ -39,5 +39,7 @@ public interface TableLayoutStrategy {
     public String getText();
     /** The geospatial index table. */
     public String getGeo();
+    /** The entity index table (SCALE-STUDY.md O23). */
+    public String getEntity();
     
 }

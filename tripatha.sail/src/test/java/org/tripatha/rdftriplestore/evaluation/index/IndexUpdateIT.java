@@ -44,6 +44,9 @@ class IndexUpdateIT extends IndexITBase {
     private void assertInStep(final StoreRdfConfiguration conf, final SailRepository repo, final String after)
             throws Exception {
         for (final IndexType type : IndexType.values()) {
+            if (!type.isEnabled(conf)) {
+                continue;
+            }
             final IndexVerifier.Report report = IndexVerifier.verify(getStore(), conf, type);
             assertTrue(report.isClean(), after + ", " + type + ": " + report);
         }

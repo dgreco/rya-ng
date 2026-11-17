@@ -129,7 +129,7 @@ class LoaderIT extends StoreITBase {
     private List<String> dataset(final String... extra) {
         final List<String> a = new ArrayList<>(List.of("--table-prefix", getTablePrefix(), "--entities",
                 Integer.toString(ENTITIES), "--seed", "7", "--labels", "A,B", "--labelled-fraction", "0.3", "--graphs", "4",
-                "--rdf12-fraction", "0.3", "--text-index", "--geo-index"));
+                "--rdf12-fraction", "0.3", "--text-index", "--geo-index", "--entity-index", "--entity-shards", "4"));
         a.addAll(List.of(extra));
         return a;
     }
@@ -190,8 +190,12 @@ class LoaderIT extends StoreITBase {
             assertEquals(7, getStore().tables().splitCount(getTablePrefix() + "spo"));
             assertTrue(getStore().tables().splitCount(getTablePrefix() + "text") > 0);
             assertTrue(getStore().tables().splitCount(getTablePrefix() + "geo") > 0);
+            assertEquals(3, getStore().tables().splitCount(getTablePrefix() + "entity"), "one row per shard, split at each");
         }
         for (final IndexType type : IndexType.values()) {
+            if (!type.isEnabled(conf)) {
+                continue;
+            }
             final IndexVerifier.Report report = IndexVerifier.verify(getStore(), conf, type);
             assertTrue(report.isClean(), type + ": " + report);
         }
@@ -295,6 +299,10 @@ class LoaderIT extends StoreITBase {
         final Run noGeo = run(env(), "load", load(0, 1).stream().filter(a -> !a.equals("--geo-index")).toList());
         assertEquals(2, noGeo.code(), noGeo.all());
         assertTrue(noGeo.err().contains("geo index"), noGeo.err());
+
+        final Run otherShards = run(env(), "load", load(0, 1, "--entity-shards", "5"));
+        assertEquals(2, otherShards.code(), otherShards.all());
+        assertTrue(otherShards.err().contains("other settings"), otherShards.err());
 
         final Run otherPredicates = run(env(), "load", load(0, 1, "--text-predicates", "rdfs:label"));
         assertEquals(2, otherPredicates.code(), otherPredicates.all());

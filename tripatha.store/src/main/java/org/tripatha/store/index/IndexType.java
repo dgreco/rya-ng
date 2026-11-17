@@ -21,7 +21,9 @@ import org.tripatha.api.layout.TableLayoutStrategy;
 /** The secondary indexes. */
 public enum IndexType {
     TEXT("text"),
-    GEO("geo");
+    GEO("geo"),
+    /** The entity index (SCALE-STUDY.md O23): its matches are answers, not candidates checked against spo. */
+    ENTITY("entity");
 
     private final String id;
 
@@ -35,15 +37,27 @@ public enum IndexType {
     }
 
     public String table(final TableLayoutStrategy tables) {
-        return this == TEXT ? tables.getText() : tables.getGeo();
+        return switch (this) {
+            case TEXT -> tables.getText();
+            case GEO -> tables.getGeo();
+            case ENTITY -> tables.getEntity();
+        };
     }
 
     public boolean isEnabled(final RdfCloudTripleStoreConfiguration conf) {
-        return this == TEXT ? conf.isTextIndex() : conf.isGeoIndex();
+        return switch (this) {
+            case TEXT -> conf.isTextIndex();
+            case GEO -> conf.isGeoIndex();
+            case ENTITY -> conf.isEntityIndex();
+        };
     }
 
     /** The setting that turns this index on. */
     public String setting() {
-        return this == TEXT ? RdfCloudTripleStoreConfiguration.CONF_INDEX_TEXT : RdfCloudTripleStoreConfiguration.CONF_INDEX_GEO;
+        return switch (this) {
+            case TEXT -> RdfCloudTripleStoreConfiguration.CONF_INDEX_TEXT;
+            case GEO -> RdfCloudTripleStoreConfiguration.CONF_INDEX_GEO;
+            case ENTITY -> RdfCloudTripleStoreConfiguration.CONF_INDEX_ENTITY;
+        };
     }
 }

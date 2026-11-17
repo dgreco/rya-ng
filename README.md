@@ -209,6 +209,8 @@ Instead of the connection arguments, `--tripatha.accumulo.client-properties` can
 | `tripatha.text-index` | `false` | Keep the full-text index (see [Search](#search)) |
 | `tripatha.text-index-predicates` | `[]` | Predicates whose literals are text-indexed; empty means all |
 | `tripatha.geo-index` | `false` | Keep the geospatial index |
+| `tripatha.entity-index` | `false` | Keep the entity index (`<prefix>entity`): every subject filed under its predicate and object in a fixed number of shards, so stars of constant patterns are intersected shard by shard. Raises the store's version to 1.2.0 |
+| `tripatha.entity-index-shards` | the store's | The entity index's shard count, fixed when it is built: about one per 200M triples of the expected size, 16 at least |
 | `tripatha.rebuild-indexes` | `false` | At startup, build indexes that don't cover the stored data yet |
 | `tripatha.sparql.authorizations` | `[]` | The most a request may read with. The store account must hold all of them; on HBase the endpoint checks it at startup. |
 | `tripatha.sparql.default-visibility` | `""` | Visibility label written on inserted statements |

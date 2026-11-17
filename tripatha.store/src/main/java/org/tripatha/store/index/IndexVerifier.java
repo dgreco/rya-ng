@@ -97,6 +97,10 @@ public final class IndexVerifier {
             return new GeoIndex();
         }
         final IndexState state = IndexManager.readState(store, conf.getTableLayoutStrategy(), type);
+        if (type == IndexType.ENTITY) {
+            final int shards = state == null ? -1 : EntityIndex.shardsOf(state.definition());
+            return new EntityIndex(shards > 0 ? shards : conf.getEntityIndexShards());
+        }
         final String marker = ";preds=";
         if (state == null || !state.definition().contains(marker)) {
             return new TextIndex(conf.getTextIndexPredicates());

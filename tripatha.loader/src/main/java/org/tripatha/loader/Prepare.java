@@ -68,6 +68,16 @@ public final class Prepare {
                 out.println("Planning " + splits + " splits per table (" + servers + " servers)…");
                 final Map<String, SortedSet<Text>> plan = SplitPlanner.plan(generator, conf, splits, o.statsOnes());
                 SplitPlanner.apply(store, plan);
+                final String entity = conf.getTableLayoutStrategy().getEntity();
+                final List<byte[]> rows = conf.isEntityIndex() ? dao.getIndexCatalog().entityIndex().shardRows() : List.of();
+                // A shard is one row: split at every shard but the first, so shards spread over the servers.
+                // Once: HBase refuses a split at a region's own start, as a second prepare would ask.
+                if (rows.size() > 1 && store.tables().splitCount(entity) < rows.size() - 1) {
+                    final java.util.SortedSet<byte[]> shards = new java.util.TreeSet<>(java.util.Arrays::compareUnsigned);
+                    shards.addAll(rows.subList(1, rows.size()));
+                    out.println("Splitting the entity index at its " + rows.size() + " shards…");
+                    store.tables().addSplits(entity, shards);
+                }
             }
 
             if (stored == null) {
@@ -123,6 +133,9 @@ public final class Prepare {
         }
         flags.append("--tripatha.table-prefix=").append(o.tablePrefix());
         flags.append(" --tripatha.text-index=").append(o.textIndex()).append(" --tripatha.geo-index=").append(o.geoIndex());
+        if (o.entityIndex()) {
+            flags.append(" --tripatha.entity-index=true --tripatha.entity-index-shards=").append(o.entityShards());
+        }
         if (!o.textPredicates().isEmpty()) {
             flags.append(" --tripatha.text-index-predicates=").append(String.join(",", o.textPredicates()));
         }

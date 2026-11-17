@@ -66,6 +66,7 @@ public class RdfCloudTripleStoreConstants {
     public static final String TBL_TEXT_SUFFIX = "text";
     /** Geospatial index (only when the geo index is enabled). */
     public static final String TBL_GEO_SUFFIX = "geo";
+    public static final String TBL_ENTITY_SUFFIX = "entity";
 
 
     public static final String INFO_NAMESPACE = "namespace";
@@ -107,11 +108,19 @@ public class RdfCloudTripleStoreConstants {
     public static IRI RTS_VERSION_PREDICATE = VALUE_FACTORY.createIRI(NAMESPACE, "version");
     public static RyaIRI RTS_VERSION_PREDICATE_TRIPATHA = new RyaIRI(RTS_VERSION_PREDICATE.stringValue());
     /**
-     * The storage version this code writes when it creates a store. 1.1.0 stores keep datatype
-     * markers (SCALE-STUDY.md O14); a DAO refuses to write to a store whose version is newer
-     * than this.
+     * The newest storage version this code writes. A DAO refuses to write to a store whose
+     * version is newer than this, since such a store may rely on writes it doesn't make:
+     * <ul>
+     *   <li>1.1.0: every statement has its datatype markers (SCALE-STUDY.md O14);</li>
+     *   <li>1.2.0: the entity index is on, so every statement must have its posting there
+     *       (SCALE-STUDY.md O23).</li>
+     * </ul>
      */
-    public static final Value VERSION = VALUE_FACTORY.createLiteral("1.1.0");
+    public static final Value VERSION = VALUE_FACTORY.createLiteral("1.2.0");
+    /** The version of a store with datatype markers and no entity index. */
+    public static final String VERSION_WITH_MARKERS = "1.1.0";
+    /** The version of a store with the entity index on. */
+    public static final String VERSION_WITH_ENTITY_INDEX = "1.2.0";
     /** The version of a store created before the datatype markers. */
     public static final String VERSION_WITHOUT_MARKERS = "1.0.0";
     public static RyaType VERSION_TRIPATHA = new RyaType(VERSION.stringValue());

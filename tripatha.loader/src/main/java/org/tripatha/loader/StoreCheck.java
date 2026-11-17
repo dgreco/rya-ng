@@ -22,6 +22,7 @@ import org.tripatha.store.index.GeoIndex;
 import org.tripatha.store.spi.Store;
 import org.tripatha.store.index.IndexManager;
 import org.tripatha.store.index.IndexState;
+import org.tripatha.store.index.EntityIndex;
 import org.tripatha.store.index.IndexType;
 import org.tripatha.store.index.TextIndex;
 import org.tripatha.store.query.RyaStoreQueryEngine;
@@ -45,6 +46,14 @@ public final class StoreCheck {
         }
     }
 
+    private static boolean wanted(final IndexType type, final LoaderOptions o) {
+        return switch (type) {
+            case TEXT -> o.textIndex();
+            case GEO -> o.geoIndex();
+            case ENTITY -> o.entityIndex();
+        };
+    }
+
     /** Before prepare: an existing store must already have the requested indexes (they can't be added on top). */
     public static void forPrepare(final Store store, final LoaderOptions o) {
         final TableLayoutStrategy tables = o.rdfConf().getTableLayoutStrategy();
@@ -52,7 +61,7 @@ public final class StoreCheck {
             return;
         }
         for (final IndexType type : IndexType.values()) {
-            final boolean wanted = type == IndexType.TEXT ? o.textIndex() : o.geoIndex();
+            final boolean wanted = wanted(type, o);
             final boolean present = store.tables().exists(type.table(tables));
             if (wanted && !present) {
                 throw new Mismatch("store " + o.tablePrefix() + " already exists without the " + type.id()
@@ -72,7 +81,7 @@ public final class StoreCheck {
             throw new Mismatch("store " + o.tablePrefix() + " does not exist: run prepare first");
         }
         for (final IndexType type : IndexType.values()) {
-            final boolean wanted = type == IndexType.TEXT ? o.textIndex() : o.geoIndex();
+            final boolean wanted = wanted(type, o);
             final boolean present = store.tables().exists(type.table(tables));
             if (!wanted) {
                 if (present) {
@@ -84,14 +93,17 @@ public final class StoreCheck {
                 throw new Mismatch("store " + o.tablePrefix() + " has no " + type.id() + " index: drop --" + type.id() + "-index");
             }
             final IndexState state = IndexManager.readState(store, tables, type);
-            final String definition = type == IndexType.TEXT ? new TextIndex(o.textPredicates()).definition()
-                    : new GeoIndex().definition();
+            final String definition = switch (type) {
+                case TEXT -> new TextIndex(o.textPredicates()).definition();
+                case GEO -> new GeoIndex().definition();
+                case ENTITY -> new EntityIndex(o.entityShards()).definition();
+            };
             if (state == null || state.status() != IndexState.Status.READY) {
                 throw new Mismatch("the " + type.id() + " index of " + o.tablePrefix() + " is not ready: run prepare first");
             }
             if (!state.definition().equals(definition)) {
                 throw new Mismatch("the " + type.id() + " index of " + o.tablePrefix() + " was built with other settings ("
-                        + state.definition() + "); use the same --text-predicates as prepare");
+                        + state.definition() + "); use the same --text-predicates and --entity-shards as prepare");
             }
         }
         final String stored = storedFingerprint(store, conf, o.genConfig());

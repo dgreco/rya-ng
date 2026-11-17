@@ -90,7 +90,7 @@ public final class IndexManager implements IndexCatalog {
 
         final TableAdmin ops = store.tables();
         final List<SecondaryIndex> toClear = new ArrayList<>();
-        for (final SecondaryIndex index : List.of(text, new GeoIndex())) {
+        for (final SecondaryIndex index : List.of(text, new GeoIndex(), entityIndex(store, conf))) {
             final IndexType type = index.type();
             final String table = type.table(tables);
             final boolean enabled = type.isEnabled(conf);
@@ -150,6 +150,39 @@ public final class IndexManager implements IndexCatalog {
                 }
             }
         }
+    }
+
+    /**
+     * The entity index as configured: with the shard count given, or else the one it was built
+     * with, so that a reader needn't know it.
+     */
+    private static EntityIndex entityIndex(final Store store, final StoreRdfConfiguration conf) throws Exception {
+        if (conf.get(RdfCloudTripleStoreConfiguration.CONF_INDEX_ENTITY_SHARDS) == null && conf.isEntityIndex()
+                && store.tables().exists(IndexType.ENTITY.table(conf.getTableLayoutStrategy()))) {
+            final IndexState stored = readState(store, conf.getTableLayoutStrategy(), IndexType.ENTITY);
+            final int shards = stored == null ? -1 : EntityIndex.shardsOf(stored.definition());
+            if (shards > 0) {
+                return new EntityIndex(shards);
+            }
+        }
+        return new EntityIndex(conf.getEntityIndexShards());
+    }
+
+    /** Refuses, before anything is written, a statement an enabled index can't take. */
+    public void check(final RyaStatement statement) {
+        if (active.containsKey(IndexType.ENTITY)) {
+            EntityIndex.checkIndexable(statement);
+        }
+    }
+
+    /** Whether an index is enabled (maintained), ready or not. */
+    public boolean isActive(final IndexType type) {
+        return active.containsKey(type);
+    }
+
+    @Override
+    public EntityIndex entityIndex() {
+        return active.get(IndexType.ENTITY) instanceof EntityIndex entity ? entity : null;
     }
 
     /** Index entries for a statement being added. */

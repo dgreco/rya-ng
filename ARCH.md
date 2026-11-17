@@ -428,6 +428,7 @@ All tables are named `<prefix><suffix>`. The default prefix is `tripatha_`.
 | `ns` | a prefix, or `tripatha` | `namespace`, `version`, `datatypes` or `index` | empty, or the index id | none | namespace IRI, `1.1.0`, `1`, or index state | namespaces, storage version, whether the datatype markers are complete, index state |
 | `text` | word `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | full-text index (optional, [section 15](#15-text-and-geo-search)) |
 | `geo` | geohash cell `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | geospatial index (optional) |
+| `entity` | shard: `murmur3(subject) mod shards`, zero-padded decimal | the term: predicate `01` object (as `po` encodes it) | subject `01` graph `01` qualifier | statement's label | empty | entity index (optional, [section 13.7](#137-the-entity-index-stars-shard-by-shard)) |
 
 `RyaStoreDAO.init()` creates the first six tables if they are missing and attaches the summing combiner to `eval`. `IndexManager` creates `text` and `geo` when their index is enabled.
 
@@ -663,7 +664,8 @@ The batch is written early once it holds 50,000 keys (`MAX_PENDING_COUNTERS`), s
 2. checks that the summing combiner is attached to `eval`, and attaches it if not. Listing a table's iterators needs `ALTER_TABLE`, so for a user without it the check is skipped;
 3. opens the batch writers and the query engine;
 4. reads the storage version (`ns` row `tripatha`, family `version`):
-   - **on a store it has just created,** it writes version `1.1.0` and the `datatypes` flag, which says that every statement of the store has its datatype markers ([section 12.9](#129-comparisons-as-value-ranges));
+   - **on a store it has just created,** it writes version `1.1.0` (`1.2.0` with the entity index on) and the `datatypes` flag, which says that every statement of the store has its datatype markers ([section 12.9](#129-comparisons-as-value-ranges));
+   - **with the entity index on,** it raises an older store to `1.2.0`, so that code from before the index, which would add statements without their postings, refuses to write to it ([section 13.7](#137-the-entity-index-stars-shard-by-shard));
    - **on any other store,** it writes neither. A store created before the markers keeps its version (`1.0.0`, or none) and has no flag, so comparisons there read whole predicates;
    - **on a store whose version is newer than its own,** it opens read-only: every write method (`add`, `delete`, `dropGraph`, `purge`, namespaces, index rebuilds) throws. A newer store may rely on writes this code doesn't make, as a 1.1.0 store relies on the markers. Versions compare number by number between the dots;
 5. creates the `IndexManager`, which opens, creates or validates the index tables ([section 15.6](#156-index-lifecycle)).
@@ -711,7 +713,8 @@ SPARQL `CLEAR` and `DROP` call `clearInternal`, which calls `dropGraph(conf, gra
 1. **Statement and index tables.** In `spo`, `po`, `osp` and the active index tables, it deletes the whole range, restricted to the column families of the given graphs. A `null` graph means the default graph (empty family). No graphs at all means everything. The index tables use the graph as column family too, so the same delete clears them.
 2. **Graph markers.** It deletes the markers of the named graphs, or all of them.
 3. **Counters.** Only when dropping everything, it also deletes the visible `eval` counters, family by family. A single-graph drop leaves the all-graphs counters too high, which only affects join ordering.
-4. **Not the datatype markers.** A writer adding statements meanwhile may have written its marker before this delete reached it, and a deleted marker would hide its statements from comparisons. A marker for a type with no values left only narrows less.
+4. **The entity index** files its postings under their term, not their graph: for each dropped graph, the postings whose qualifier names it are deleted (`EntityIndex.graphQualifierRegex`), a filtered pass over the table like the statement tables'.
+5. **Not the datatype markers.** A writer adding statements meanwhile may have written its marker before this delete reached it, and a deleted marker would hide its statements from comparisons. A marker for a type with no values left only narrows less.
 
 ### 10.3 Listing graphs: the `graphs` table
 
@@ -1221,6 +1224,40 @@ Join … ?x a :Person                       347,303 subjects: looked up for the 
 **Measured** (SCALE-STUDY.md 4.7, 10M triples): on the Accumulo test cluster, `class-large` (three lists of 20k, 93k and 134k subjects) went from 1,446 ms and 41,284 lookups to 137 ms and 6 ranges, and `class-2` from 267 to 47 ms; on the HBase test cluster `class-large` went from 506 to 149 ms. Merging a whole class of 347k subjects into a star whose other lists are short is slower than looking it up (+20 %), which is what the ratio prevents. On RocksDB only stars of similar lengths gain (`class-large` −28 %), so its ratio is 8.
 
 **Testing:** `SubjectMergeIT` runs a set of stars with merges off and forced, with and without a label, over data with duplicates in graphs and labels, values of other types with the same data, and subjects whose UTF-16 and UTF-8 orders differ. It checks through the trace that the lists are read in order, that the attributes above are still an entity chain, and that a long list is looked up instead. Its `spo` is split at five subjects, among them ones whose UTF-16 and UTF-8 orders differ: sliced merges must give the rows of one slice, in the same order, and a `LIMIT` must close them early. `-Dtripatha.test.mergeRatio=1000000` forces merges in every IT.
+
+### 13.7 The entity index: stars shard by shard
+
+A merge join (13.6) reads a star's lists from the client: at 10^12 they hold billions of subjects each, and all of them cross to one process. The entity index (SCALE-STUDY.md O23, decision D13) keeps a second copy of those lists, sharded by subject, so that each shard can be intersected on its own, and in the servers.
+
+**Layout** (`EntityIndex`, table `<prefix>entity`, optional: `index.entity`, endpoint `tripatha.entity-index`):
+
+```
+row         0003                                  shard: murmur3(subject) mod shards
+family      urn:worksFor 01 urn:acme 01 02        the term: predicate 01 object, as po encodes it
+qualifier   urn:alice 01 urn:g1 01                subject 01 graph 01 qualifier
+visibility  the statement's label, timestamp the statement's
+```
+
+- **One posting per stored statement,** as in `spo`. The graph and the statement's qualifier are in the key, so the same triple in two graphs, or under two labels, is two postings, and a star counts it as the nested loop does.
+- **Within a shard,** a term's postings are sorted by subject, and all of a subject's postings are in one shard. So the intersection of a star is the union of the shards' intersections.
+- **`01` separates** the term's predicate from its object (no backend takes `00` in a family, and no predicate holds `01`), and the qualifier's parts. With the index on, a graph IRI or a statement qualifier holding U+0001 is refused.
+
+**The shard count** is fixed when the index is built (`index.entity.shards`, part of its definition: changing it means a rebuild). A shard is one row, which neither Accumulo nor HBase splits between servers, so it must grow with the store: about one per 200 M triples of its expected size, 16 at least. The loader's `prepare` chooses it from `--triples` (`--entity-shards`) and splits the table at every shard. A reader that doesn't set it takes the count the index was built with.
+
+**Its matches are answers.** The text and geo indexes give candidates that are checked against `spo` ([section 15.1](#151-filters-are-exact-indexes-only-narrow)); this one gives the subjects of the answer. So a posting must exist exactly when its statement does:
+- `add` and the deletes write and remove postings with the statement's timestamp, as for the other indexes, and `rebuildAll` builds them from `spo`;
+- `dropGraph` deletes them by the graph in their qualifier ([section 10.2](#102-dropping-graphs-dropgraph)), since their family is the term;
+- enabling the index raises the store's version to `1.2.0`, so that older code refuses to write to it ([section 9.5](#95-opening-a-store));
+- `IndexVerifier` checks it against `spo`, as it does the other indexes.
+
+**In a merge join,** when the index is READY and `query.useindex` is on, `SubjectMergeStep` reads each pattern's list shard by shard from it instead of from `po`:
+- the shards are cut into contiguous groups, one per thread (up to `query.join.mergeslices`);
+- each thread opens a shard's scans, intersects them, closes them and moves to the next, reporting to the query's trace through `StoreTrace.join`;
+- rows come in shard order, and in subject order within a shard: SPARQL fixes no order without `ORDER BY`.
+
+This first phase intersects on the client, which reads every posting of the star's terms, as the merge of 13.6 does: it is correct everywhere, not yet faster. The intersection in the servers (an Accumulo iterator, an HBase filter, native seeks on RocksDB) is the next phase.
+
+**Testing:** `EntityIndexIT` checks the postings against `spo` after adds, deletes, graph drops, a purge and a rebuild, the version raise and the shard count. `SubjectMergeIT` reads its stars from the index too. `-Dtripatha.test.indexes=true` keeps the index in every IT, checked after each test by `verifyIndexes`.
 
 ---
 
@@ -1786,6 +1823,8 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 15. **A triple-term range only narrows.** The `TripleRef` that follows checks every result, as index searches are checked against `spo`.
 16. **Every statement of a flagged store has its datatype marker.** Every `add` writes them, only a purge removes them, and a DAO never writes to a store newer than itself. A missing marker would hide the statements of its type from comparisons.
 17. **A value range only narrows.** The filter stays and decides every row ([section 12.9](#129-comparisons-as-value-ranges)).
+18. **Every stored statement has exactly one entity posting** when the entity index is on. Its matches are answers, not candidates: a missing posting loses rows, a stale one adds them ([section 13.7](#137-the-entity-index-stars-shard-by-shard)).
+19. **A store with the entity index has storage version 1.2.0,** so code that doesn't keep the index never writes to it.
 
 ---
 

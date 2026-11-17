@@ -74,6 +74,7 @@ public final class Loader {
         final long blocks = (range[1] - range[0] + blockSize - 1) / blockSize;
         final String fingerprint = options.genConfig().fingerprint() + "|" + options.tablePrefix() + "|" + range[0] + "-"
                 + range[1] + "|" + blockSize + "|" + options.textIndex() + options.geoIndex() + options.textPredicates()
+                + (options.entityIndex() ? "|entity" + options.entityShards() : "")
                 + "|" + options.stats() + "|" + options.statsOnes();
         final Progress progress = Progress.open(options.progressFile(), fingerprint, blocks, options.resume());
         limiter = options.maxRate() > 0 ? new RateLimiter(options.maxRate()) : null;

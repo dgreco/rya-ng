@@ -65,12 +65,12 @@ public final class LoaderOptions {
     }
 
     /** Options without a value. */
-    private static final Set<String> FLAGS = Set.of("text-index", "geo-index", "resume", "grant-auths", "help");
+    private static final Set<String> FLAGS = Set.of("text-index", "geo-index", "entity-index", "resume", "grant-auths", "help");
     /** Every option with a value. */
     private static final Set<String> VALUED = Set.of("table-prefix", "accumulo-properties", "zookeepers", "instance", "user",
             "backend", "rocksdb-path", "hbase-properties", "hbase-site", "hbase-conf", "hbase-user", "hbase-counters", "hbase-counters-jar",
             "hbase-labels-table", "grant-to",
-            "text-predicates", "stats", "stats-ones", "entities", "triples", "start-entity", "end-entity", "seed", "timestamp", "graphs",
+            "text-predicates", "entity-shards", "stats", "stats-ones", "entities", "triples", "start-entity", "end-entity", "seed", "timestamp", "graphs",
             "default-graph-fraction", "labels", "labelled-fraction", "geo-scale", "polygon-fraction", "text-scale",
             "link-skew", "word-skew", "class-weights", "rdf12-fraction", "base-iri", "part", "parts", "threads", "block-size",
             "commit-interval", "batch-memory-mb", "writer-threads", "max-latency", "writer-timeout", "durability",
@@ -373,6 +373,24 @@ public final class LoaderOptions {
         return flag("geo-index");
     }
 
+    /** Whether to keep the entity index (SCALE-STUDY.md O23). */
+    public boolean entityIndex() {
+        return flag("entity-index");
+    }
+
+    /**
+     * The entity index's shard count: {@code --entity-shards}, or about one per 200 M triples
+     * of the dataset, 16 at least. A shard is one row, which no backend splits.
+     */
+    public int entityShards() {
+        final String raw = values.get("entity-shards");
+        if (raw != null && !raw.isBlank() && !raw.equals("auto")) {
+            return Integer.parseInt(raw.trim());
+        }
+        final double triples = genConfig().entities() * triplesPerEntity(genConfig());
+        return (int) Math.max(16, Math.min(1_000_000, Math.ceil(triples / 200e6)));
+    }
+
     public List<String> textPredicates() {
         final String raw = values.get("text-predicates");
         if (raw == null || raw.isBlank()) {
@@ -426,6 +444,8 @@ public final class LoaderOptions {
         conf.setTablePrefix(tablePrefix() == null ? "dryrun_" : tablePrefix());
         conf.setTextIndex(textIndex());
         conf.setGeoIndex(geoIndex());
+        conf.setEntityIndex(entityIndex());
+        conf.setEntityIndexShards(entityShards());
         conf.setTextIndexPredicates(textPredicates());
         conf.setMaintainStats(stats());
         conf.setUseStats(stats());
@@ -611,6 +631,9 @@ public final class LoaderOptions {
         if (geoIndex()) {
             b.append(" --geo-index");
         }
+        if (entityIndex()) {
+            b.append(" --entity-index --entity-shards ").append(entityShards());
+        }
         if (values.containsKey("text-predicates")) {
             b.append(" --text-predicates ").append(values.get("text-predicates"));
         }
@@ -728,9 +751,11 @@ public final class LoaderOptions {
                   --threads instead of --part.
 
                 Dataset (repeat on every command; prepare prints the exact arguments):
-                  --table-prefix P          required; tables P<spo|po|osp|ns|eval|graphs|text|geo>
+                  --table-prefix P          required; tables P<spo|po|osp|ns|eval|graphs|text|geo|entity>
                   --triples N | --entities N  size, with K/M/B suffixes (about 7.5 triples per entity)
                   --text-index --geo-index  maintain the search indexes (must match the endpoint's settings)
+                  --entity-index            maintain the entity index, for stars intersected shard by shard
+                  --entity-shards N|auto    its shard count (default auto: one per 200M triples, 16 at least)
                   --text-predicates LIST    predicates to text-index (default all; rdfs:, rdf:, o: prefixes)
                   --stats on|off            keep join-ordering statistics (default on)
                   --stats-ones skip|keep    skip (default): don't write a subject's counters whose total is 1,
