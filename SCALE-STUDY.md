@@ -832,7 +832,7 @@ A spike measures it before any product change: offline, on a 1B-triple sample, w
   - Deletes don't. A marker for a type with no values left only makes O14 narrow less.
   - `dropGraph` of everything deletes the six counter families, not `t`. A writer adding statements meanwhile may have written its marker before the drop reached it, and deleting it would hide those statements.
 - **Cost:** one more `eval` cell per single-statement insert, and nearly nothing for bulk adds. That is about 45 predicates × 1 or 2 datatypes per call on the loader's data.
-- **Reading:** one exact row per predicate and query, with the query's labels, so a reader learns only the types of statements it may see. A type is present when any of its cells is visible, whatever they add up to: HBase's increment mode sets dropped counters to zero.
+- **Reading:** one exact row per predicate and query, with the query's labels, so a reader learns only the types of statements it may see. A type is present when any of its visible cells holds more than zero: markers only receive +1 deltas, and HBase's increment mode resets a purged counter to zero instead of deleting it (CI's increment-mode job caught a purged type still showing).
 - **Old stores:**
   - Markers are complete only for a store written by code that maintains them. So `init()` writes a flag in `ns` (row `tripatha`, family `datatypes`) and storage version 1.1.0 only when it creates the store. On any other store it writes neither: a store created earlier keeps its version (1.0.0) and stays unflagged.
   - `purge` writes back exactly the version and flag it found. Statements under labels the purger lacks stay, so an unflagged store mustn't come out flagged.

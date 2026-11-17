@@ -1031,7 +1031,7 @@ The statistics count a triple term like any other object, and estimate a `Triple
 **What has to be known: the datatypes of the predicate's objects.** The type is the last part of a `po` row, after the subject, so nothing in the row layout groups them. The counters can be turned off. So every `add` writes a **datatype marker**: an `eval` counter cell per predicate, datatype and label, in family `t` (`DatatypeMarkers`).
 - **When written:** once per call and key, as graph markers are, whether or not statistics are on, and before the rows it stands for.
 - **When removed:** only by a purge. Deletes and `dropGraph` leave them ([section 10.2](#102-dropping-graphs-dropgraph)).
-- **Who sees them:** a reader sees a marker under the same labels as the statements it stands for, so it learns only the types of statements it may see. A type is present when any of its cells is visible, whatever they add up to.
+- **Who sees them:** a reader sees a marker under the same labels as the statements it stands for, so it learns only the types of statements it may see. A type is present when any of its visible cells holds more than zero: markers only receive +1 deltas, and HBase's increment mode resets a purged counter to zero instead of deleting it.
 - **Trusted only when complete:** that is, in a store created by code that writes them, which `init()` flags in `ns` ([section 9.5](#95-opening-a-store)). A store without the flag is never narrowed.
 - **Not atomic:** an `add` whose flush fails can leave rows without their marker, until they are added again (the loader's resume does). Like every partial write, it isn't transactional.
 

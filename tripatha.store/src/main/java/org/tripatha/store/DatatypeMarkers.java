@@ -21,6 +21,7 @@ import java.util.TreeSet;
 
 import org.tripatha.api.domain.RyaStatement;
 import org.tripatha.store.spi.Auths;
+import org.tripatha.store.spi.Cell;
 import org.tripatha.store.spi.CellScanner;
 import org.tripatha.store.spi.KeyRange;
 import org.tripatha.store.spi.RowMutation;
@@ -39,8 +40,10 @@ import org.tripatha.store.trace.StoreTrace;
  * with no values left only narrows less.
  *
  * <p>A reader sees a marker under the same labels as the statements it stands for, so it learns
- * only the types of statements it may see. A type is present when any of its cells is visible,
- * whatever they add up to (HBase's increment mode sets a dropped counter to zero).
+ * only the types of statements it may see. A type is present when any of its visible cells holds
+ * more than zero. Markers only ever receive +1 deltas, so a cell at zero is one a purge reset:
+ * HBase's increment mode sets a purged counter to zero instead of deleting it, and the next add
+ * of that type brings it back to 1.
  *
  * <p>The markers are complete only in a store that code writing them created. Such a store has a
  * flag in {@code ns} (row {@code tripatha}, family {@code datatypes}), written with the store.
@@ -85,7 +88,10 @@ public final class DatatypeMarkers {
         try (StoreTrace.Reason why = StoreTrace.reason(() -> "value ranges: the datatypes of <" + predicate + ">'s objects");
                 CellScanner cells = store.scan(evalTable, KeyRange.row(predicate.getBytes(StandardCharsets.UTF_8)), spec)) {
             while (cells.hasNext()) {
-                types.add(new String(cells.next().qualifier(), StandardCharsets.UTF_8));
+                final Cell cell = cells.next();
+                if (store.counterValue(cell.value()) > 0) {
+                    types.add(new String(cell.qualifier(), StandardCharsets.UTF_8));
+                }
             }
         }
         return types;
