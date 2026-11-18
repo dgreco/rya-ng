@@ -178,6 +178,42 @@ public final class AccumuloStore implements Store {
         }
     }
 
+    /** Whether each table's servers can load Tripatha's intersecting iterator, asked once. */
+    private final java.util.Map<String, Boolean> intersecting = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Override
+    public boolean canIntersect(final String table) {
+        final Boolean known = intersecting.get(table);
+        if (known != null) {
+            return known;
+        }
+        if (!tables().exists(table)) {
+            return false; // asked again once it exists
+        }
+        return intersecting.computeIfAbsent(table, t -> {
+            final boolean loads = tables().canLoadIterator(t, org.tripatha.store.index.EntityIndex.ACCUMULO_ITERATOR);
+            if (!loads) {
+                log.info("The tablet servers of {} can't load {}: stars are intersected on the client. Put the "
+                        + "tripatha.accumulo.iterators jar on every tablet server.", t,
+                        org.tripatha.store.index.EntityIndex.ACCUMULO_ITERATOR);
+            }
+            return loads;
+        });
+    }
+
+    /** One batch scan of the rows, with Tripatha's iterator intersecting each in its tablet server. */
+    @Override
+    public CellScanner intersect(final String table, final List<byte[]> rows, final List<byte[]> families,
+            final ScanSpec spec) {
+        final List<KeyRange> ranges = new ArrayList<>(rows.size());
+        for (final byte[] row : rows) {
+            ranges.add(KeyRange.row(row));
+        }
+        return batchScan(table, ranges, spec.toBuilder().iterator(new org.tripatha.store.spi.ServerIterator(50, "ei",
+                org.tripatha.store.index.EntityIndex.ACCUMULO_ITERATOR,
+                java.util.Map.of("terms", org.tripatha.store.index.EntityIndex.encodeTerms(families)))).build());
+    }
+
     @Override
     public CellScanner batchScan(final String table, final Collection<KeyRange> given, final ScanSpec spec) {
         final List<KeyRange> ranges = new ArrayList<>(given.size());

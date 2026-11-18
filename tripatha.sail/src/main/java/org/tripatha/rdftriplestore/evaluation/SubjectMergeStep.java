@@ -75,9 +75,9 @@ import org.tripatha.store.trace.Trace;
  * query's trace ({@link StoreTrace#join}), intersects them and closes them, shard after shard.
  * Rows then come in shard order, and in subject order within a shard.
  *
- * <p><b>In the servers</b> (O23): when the store can (Accumulo with Tripatha's iterator jar), the
- * shards are intersected there instead, in one batch scan over every shard row, and only the
- * matching subjects, with their counts, come back. Their order across shards is the scan's.
+ * <p><b>By the store</b> (O23): when it can (Accumulo with Tripatha's iterator jar on its servers,
+ * RocksDB with native seeks), each thread's group of shards is intersected by the store instead,
+ * and only the matching subjects, with their counts, come back ({@code Store.intersect}).
  */
 final class SubjectMergeStep implements QueryEvaluationStep {
     /** Threads intersecting slices: daemons, kept a minute when idle. */
@@ -130,8 +130,6 @@ final class SubjectMergeStep implements QueryEvaluationStep {
         private List<Intersection> slices;
         /** One per slice when they run on threads of their own; null for one slice. */
         private List<SliceTask> tasks;
-        /** The matches the servers intersected, when they do; null otherwise. */
-        private CloseableIteration<EntityIndex.Match> serverMatches;
         private int current;
         private Value subject;
         private long repeats;
@@ -205,25 +203,24 @@ final class SubjectMergeStep implements QueryEvaluationStep {
                 source.countLookup();
             }
             final List<byte[]> shards = entity.shardRows();
-            if (source.entityIntersectsInServers()) {
-                try (StoreTrace.Reason why = StoreTrace.reason(() -> "merge join: the subjects of " + patterns.size()
-                        + " constant patterns on ?" + node.getSubjectName() + ", intersected in the servers, in each of the "
-                        + shards.size() + " shards of the entity index")) {
-                    serverMatches = source.entityMatches(shards, terms);
-                }
-                slices = List.of();
-                return;
-            }
             final int threads = Math.max(1, Math.min(source.getConf().getJoinMergeSlices(), shards.size()));
+            final boolean byStore = source.entityIntersectsInServers();
             final Trace trace = StoreTrace.current();
             final String reason = "merge join: the subjects of " + patterns.size() + " constant patterns on ?"
-                    + node.getSubjectName() + ", intersected shard by shard in the entity index (" + shards.size()
-                    + " shards, " + threads + " threads)";
+                    + node.getSubjectName() + (byStore ? ", intersected by the store" : ", intersected shard by shard")
+                    + " in the entity index (" + shards.size() + " shards, " + threads + " threads)";
             slices = List.of();
             tasks = new ArrayList<>(threads);
             for (int t = 0; t < threads; t++) {
-                final List<Supplier<Intersection>> units = new ArrayList<>();
-                for (final byte[] shard : shards.subList(t * shards.size() / threads, (t + 1) * shards.size() / threads)) {
+                final List<byte[]> group = shards.subList(t * shards.size() / threads, (t + 1) * shards.size() / threads);
+                final List<Supplier<Unit>> units = new ArrayList<>();
+                if (byStore) {
+                    // The whole group in one call: the store intersects its shards (in its servers, or with seeks).
+                    units.add(() -> new Matches(source.entityMatches(group, terms)));
+                    tasks.add(new SliceTask(units, List.of(), trace, reason));
+                    continue;
+                }
+                for (final byte[] shard : group) {
                     units.add(() -> {
                         final List<CloseableIteration<byte[]>> lists = new ArrayList<>(terms.size());
                         final Intersection intersection = new Intersection(lists);
@@ -247,15 +244,6 @@ final class SubjectMergeStep implements QueryEvaluationStep {
 
         /** Moves to the next subject every list has, and how many rows it gives; false when none is left. */
         private boolean nextMatch() {
-            if (serverMatches != null) {
-                if (!serverMatches.hasNext()) {
-                    return false;
-                }
-                final EntityIndex.Match match = serverMatches.next();
-                subject = value(match.subject());
-                repeats = match.count();
-                return true;
-            }
             if (tasks == null) {
                 final Intersection only = slices.isEmpty() ? null : slices.get(0);
                 if (only == null || !only.advance()) {
@@ -280,10 +268,6 @@ final class SubjectMergeStep implements QueryEvaluationStep {
 
         @Override
         protected void handleClose() {
-            if (serverMatches != null) {
-                serverMatches.close();
-                return;
-            }
             final List<Intersection> opened = slices;
             if (opened == null) {
                 return;
@@ -319,11 +303,67 @@ final class SubjectMergeStep implements QueryEvaluationStep {
     /** The end of a slice's matches. */
     private static final Object END = new Object();
 
+    /** A source of matches: subjects with the rows each gives. Used by one thread at a time. */
+    interface Unit {
+        /** @return false when there is no match left */
+        boolean advance();
+
+        byte[] subject();
+
+        long repeats();
+
+        /** Closes what the unit reads; returns the first failure, added to {@code failure} when there is one. */
+        RuntimeException closeQuietly(RuntimeException failure);
+    }
+
+    /** The matches a store intersected ({@code Store.intersect}). */
+    static final class Matches implements Unit {
+        private final CloseableIteration<EntityIndex.Match> matches;
+        private EntityIndex.Match current;
+
+        Matches(final CloseableIteration<EntityIndex.Match> matches) {
+            this.matches = matches;
+        }
+
+        @Override
+        public boolean advance() {
+            if (!matches.hasNext()) {
+                return false;
+            }
+            current = matches.next();
+            return true;
+        }
+
+        @Override
+        public byte[] subject() {
+            return current.subject();
+        }
+
+        @Override
+        public long repeats() {
+            return current.count();
+        }
+
+        @Override
+        public RuntimeException closeQuietly(final RuntimeException failure) {
+            try {
+                matches.close();
+                return failure;
+            } catch (final RuntimeException e) {
+                if (failure == null) {
+                    return e;
+                }
+                failure.addSuppressed(e);
+                return failure;
+            }
+        }
+    }
+
     /**
      * The subjects every list of one slice has, in order, each with the product of its counts in
      * the lists. Used by one thread at a time.
      */
-    static final class Intersection {
+    static final class Intersection implements Unit {
         private final List<CloseableIteration<byte[]>> lists;
         private byte[][] heads;
         private byte[] subject;
@@ -333,11 +373,13 @@ final class SubjectMergeStep implements QueryEvaluationStep {
             this.lists = lists;
         }
 
-        byte[] subject() {
+        @Override
+        public byte[] subject() {
             return subject;
         }
 
-        long repeats() {
+        @Override
+        public long repeats() {
             return repeats;
         }
 
@@ -347,7 +389,8 @@ final class SubjectMergeStep implements QueryEvaluationStep {
          *
          * @return false when a list has run out
          */
-        boolean advance() {
+        @Override
+        public boolean advance() {
             if (heads == null) {
                 heads = new byte[lists.size()][];
                 for (int i = 0; i < heads.length; i++) {
@@ -399,7 +442,8 @@ final class SubjectMergeStep implements QueryEvaluationStep {
         }
 
         /** Closes every list; returns the first failure, added to {@code failure} when there is one. */
-        RuntimeException closeQuietly(RuntimeException failure) {
+        @Override
+        public RuntimeException closeQuietly(RuntimeException failure) {
             for (final CloseableIteration<byte[]> it : lists) {
                 try {
                     it.close();
@@ -421,9 +465,9 @@ final class SubjectMergeStep implements QueryEvaluationStep {
      * or the query thread when the merge is closed before it started.
      */
     private static final class SliceTask implements Runnable {
-        private final List<Supplier<Intersection>> units;
+        private final List<Supplier<Unit>> units;
         /** Units opened on the query thread, closed by whoever owns them. */
-        private final List<Intersection> preopened;
+        private final List<? extends Unit> preopened;
         private final Trace trace;
         private final String reason;
         private final BlockingQueue<Object> queue = new ArrayBlockingQueue<>(QUEUED);
@@ -439,7 +483,7 @@ final class SubjectMergeStep implements QueryEvaluationStep {
          * @param trace the trace the units' scans report to, or null when they are opened traced already
          * @param reason the reason those scans give
          */
-        SliceTask(final List<Supplier<Intersection>> units, final List<Intersection> preopened, final Trace trace,
+        SliceTask(final List<Supplier<Unit>> units, final List<? extends Unit> preopened, final Trace trace,
                 final String reason) {
             this.units = units;
             this.preopened = preopened;
@@ -452,7 +496,7 @@ final class SubjectMergeStep implements QueryEvaluationStep {
             if (!claimed.compareAndSet(false, true)) {
                 return;
             }
-            Intersection current = null;
+            Unit current = null;
             int next = 0;
             try (StoreTrace.Scope joined = StoreTrace.join(trace, reason)) {
                 int size = FIRST_CHUNK;
@@ -541,7 +585,7 @@ final class SubjectMergeStep implements QueryEvaluationStep {
             if (claimed.compareAndSet(false, true)) {
                 // Never started: the scans opened for it are ours to close.
                 RuntimeException failure = null;
-                for (final Intersection unit : preopened) {
+                for (final Unit unit : preopened) {
                     failure = unit.closeQuietly(failure);
                 }
                 done.countDown();

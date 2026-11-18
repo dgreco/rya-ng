@@ -1256,16 +1256,23 @@ visibility  the statement's label, timestamp the statement's
 - each thread opens a shard's scans, intersects them, closes them and moves to the next, reporting to the query's trace through `StoreTrace.join`;
 - rows come in shard order, and in subject order within a shard: SPARQL fixes no order without `ORDER BY`.
 
-**In the servers** (Accumulo): `EntityIntersectingIterator`, in the `tripatha.accumulo.iterators` jar on every tablet server, intersects a star's terms inside each shard row.
+**By the store** (`Store.intersect`: in each row, the subjects found under every family, as one cell each with its count). Two backends do it:
+- **Accumulo, in its servers:** `EntityIntersectingIterator`, in the `tripatha.accumulo.iterators` jar on every tablet server, intersects a star's terms inside each shard row.
+- **RocksDB, with native seeks:** `RocksIntersection` runs the same leapfrog over one RocksDB iterator per term, applying labels and the time range to each cell as `RocksScan` does.
+- **HBase** doesn't yet (a seeking filter is the next phase): its stars are intersected on the client.
+
+On Accumulo:
 - **The leapfrog:** it seeks each term's list to the largest subject the lists are at, until they all agree, so a long list costs about as many seeks as the shortest has postings, not its length.
 - **What comes back:** one key per match, `(shard, empty family, subject)`, with the product of the subject's postings per term as value. Labels are applied below user iterators, so only visible postings count. Resumed after a key, it resumes after that subject.
-- **The query:** one batch scan over every shard row with the iterator (priority 50, above Accumulo's TTL and regular-expression filters), traced as any scan (`RyaStoreQueryEngine.entityMatches`). Matches come back unordered across shards.
-- **When:** the index is READY, `query.useindex` and `query.entityindex.servers` are on, and the servers can load the class: the store asks once per table (`TableAdmin.canLoadIterator`, Accumulo's `testClassLoad`) and logs when they can't. Then stars are intersected on the client as above: same answers, more data moved.
-- **Every constant pattern joins the intersection** when the servers intersect: `SubjectMergeOptimizer` then merges each star pattern on the subject, whatever its length (the merge ratio of 13.6 is for reading whole lists on the client).
+- **The query:** a batch scan over the shard rows with the iterator (priority 50, above Accumulo's TTL and regular-expression filters), traced as any scan.
+- **When it can:** the servers must load the class: the store asks once per table (`Store.canIntersect`, through Accumulo's `testClassLoad`) and logs when they can't.
 
-The client intersection, used on the other backends and as the fallback, reads every posting of the star's terms, as the merge of 13.6 does: it is correct everywhere, not faster. Native seeks on RocksDB and a seeking filter on HBase are the next phases.
+**In a merge join** (`RyaStoreQueryEngine.entityMatches`), when the index is READY, `query.useindex` and `query.entityindex.servers` are on and the store can intersect, each thread's group of shards is one `Store.intersect` call, under the query's trace; matches come back in no particular order across shards. Otherwise the shards are intersected on the client as above: same answers, more data moved.
+- **Every constant pattern joins the intersection** when the store intersects: `SubjectMergeOptimizer` then merges each star pattern on the subject, whatever its length (the merge ratio of 13.6 is for reading whole lists on the client).
 
-**Testing:** `EntityIndexIT` checks the postings against `spo` after adds, deletes, graph drops, a purge and a rebuild, the version raise and the shard count. `SubjectMergeIT` reads its stars from the index too, in the servers and on the client; the test Accumulo cluster's servers run with the test classpath, which holds the iterator. `EntityIntersectingIteratorTest` checks the iterator alone: counts, subjects that start others, three terms, and resuming. `-Dtripatha.test.indexes=true` keeps the index in every IT, checked after each test by `verifyIndexes`.
+The client intersection, used on HBase and as the fallback, reads every posting of the star's terms, as the merge of 13.6 does: correct everywhere, not faster.
+
+**Testing:** `EntityIndexIT` checks the postings against `spo` after adds, deletes, graph drops, a purge and a rebuild, the version raise and the shard count. `SubjectMergeIT` reads its stars from the index too, in the servers and on the client; the test Accumulo cluster's servers run with the test classpath, which holds the iterator. `EntityIntersectingIteratorTest` checks the iterator alone: counts, subjects that start others, three terms, and resuming. `EntityIndexIT` compares `Store.intersect` with an intersection of the raw postings, with and without a label, on each backend that intersects. `-Dtripatha.test.indexes=true` keeps the index in every IT, checked after each test by `verifyIndexes`.
 
 ---
 

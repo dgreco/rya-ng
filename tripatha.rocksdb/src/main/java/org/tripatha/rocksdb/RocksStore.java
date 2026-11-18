@@ -131,6 +131,24 @@ public final class RocksStore implements Store {
     }
 
     @Override
+    public boolean canIntersect(final String table) {
+        return database.exists(table);
+    }
+
+    /** Native seeks, one row after the other ({@link RocksIntersection}). */
+    @Override
+    public CellScanner intersect(final String table, final List<byte[]> rows, final List<byte[]> families,
+            final ScanSpec spec) {
+        checkSpec(spec);
+        final List<KeyRange> ranges = new java.util.ArrayList<>(rows.size());
+        for (final byte[] row : rows) {
+            ranges.add(KeyRange.row(row));
+        }
+        return TracedScans.open("Intersect", table, ranges, spec, describe(spec),
+                () -> new RocksIntersection(database, table, rows, families, spec));
+    }
+
+    @Override
     public void deleteVisible(final String table, final Collection<KeyRange> given, final ScanSpec spec,
             final WriterOptions options) {
         checkSpec(spec);

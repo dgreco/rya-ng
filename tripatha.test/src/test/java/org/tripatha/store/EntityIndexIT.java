@@ -56,6 +56,12 @@ public class EntityIndexIT extends StoreITBase {
 
     private final List<RyaStoreDAO> daos = new ArrayList<>();
 
+    /** Every test writes under label A: HBase refuses a label not registered and granted first. */
+    @org.junit.jupiter.api.BeforeEach
+    public void grant() {
+        grantAuthorizations("A");
+    }
+
     @AfterEach
     public void tearDown() {
         daos.forEach(RyaStoreDAO::destroy);
@@ -138,6 +144,74 @@ public class EntityIndexIT extends StoreITBase {
         assertEquals(16, index.shardRows().size());
         assertEquals("00", new String(index.shardRows().get(0), StandardCharsets.UTF_8));
         assertEquals("15", new String(index.shardRows().get(15), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void theStoreIntersectsAsTheClientWould() throws Exception {
+        grantAuthorizations("A");
+        final StoreRdfConfiguration conf = conf(true, 4, false);
+        final String table = conf.getTableLayoutStrategy().getEntity();
+        final RyaStoreDAO dao = dao(true, 4, false);
+        org.junit.jupiter.api.Assumptions.assumeTrue(getStore().canIntersect(table), "this backend doesn't intersect yet");
+        final RyaIRI type = new RyaIRI("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+        final RyaIRI person = new RyaIRI(NS + "Person");
+        final List<RyaStatement> statements = new ArrayList<>();
+        for (int i = 0; i < 60; i++) {
+            final RyaIRI s = new RyaIRI(NS + "s" + i);
+            if (i % 2 == 0) {
+                statements.add(new RyaStatement(s, WORKS_FOR, ACME));
+            }
+            if (i % 3 == 0) {
+                statements.add(new RyaStatement(s, type, person));
+            }
+            if (i % 12 == 0) {
+                statements.add(new RyaStatement(s, WORKS_FOR, ACME, G1)); // twice: two rows
+            }
+            if (i % 9 == 0) {
+                statements.add(new RyaStatement(s, type, person, null, null, "A".getBytes(StandardCharsets.UTF_8), null, 1L));
+            }
+            if (i == 7) {
+                statements.add(new RyaStatement(s, type, person, null, null, "A".getBytes(StandardCharsets.UTF_8), null, 1L));
+                statements.add(new RyaStatement(s, WORKS_FOR, ACME, null, null, "A".getBytes(StandardCharsets.UTF_8), null, 1L));
+            }
+        }
+        dao.add(statements.iterator());
+        final List<byte[]> terms = List.of(EntityIndex.term(WORKS_FOR, ACME), EntityIndex.term(type, person));
+        final List<byte[]> shards = dao.getIndexCatalog().entityIndex().shardRows();
+        for (final Auths auths : List.of(Auths.NONE, Auths.of("A"))) {
+            final java.util.Map<String, Long> expected = new java.util.TreeMap<>();
+            for (final byte[] shard : shards) {
+                final java.util.Map<String, long[]> counts = new java.util.HashMap<>();
+                for (int t = 0; t < terms.size(); t++) {
+                    try (CellScanner cells = getStore().scan(table, KeyRange.row(shard),
+                            ScanSpec.builder(auths).family(terms.get(t)).build())) {
+                        while (cells.hasNext()) {
+                            final String subject = new String(EntityIndex.subject(cells.next().qualifier()), StandardCharsets.UTF_8);
+                            counts.computeIfAbsent(subject, k -> new long[terms.size()])[t]++;
+                        }
+                    }
+                }
+                counts.forEach((subject, perTerm) -> {
+                    long product = 1;
+                    for (final long n : perTerm) {
+                        product *= n;
+                    }
+                    if (product > 0) {
+                        expected.put(new String(shard, StandardCharsets.UTF_8) + " " + subject, product);
+                    }
+                });
+            }
+            final java.util.Map<String, Long> actual = new java.util.TreeMap<>();
+            try (CellScanner matches = getStore().intersect(table, shards, terms, ScanSpec.of(auths))) {
+                while (matches.hasNext()) {
+                    final var m = matches.next();
+                    actual.put(new String(m.row(), StandardCharsets.UTF_8) + " " + new String(m.qualifier(), StandardCharsets.UTF_8),
+                            Long.parseLong(new String(m.value(), StandardCharsets.UTF_8)));
+                }
+            }
+            assertFalse(expected.isEmpty());
+            assertEquals(expected, actual, auths.toString());
+        }
     }
 
     // ------------------------------------------------------------------ helpers

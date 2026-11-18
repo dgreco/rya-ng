@@ -302,7 +302,7 @@ public class SubjectMergeIT extends RyaSailITBase {
         for (final boolean labelled : List.of(true, false)) {
             // The index table exists now: every store opens with the index on, this one without using it.
             final SailRepository plain = indexed(labelled, 0, 1, false, false);
-            // In the servers where they can (Accumulo), and on the client in 1 or 3 threads.
+            // By the store where it can (Accumulo's servers, RocksDB's seeks), and on the client in 1 or 3 threads.
             for (final int threads : List.of(0, 1, 3)) {
                 final boolean servers = threads == 0;
                 final SailRepository fromIndex = indexed(labelled, 1_000_000, Math.max(1, threads), true, servers);
@@ -319,7 +319,8 @@ public class SubjectMergeIT extends RyaSailITBase {
                     rows(fromIndex, QUERIES.get(0));
                 }
                 assertTrue(reason[0] != null && reason[0].contains("entity index"), String.valueOf(reason[0]));
-                assertEquals(servers && onBackend("accumulo"), reason[0].contains("in the servers"), reason[0]);
+                // The store intersects on Accumulo (in its servers) and RocksDB (native seeks); HBase not yet.
+                assertEquals(servers && !onBackend("hbase"), reason[0].contains("by the store"), reason[0]);
             }
         }
     }

@@ -71,6 +71,18 @@ public final class EntityIndex implements SecondaryIndex {
     public record Match(byte[] subject, long count) {
     }
 
+    /** The iterator's {@code terms} option: each term in Base64, separated by commas. */
+    public static String encodeTerms(final List<byte[]> terms) {
+        final StringBuilder b = new StringBuilder();
+        for (final byte[] term : terms) {
+            if (b.length() > 0) {
+                b.append(',');
+            }
+            b.append(java.util.Base64.getEncoder().encodeToString(term));
+        }
+        return b.toString();
+    }
+
     /** The layout's version: changing the key layout means a rebuild. */
     public static final String VERSION = "entity/1";
     private static final String SHARDS = ";shards=";

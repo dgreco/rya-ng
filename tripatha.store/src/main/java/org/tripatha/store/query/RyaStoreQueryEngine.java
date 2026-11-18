@@ -70,8 +70,6 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
     private final Store store;
     private StoreRdfConfiguration configuration;
     private final RyaTripleContext ryaContext;
-    /** Whether each entity table's servers can load Tripatha's iterator, asked once. */
-    private final java.util.Map<String, Boolean> serverIntersection = new java.util.concurrent.ConcurrentHashMap<>();
 
     public RyaStoreQueryEngine(final Store store, final StoreRdfConfiguration conf) {
         this.store = Preconditions.checkNotNull(store);
@@ -233,51 +231,33 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
     }
 
     /**
-     * Whether the store intersects the entity index's shards in its servers: the setting is on
-     * and the servers can load Tripatha's iterator (asked once per table; Accumulo only).
+     * Whether the store intersects the entity index's shards itself: the setting is on, and the
+     * store can (Accumulo with Tripatha's iterator jar on its servers, RocksDB with native seeks).
      */
     public boolean intersectsEntitiesInServers(StoreRdfConfiguration conf) {
         if (conf == null) {
             conf = configuration;
         }
-        if (!conf.isEntityIndexServers()) {
-            return false;
-        }
-        return serverIntersection.computeIfAbsent(conf.getTableLayoutStrategy().getEntity(), table -> {
-            final boolean loads = store.tables().canLoadIterator(table, org.tripatha.store.index.EntityIndex.ACCUMULO_ITERATOR);
-            if (!loads && store.capabilities().scanIterators()) {
-                org.slf4j.LoggerFactory.getLogger(RyaStoreQueryEngine.class).info("The servers of {} can't load {}: stars are "
-                        + "intersected on the client. Put the tripatha.accumulo.iterators jar on every tablet server.", table,
-                        org.tripatha.store.index.EntityIndex.ACCUMULO_ITERATOR);
-            }
-            return loads;
-        });
+        return conf.isEntityIndexServers() && store.canIntersect(conf.getTableLayoutStrategy().getEntity());
     }
 
     /**
-     * The subjects every term has in each shard of the entity index, intersected in the servers
-     * (SCALE-STUDY.md O23): one batch scan over every shard row with Tripatha's iterator, which
-     * returns one cell per match. Unordered across shards. Only when
-     * {@link #intersectsEntitiesInServers} says so.
+     * The subjects every term has in each of these shards of the entity index, intersected by the
+     * store (SCALE-STUDY.md O23): one match per subject and shard, with the rows it gives. Only
+     * when {@link #intersectsEntitiesInServers} says so.
      */
     public CloseableIteration<org.tripatha.store.index.EntityIndex.Match> entityMatches(final List<byte[]> shardRows,
             final List<byte[]> terms, StoreRdfConfiguration conf) {
         if (conf == null) {
             conf = configuration;
         }
-        final ScanSpec.Builder spec = ScanSpec.builder(conf.getStoreAuths()).threads(numThreads(conf))
-                .iterator(new ServerIterator(50, "ei", org.tripatha.store.index.EntityIndex.ACCUMULO_ITERATOR,
-                        java.util.Map.of("terms", encodeTerms(terms))));
+        final ScanSpec.Builder spec = ScanSpec.builder(conf.getStoreAuths()).threads(numThreads(conf));
         final Long ttl = conf.getTtl();
         if (ttl != null) {
             final Long now = conf.getStartTime();
             spec.timestamps((now != null ? now : System.currentTimeMillis()) - ttl, now);
         }
-        final List<KeyRange> rows = new ArrayList<>(shardRows.size());
-        for (final byte[] row : shardRows) {
-            rows.add(KeyRange.row(row));
-        }
-        final CellScanner cells = store.batchScan(conf.getTableLayoutStrategy().getEntity(), rows, spec.build());
+        final CellScanner cells = store.intersect(conf.getTableLayoutStrategy().getEntity(), shardRows, terms, spec.build());
         return new CloseableIteration<>() {
             @Override
             public boolean hasNext() {
@@ -296,18 +276,6 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
                 cells.close();
             }
         };
-    }
-
-    /** The iterator's {@code terms} option: each term in Base64, separated by commas. */
-    private static String encodeTerms(final List<byte[]> terms) {
-        final StringBuilder b = new StringBuilder();
-        for (final byte[] term : terms) {
-            if (b.length() > 0) {
-                b.append(',');
-            }
-            b.append(java.util.Base64.getEncoder().encodeToString(term));
-        }
-        return b.toString();
     }
 
     /** The subject bytes of po rows {@code p 00 object 00 subject typeInfo}. */
