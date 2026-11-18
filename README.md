@@ -116,7 +116,7 @@ The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.ja
 - Literals of more than about 32 KB (rows over 32,767 bytes, HBase's limit) are refused.
 - **Finding the cluster:** give the cluster's `hbase-site.xml` (`tripatha.hbase.site`), or only a ZooKeeper quorum (`tripatha.hbase.conf[hbase.zookeeper.quorum]`), in which case Tripatha finds the cluster through ZooKeeper. HBase 3's client otherwise asks its masters (`hbase.client.bootstrap.servers`, by default `localhost:16000`).
 
-**Accumulo**, with the entity index on (`tripatha.entity-index`), intersects its shards in the tablet servers if they have `tripatha.accumulo.iterators/target/tripatha.accumulo.iterators-<version>.jar` on their classpath (`lib/ext`). It depends only on Accumulo. Without it, stars are intersected on the client: same answers, more data moved. The store checks once per table and logs which it uses.
+**Accumulo**, with the entity index on (`tripatha.entity-index`), intersects its shards in the tablet servers if they have `tripatha.accumulo.iterators/target/tripatha.accumulo.iterators-<version>.jar` on their classpath (`lib/ext`). It depends only on Accumulo. Without it, stars are intersected on the client: same answers, more data moved. The store checks once per table and logs which it uses. RocksDB intersects with native seeks, in the process. **HBase** intersects on the client for now, which is about as fast as without the index, so there the index costs disk (about 17 % more) and load rate (about a fifth) for no query gain: leave it off on HBase.
 
 **RocksDB** is a store in a local directory, in the endpoint's or the loader's own process: nothing to install or run besides Tripatha.
 

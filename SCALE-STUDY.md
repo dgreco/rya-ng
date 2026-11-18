@@ -73,11 +73,11 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
      - the benchmark's two blind spots (M8): it now reports CPU apart from waiting, and compares settings within one run. It shows Accumulo joins are bound by the servers, not the client;
      - the type check without a regex (O20) and RocksDB key decoding (O19): on RocksDB, range scans are 23 to 31 % faster and joins 13 to 19 %.
    - **Then,** if the split profile supports them: more lookups in flight (O16), less client work per cell (O17), and parallel reads of one large range (O7).
-5. **"All entities matching X" (D1): class stars in the benchmark (M10), merge joins (O22) and value ranges (O14) done.**
+5. **"All entities matching X" (D1): class stars in the benchmark (M10), merge joins (O22), value ranges (O14) and stars in the servers (O23) done.**
    - O22 reads a star's constant patterns as subject-sorted `po` ranges and intersects them. On the Accumulo test cluster that is 3 to 10 times faster than one lookup per driver row: `class-large` 1,446 → 137 ms, `class-2` 267 → 47 ms. On RocksDB, where a lookup is cheap, it gains only for lists of similar lengths, so the ratio that decides is per backend (section 4.7).
    - O14 makes a selective value condition the driver of its star: `class-value` 3,964 → 151 ms on Accumulo, `class-value-int` 1,796 → 408 ms (section 4.8). With O25 a condition most values pass leaves the star to its constant patterns.
    - O24 reads the merges' lists as subjects only, in 4 slices of the subject space on threads of their own: `class-large` 109 → 67 ms on Accumulo, 94 → 30 ms on RocksDB (section 4.9).
-   - Stars in the servers (O23): D13 decided (a), next. On these queries the client's merge reads 50k to 400k cells in 50 to 140 ms on Accumulo, so the transfer of the lists is not the limit at 10M; it is with lists of billions.
+   - O23 keeps an optional entity index, sharded by subject, and the store intersects a star's lists in each shard: in Accumulo's tablet servers, with native seeks on RocksDB. Stars are 2.3 to 4 times faster on the benchmark, with 15 to 160 times fewer cells reaching the client. Counts are 2.7 to 4.2 times faster on Accumulo, which returns one cell per shard. Value stars are 5 to 10 % slower. It costs 17 % more disk and about a fifth of the load rate (section 4.10). HBase still intersects on the client (D14), and hash versus subject-range shards is open until M3.
 6. **IRI prefix codes: measured (M9), and deferred.**
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
@@ -1114,7 +1114,7 @@ In this order, each measured on M8 before and after (on RocksDB and on the Accum
 7. **O14**, comparisons as value ranges, with the datatype markers and the storage-version check (D12), and **O25**, their counted estimate: done;
 8. **O16** and **O17**, only if the split profile shows where the Accumulo joins' time goes;
 9. **O7**, parallel reads of one large range;
-10. **O23**, stars evaluated in the servers (D13: decided), next, with benchmark queries it should win (counts, selective intersections of long lists).
+10. **O23**, stars evaluated in the servers (D13): done on Accumulo and RocksDB, with counts in the servers and benchmark queries it wins (section 4.10); HBase waits for D14.
 
 **Exit:**
 - every change has an M8 report;

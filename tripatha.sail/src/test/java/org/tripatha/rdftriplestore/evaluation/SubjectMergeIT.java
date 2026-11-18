@@ -342,7 +342,10 @@ public class SubjectMergeIT extends RyaSailITBase {
                 "SELECT (COUNT(*) AS ?c) (COUNT(DISTINCT ?x) AS ?d) WHERE { " + star + " }",
                 "SELECT (COUNT(*) AS ?c) WHERE { ?x a <urn:C> ; <urn:p> <urn:A> ; <urn:q> \"x\" }",
                 "SELECT (COUNT(*) AS ?c) WHERE { ?x <urn:p> <urn:nothing> ; <urn:q> \"x\" }",
-                "SELECT ?y ?c WHERE { ?y <urn:name> \"n0\" { SELECT (COUNT(*) AS ?c) WHERE { " + star + " } } }");
+                "SELECT ?y ?c WHERE { ?y <urn:name> \"n0\" { SELECT (COUNT(*) AS ?c) WHERE { " + star + " } } }",
+                // HAVING adds a count of its own, under a name RDF4J makes up.
+                "SELECT (COUNT(*) AS ?c) WHERE { " + star + " } HAVING (COUNT(DISTINCT ?x) > 5)",
+                "SELECT (COUNT(*) AS ?c) WHERE { " + star + " } HAVING (COUNT(*) > 1000)");
         // Not counted by the store: a GROUP BY, a filter, another aggregate.
         final List<String> grouped = List.of(
                 "SELECT ?x (COUNT(*) AS ?c) WHERE { " + star + " } GROUP BY ?x",
