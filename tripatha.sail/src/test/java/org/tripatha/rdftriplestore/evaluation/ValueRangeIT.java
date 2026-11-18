@@ -195,7 +195,8 @@ public class ValueRangeIT extends RyaSailITBase {
         assertEquals("ValueRangePattern", driver(narrow.plan), narrow.plan);
         assertTrue(narrow.plan.contains("cells]"), narrow.plan);
         final Read broad = read(counted, wide);
-        assertTrue(broad.plan.contains("at least 10 cells"), broad.plan);
+        // Counted up to the group's 8 members, the shortest other pattern, below the cap of 10.
+        assertTrue(broad.plan.contains("at least 8 cells"), broad.plan);
         assertFalse(driver(broad.plan).equals("ValueRangePattern"), "60 scores pass: the group drives\n" + broad.plan);
         // A tenth of the 60 scores, below the group's 8: the fixed estimate drives with the range.
         assertEquals("ValueRangePattern", driver(read(repository(false, true, false, 0), wide).plan));
@@ -208,7 +209,24 @@ public class ValueRangeIT extends RyaSailITBase {
         assertEquals("ValueRangePattern", driver(read(repository(false, true, false, 10), selective).plan),
                 "without label A, 4 scores are counted");
         final Read withA = read(repository(true, true, false, 10), selective);
-        assertTrue(withA.plan.contains("at least 10 cells"), "with label A, the 20 high scores count too\n" + withA.plan);
+        assertTrue(withA.plan.contains("at least 8 cells"), "with label A, the 20 high scores count too\n" + withA.plan);
+    }
+
+    @Test
+    public void aRangeIsCountedUpToTheShortestPatternJoinedWithIt() {
+        // The range of ?v > 50 holds 12 scores (it is widened, from 49), against the class's 60
+        // members: more than a cap of 5, fewer than the class.
+        final String star = "SELECT ?x ?v WHERE { ?x a <urn:K> ; <urn:score> ?v FILTER(?v > 50) }";
+        final Read byDefault = read(repository(false, true, false), star);
+        assertTrue(byDefault.plan.contains("; 12 cells]"), "counted up to the class's 60, so exactly\n" + byDefault.plan);
+        assertEquals("ValueRangePattern", driver(byDefault.plan), byDefault.plan);
+        final Read capped = read(repository(false, true, false, 5), star);
+        assertTrue(capped.plan.contains("at least 5 cells"), "the setting is a ceiling\n" + capped.plan);
+        assertFalse(driver(capped.plan).equals("ValueRangePattern"), "unknown beyond 5: the class drives\n" + capped.plan);
+        // With the group (8 members) in the star, the count stops at 8: the range can't drive past it.
+        final Read grouped = read(repository(false, true, false), String.format(STAR, "?v > 0"));
+        assertTrue(grouped.plan.contains("at least 8 cells"), grouped.plan);
+        assertEquals(rows(repository(false, false, false), star), rows(repository(false, true, false), star));
     }
 
     @Test

@@ -64,9 +64,13 @@ import org.tripatha.store.trace.Trace;
  * <p><b>Slices</b> (O24): up to {@code query.join.mergeslices} slices of the subject space, cut at
  * the store's split points ({@code RyaStoreDAO.subjectBoundaries}). Every list is read once per
  * slice, as the range of its subjects in that slice, and each slice is intersected on a thread of
- * its own. Its matches come back in chunks through a bounded queue, and the slices are emitted in subject
- * order, so the rows are those of one slice, in the same order. The scans are all opened on the
- * query thread, so the trace reports them; a slice's thread reads its scans and closes them.
+ * its own. Its matches come back in chunks, each in subject order. When lookups follow (the merge
+ * is a join's or an OPTIONAL's left side), the slices are emitted in subject order, each through a
+ * bounded queue of its own: the lookups then read nearby rows, and they are slower than the slices.
+ * Otherwise every slice feeds one queue and the chunks come as they are ready: emitted in order, a
+ * later slice could get only its queue ahead, and at 100M triples 4 slices were 11 % faster than
+ * one (SCALE-STUDY.md 4.11). The scans are all opened on the query thread, so the trace reports
+ * them; a slice's thread reads its scans and closes them.
  *
  * <p><b>The entity index</b> (O23): when it is READY, each pattern's list is read shard by shard
  * from it instead: every shard holds all the postings of its subjects, so the intersection of a
@@ -142,7 +146,10 @@ final class SubjectMergeStep implements QueryEvaluationStep {
         private int current;
         private Value subject;
         private long repeats;
-        /** The entity index's matches, from every thread as they come; null for slices of po. */
+        /**
+         * Matches from every thread as they come: the entity index's, or the slices of po when no
+         * lookups follow; null when each slice has its own queue, or there is one slice.
+         */
         private FanIn shared;
         /** Whether to emit those matches in sorted runs, and the current run. */
         private boolean sortMatches;
@@ -200,10 +207,17 @@ final class SubjectMergeStep implements QueryEvaluationStep {
                 throw e;
             }
             if (slices.size() > 1) {
+                // Lookups that follow read nearby rows in subject order, and they are slower than the
+                // slices anyway. Otherwise the slices share one queue, so they all run: emitted in
+                // order, a later slice gets only its queue's few thousand matches ahead.
+                final BlockingQueue<Object> together = lookupsFollow(node) ? null : new ArrayBlockingQueue<>(QUEUED * slices.size());
+                if (together != null) {
+                    shared = new FanIn(together, slices.size());
+                }
                 tasks = new ArrayList<>(slices.size());
                 for (final Intersection slice : slices) {
                     final SliceTask task = new SliceTask(List.of(() -> slice), List.of(slice), null, null,
-                            new ArrayBlockingQueue<>(QUEUED));
+                            together != null ? together : new ArrayBlockingQueue<>(QUEUED));
                     tasks.add(task);
                     SLICE_THREADS.execute(task);
                 }

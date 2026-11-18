@@ -23,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.TreeSet;
 
 import org.eclipse.rdf4j.model.IRI;
@@ -272,8 +273,10 @@ public class SubjectMergeIT extends RyaSailITBase {
 
     @Test
     public void mergedRowsComeInTheStoredOrderOfTheirSubjects() throws Exception {
-        final String query = QUERIES.get(0);
+        // One slice is read in order; several only when lookups follow (here, of each subject's one link).
         for (final int slices : List.of(1, 8)) {
+            final String query = slices == 1 ? QUERIES.get(0)
+                    : "SELECT ?x WHERE { ?x <urn:p> <urn:A> ; <urn:q> \"x\" ; <urn:link> ?y }";
             final List<String> got = new ArrayList<>();
             for (final String row : rowsInOrder(repository(false, 1_000_000, false, slices), query)) {
                 final String x = row.substring(2, row.length() - 1);
@@ -481,14 +484,18 @@ public class SubjectMergeIT extends RyaSailITBase {
     }
 
     @Test
-    public void slicedMergesGiveTheRowsOfOneSliceInTheSameOrder() throws Exception {
+    public void slicedMergesGiveTheRowsOfOneSliceInTheSameOrderWhenLookupsFollow() throws Exception {
+        // Lookups follow the merge in these: of the names (and ages), and of the links.
+        final Set<String> ordered = Set.of(QUERIES.get(3), QUERIES.get(7));
         for (final boolean labelled : List.of(true, false)) {
             final SailRepository plain = repository(labelled, 0, false, 1);
             final SailRepository whole = repository(labelled, 1_000_000, false, 1);
             final SailRepository sliced = repository(labelled, 1_000_000, false, 8);
             for (final String query : QUERIES) {
                 assertEquals(rows(plain, query), rows(sliced, query), query + (labelled ? " (label A)" : ""));
-                assertEquals(rowsInOrder(whole, query), rowsInOrder(sliced, query), "the same order: " + query);
+                if (ordered.contains(query)) {
+                    assertEquals(rowsInOrder(whole, query), rowsInOrder(sliced, query), "the same order: " + query);
+                }
             }
             // Five boundaries, six slices, each read for both patterns.
             assertEquals(12, read(sliced, QUERIES.get(0)).mergedLists());

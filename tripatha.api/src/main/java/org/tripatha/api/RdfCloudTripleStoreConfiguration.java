@@ -852,9 +852,12 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
         setBoolean(CONF_QUERY_VALUE_RANGES, enabled);
     }
 
-    /** @return the most cells counted to estimate a pattern's value ranges; 0 counts none. */
+    /**
+     * @return the most cells counted to estimate a pattern's value ranges, whatever the patterns
+     *         joined with it; 0 counts none
+     */
     public int getValueRangeCount() {
-        return getInt(CONF_QUERY_VALUE_RANGE_COUNT, 10_000);
+        return getInt(CONF_QUERY_VALUE_RANGE_COUNT, 1_000_000);
     }
 
     public void setValueRangeCount(final int cap) {

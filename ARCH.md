@@ -784,7 +784,7 @@ The two-value counters (`sp`, `po`, `so`) are used because `query.usecompositeca
 
 More rules:
 - **Indexed patterns:** an `IndexedStatementPattern` ([section 15](#15-text-and-geo-search)) gets its plain estimate times 0.001 (`SELECTIVITY`), but at least 1.
-- **Value ranges:** a `ValueRangePattern` ([section 12.9](#129-comparisons-as-value-ranges)) in a join is estimated at the number of cells its ranges hold, counted up to `query.valueranges.count` (10,000). A range that reaches the cap gets the larger of the cap and its plain estimate. A pattern that isn't counted (on its own, or with the cap at 0) gets a tenth of its plain estimate. 1 when no value can match.
+- **Value ranges:** a `ValueRangePattern` ([section 12.9](#129-comparisons-as-value-ranges)) in a join is estimated at the number of cells its ranges hold, counted up to the estimate of the shortest other pattern of the join, and at most `query.valueranges.count` (1,000,000). A range that reaches the cap gets the larger of the cap and its plain estimate. A pattern that isn't counted (on its own, or with the cap at 0) gets a tenth of its plain estimate. 1 when no value can match.
 - **Filters:** a `Filter` node is estimated at a tenth of its argument.
 - **Joins:** a `Join` is estimated at the larger of its two sides.
 
@@ -1060,13 +1060,17 @@ The statistics count a triple term like any other object, and estimate a `Triple
 
 **The estimate** decides whether the range drives a star, so it is counted (SCALE-STUDY.md O25):
 - **When:** the pattern is in a join (looking up through filters and the left side of `OPTIONAL`s), and the statistics are the store's. A pattern on its own needs no estimate, so it isn't counted.
-- **How:** `RyaStoreQueryEngine.countValueRanges` counts the cells of the ranges without decoding them, through the same scan specification as the lookup (labels, TTL, server iterators), in every graph, up to `query.valueranges.count` (10,000). The types share the cap, and each range is one round trip. A count is made once per query, predicate and ranges, never kept across queries.
+- **How:** `RyaStoreQueryEngine.countValueRanges` counts the cells of the ranges without decoding them, through the same scan specification as the lookup (labels, TTL, server iterators), in every graph. The types share the cap, and each range is one round trip. A count is made once per query, predicate, ranges and cap, never kept across queries.
+- **The cap:** the estimate of the shortest other statement pattern of the join (through joins, filters and the left side of `OPTIONAL`s), and at most `query.valueranges.count` (1,000,000).
+  - Ranges holding that many cells are at least as long as that pattern, so they wouldn't drive the join, and counting further would only cost time.
+  - The ceiling bounds what a count reads: the cells cross to the client. Without the entity index, the merge plan reads lists at least that long anyway. With it, a star's lists don't reach the client, so a long count can cost more than the star.
+  - It was a fixed 10,000 until 2026-11-18. At 100M triples, `class-value-int`'s range of tens of thousands of cells reached it, was estimated as its whole predicate, and lost the plan: 510 ms against 224 with the relative cap (SCALE-STUDY.md 4.11).
 - **What it gives:**
   - a range shorter than the cap is estimated at its count, so a selective condition drives its star;
   - one that reaches the cap is estimated as if it weren't narrowed (at least the cap), so a condition most values pass leaves the star to its constant patterns.
-  - A range of 10,000 to about half its predicate would often still drive well, and gets the old plan instead: the cap's cost (SCALE-STUDY.md section 4.8).
+- **At 10^12** even the ceiling is too few for ranges of billions: an estimate the store makes (a count in the servers, or a sample) is needed there.
 - **Without a count** (`query.valueranges.count=0`), the estimate is a tenth of the predicate's count ([section 11.2](#112-how-a-patterns-cardinality-is-estimated)).
-- **In plans:** the pattern's signature shows the count, or "at least 10000 cells".
+- **In plans:** the pattern's signature shows the count, or "at least N cells", N being the cap.
 
 **Tests:**
 - `ValueRangeIT` compares every query with the setting on and off, with and without a label and with inference.
@@ -1205,7 +1209,7 @@ Join … ?x a :Person                       347,303 subjects: looked up for the 
    - **Subjects only** (SCALE-STUDY.md O24): `RyaStoreQueryEngine.subjects` gives each cell's subject as its UTF-8 bytes, cut from the row between the known `p 00 o 00` and the type suffix, without decoding the statement. Only matching subjects become values.
    - Subjects are compared as unsigned bytes, which is code point order and so the order of the rows. `String.compareTo` compares UTF-16 units, which puts characters above U+FFFF before U+E000 to U+FFFF.
    - A subject with `n1` statements in one list and `n2` in the other (the same triple in several graphs, or under several labels) gives `n1 × n2` rows, as the nested loop does.
-   - Rows come out in subject order instead of the driver's. SPARQL fixes no order without `ORDER BY`, so a `LIMIT` without one may return other rows of the same answer.
+   - Rows come out in subject order instead of the driver's (in chunks of each slice's order when the merge is sliced and no lookups follow, item 5). SPARQL fixes no order without `ORDER BY`, so a `LIMIT` without one may return other rows of the same answer.
    - When the subject is already bound, as on the right of an OPTIONAL evaluated per row, the step runs the patterns' plain nested loop.
 5. **Slices** (SCALE-STUDY.md O24): the lists can be read in slices of the subject space, each slice intersected on a thread of its own.
    - **The boundaries** are `spo`'s split points cut to their subjects (`RyaStoreDAO.subjectBoundaries`, kept a minute), through the SPI's `TableAdmin.splitRows`:
@@ -1215,7 +1219,8 @@ Join … ?x a :Person                       347,303 subjects: looked up for the 
 
      They are only a hint for balance: any boundaries give the same answers.
    - **A slice** reads every list as the range of its subjects in `[b_i, b_i+1)`: `p 00 o 00 b_i` up to `p 00 o 00 b_i+1`, excluded. A row is in a slice exactly when its subject is, since subjects hold no `00` or `01`.
-   - **Threads:** the scans are all opened on the query thread, so the trace reports them under the merge's reason. Each slice is intersected on a daemon thread, and its matches come back through a bounded queue. The slices are emitted in subject order, so the rows and their order are those of one slice.
+   - **Threads:** the scans are all opened on the query thread, so the trace reports them under the merge's reason. Each slice is intersected on a daemon thread, and its matches come back in chunks, each in subject order, through a bounded queue.
+   - **Order:** when lookups follow the merge (it is a join's or an OPTIONAL's left side, maybe under filters and `BIND`s), each slice has a queue of its own and the slices are emitted in subject order: the rows and their order are those of one slice, and the lookups read nearby rows. Otherwise every slice feeds one queue and the chunks come as they are ready. Emitted in order, a later slice gets only its queue's chunks (about 4,000 matches) ahead of the query thread, and nothing slow drains the first: at 100M triples 4 slices were 11 % faster than one, against 3 times at 10M (SCALE-STUDY.md 4.11). With lookups, they are the slow part, so in-order emission costs nothing there.
    - **Closing:** a slice's thread reads and closes its own scans (RocksDB's native scanners must not be closed while another thread reads them). A slice that hasn't started when the merge is closed (a `LIMIT`) is closed by the query thread instead, and a running one is stopped and waited for.
    - **The setting:** `query.join.mergeslices` caps the slices; 1 reads every list whole on the query thread.
 6. **Above the merge,** `SubjectMergeJoin` binds the subject on every row (`getAssuredBindingNames`), so the attribute patterns form a `BatchedJoinStep` or an entity chain over it, as over any driver.

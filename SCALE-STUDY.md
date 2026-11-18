@@ -68,7 +68,7 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
 4. **Filters as key ranges (O13, O14 and O25 done).**
    - O13: `STRSTARTS` reads only the matching prefix, so `prefix` reads 522 cells instead of 133,579.
    - O14: comparisons on numbers and date-times read one range per datatype, with the datatype markers of D12 and a storage-version check. `range-date` reads 8 cells instead of 240,443: 196 → 5.4 ms on Accumulo (section 4.8).
-   - O25: the ranges of a pattern in a join are counted, up to 10,000 cells, for its estimate. A condition most values pass no longer drives its star (it was 8 times slower on Accumulo with the fixed estimate).
+   - O25: the ranges of a pattern in a join are counted for its estimate, up to the shortest other pattern of the join (at most 1,000,000 cells; a fixed 10,000 until 100M showed it misplanning). A condition most values pass no longer drives its star (it was 8 times slower on Accumulo with the fixed estimate).
    - **Done meanwhile:**
      - the benchmark's two blind spots (M8): it now reports CPU apart from waiting, and compares settings within one run. It shows Accumulo joins are bound by the servers, not the client;
      - the type check without a regex (O20) and RocksDB key decoding (O19): on RocksDB, range scans are 23 to 31 % faster and joins 13 to 19 %.
@@ -78,11 +78,15 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
    - O14 makes a selective value condition the driver of its star: `class-value` 3,964 → 151 ms on Accumulo, `class-value-int` 1,796 → 408 ms (section 4.8). With O25 a condition most values pass leaves the star to its constant patterns.
    - O24 reads the merges' lists as subjects only, in 4 slices of the subject space on threads of their own: `class-large` 109 → 67 ms on Accumulo, 94 → 30 ms on RocksDB (section 4.9).
    - O23 keeps an optional entity index, sharded by subject, and the store intersects a star's lists in each shard: in Accumulo's tablet servers, with native seeks on RocksDB. Stars are 2.3 to 4 times faster on the benchmark, with 15 to 160 times fewer cells reaching the client. Counts, of a star or of one pattern such as a class's size, are 2.7 to 4.2 times faster on Accumulo, which returns one cell per shard. Value stars are 5 to 10 % slower. It costs 17 % more disk and about a fifth of the load rate (section 4.10). HBase still intersects on the client: a coprocessor endpoint when HBase at 10^12 is active (D14). Hash versus subject-range shards is open until M3.
-6. **IRI prefix codes: measured (M9), and deferred.**
+6. **A step up: 100M triples, bigger than memory (section 4.11).**
+   - What scales as designed: selective queries don't depend on the store's size, and ranges, index searches and the entity index's stars grow with what they read or less.
+   - Lookups that miss the page cache cost about 4 times more (19 against 4.8 µs on local NVMe). At 10^12 most do, so queries bound by lookups should be planned with that figure.
+   - Two defects, fixed: O25's fixed cap of 10,000 misplanned value stars (now relative to the star, `class-value-int` 510 → 224 ms), and O24's slices stopped running in parallel when no lookups followed (now one shared queue, 3.7 times faster than one slice).
+7. **IRI prefix codes: measured (M9), and deferred.**
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
-7. **Whole-table operations and planning at scale (O4 to O6, O8, O9).**
-8. **Deferred:** the load work (O2, O3, O10, M2, M6), and with it the 1T runs. Dictionary encoding (O11) and an analytics engine (O12) stay conditional.
+8. **Whole-table operations and planning at scale (O4 to O6, O8, O9).**
+9. **Deferred:** the load work (O2, O3, O10, M2, M6), and with it the 1T runs. Dictionary encoding (O11) and an analytics engine (O12) stay conditional.
 
 **Dictionary encoding comes late on purpose (R1, section 5.1).**
 - The statement tables send 446 B per triple (0.5 PB at 1T), but compress about 7× on disk.
@@ -154,8 +158,8 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O21 | **One range per subject:** when a window looks up two or more links of the same subject in `spo`, it reads the subject's range once and lets `BatchLookup`'s exact matching keep the cells asked for. A batch whose subject ranges return more than 64 cells per subject plus 1,024 is re-read one range per link (section 6.8) | R2 | measured (M8): `star-in` 17,594 → 8,799 ranges but 25,445 → 103,265 cells; `star-optional` 7,601 → 2,537 ranges, 9,345 → 28,772 cells. Accumulo: no change beyond noise. RocksDB: +64 % and +49 %. So `query.join.subjectranges` is **off by default**. Untested hypothesis: on a cold cache a seek is a block read and the extra cells are in the same block (M3) | M8 | 1 | Built, off by default |
 | O22 | **Merge joins of subject-sorted ranges:** for a star with constant objects (`?x a :Person ; :worksFor :Acme ; :nationality :IT`), each pattern is a `po` range sorted by subject. Stream them side by side and intersect, instead of one lookup per row. The subject space is sliced so several slices are intersected at once (section 6.10) | R2 | measured on M10's class stars (section 4.7): 3 to 10 times faster than a lookup per driver row on the Accumulo test cluster, `class-large` 1,446 → 137 ms | M10 | 1 | Done: `SubjectMergeJoin`, on by default with a ratio per backend (35 Accumulo, 20 HBase, 8 RocksDB); measured in section 4.7. Slices in parallel and subject-only reads are O24 |
 | O23 | **Stars evaluated in the servers:** an optional subject-partitioned table, maintained like an index. A shard holds, per predicate and object, the sorted subjects of its share of the store. A server-side iterator (Accumulo) or coprocessor (HBase) intersects a star's lists inside every shard in parallel, and returns only the matching subjects (section 6.10) | R2 | the distributed join for "all entities matching X" (D1). To be measured against O22 | O22, D13 | 2 | Done on Accumulo and RocksDB (PR #17): the entity index (`index.entity`, storage version 1.2.0), read shard by shard by merge joins and intersected by the store (`Store.intersect`), in Accumulo's tablet servers (`tripatha.accumulo.iterators`) and with RocksDB's native seeks. The store also counts a star, or one pattern (a class's size). On the benchmark stars are 2.3 to 4 times faster, counts 2.7 to 4.2 times on Accumulo (one cell per shard back), `count-class` 4 times; value stars 5 to 10 % slower. The index costs 17 % more disk and a fifth of the load rate (section 4.10). HBase intersects on the client until a coprocessor endpoint (D14) |
-| O24 | **Merge joins, part 2:** intersect a star's lists in slices of the subject space on several threads at once (cut at `spo`'s tablet splits or at sampled subjects), and read only each cell's subject instead of decoding the whole statement (section 6.10) | R2 | O22 reads one list per pattern on one thread, and decodes every cell | O22 | 1 | Done: subjects read as bytes, no statement decoding; slices cut at `spo`'s split points (`TableAdmin.splitRows`), up to `query.join.mergeslices` (4) on threads of their own. With 4 slices merges are 1.6 to 2 times faster on Accumulo and HBase and 3 times on RocksDB (section 4.9) |
-| O25 | **A real estimate for a value range:** count the range's cells up to a cap (about 10,000) when its pattern is in a join, and use the count when the range is shorter, or assume most of the predicate when it isn't. Only the join order depends on it, so a pattern on its own needs none | R2 | O14's estimate is a fixed tenth of the predicate: `class-value-wide` (`?v > 0`, 91 % pass) is 8.2 times slower on Accumulo with it, 4.1 on RocksDB and 3.6 on HBase (section 4.8) | O14 | 1 | Done: counted up to `query.valueranges.count` (10,000) for a pattern in a join. `class-value-wide` is back within 1 to 6 % of the merge plan, and the selective stars keep their gains; a condition between the cap and the star's lists (`class-value-mid`) gets the merge plan, 1.2 to 2.75 times slower than the range would be (section 4.8) |
+| O24 | **Merge joins, part 2:** intersect a star's lists in slices of the subject space on several threads at once (cut at `spo`'s tablet splits or at sampled subjects), and read only each cell's subject instead of decoding the whole statement (section 6.10) | R2 | O22 reads one list per pattern on one thread, and decodes every cell | O22 | 1 | Done: subjects read as bytes, no statement decoding; slices cut at `spo`'s split points (`TableAdmin.splitRows`), up to `query.join.mergeslices` (4) on threads of their own. With 4 slices merges are 1.6 to 2 times faster on Accumulo and HBase and 3 times on RocksDB (section 4.9). At 100M triples the slices stalled when no lookups followed: 4 were 11 % faster than 1. Since 2026-11-18 they share one queue then: 3.7 times (section 4.11) |
+| O25 | **A real estimate for a value range:** count the range's cells up to a cap (about 10,000) when its pattern is in a join, and use the count when the range is shorter, or assume most of the predicate when it isn't. Only the join order depends on it, so a pattern on its own needs none | R2 | O14's estimate is a fixed tenth of the predicate: `class-value-wide` (`?v > 0`, 91 % pass) is 8.2 times slower on Accumulo with it, 4.1 on RocksDB and 3.6 on HBase (section 4.8) | O14 | 1 | Done: counted up to `query.valueranges.count` (10,000) for a pattern in a join. `class-value-wide` is back within 1 to 6 % of the merge plan, and the selective stars keep their gains; a condition between the cap and the star's lists (`class-value-mid`) gets the merge plan, 1.2 to 2.75 times slower than the range would be (section 4.8). Since 2026-11-18 the count stops at the shortest other pattern of the join, at most 1,000,000 cells. At 100M the fixed cap had lost `class-value-int` its plan (510 → 224 ms with the fix); `class-value-mid` now gets the range plan, 12 to 39 % faster at 10M; a wide condition pays 1 to 7.5 % for the longer count (section 4.11) |
 
 ### 2.2 Measurements
 
@@ -449,7 +453,7 @@ Measured on 2026-11-17 as variants of one run per backend: `query.valueranges` o
 
 - **The losing side is gone.** `class-value-wide`'s range reaches the cap, is estimated like its whole predicate, and the star merges its constant patterns as before O14: within 1 to 6 % of the plan with ranges off. The difference is the count's 10,000 cells.
 - **The selective stars keep their gains.** Their ranges count 924 and about 2,670 cells, under the cap, so they still drive: `class-value` is 26 times faster than with ranges off on Accumulo and 43 times on HBase.
-- **What the cap gives up:** `class-value-mid` counts past 10,000 and gets the merge plan, though its range would drive it 2.4 times faster on RocksDB, 2.75 times on HBase, and only 1.2 times on Accumulo, where its 43,907 lookups cost most. A higher cap would win it back on RocksDB and HBase, for a longer count on every wide condition in a join (about 1 µs a cell): a per-backend cap, like O22's ratio, is the next step if such conditions matter.
+- **What the cap gives up:** `class-value-mid` counts past 10,000 and gets the merge plan, though its range would drive it 2.4 times faster on RocksDB, 2.75 times on HBase, and only 1.2 times on Accumulo, where its 43,907 lookups cost most. A higher cap would win it back on RocksDB and HBase, for a longer count on every wide condition in a join (about 1 µs a cell): a per-backend cap, like O22's ratio, is the next step if such conditions matter. *(2026-11-18: the cap is now the shortest other pattern of the join, at most 1,000,000 cells, and `class-value-mid` gets the range plan: section 4.11.)*
 - **A pattern on its own isn't counted:** the range queries read the same cells with and without the count.
 - **Nothing else changes:** on RocksDB the other 15 queries read exactly the same in all three variants.
 
@@ -542,7 +546,57 @@ The Accumulo `store` variant's p90 was 45.4 ms, against 54.7 for `po`: a few slo
 
 So the estimate holds: about another copy of `po`, 23 B per triple on Accumulo, about 23 TB at 10^12 (one copy), and a fifth of the load rate. Building it on a loaded store took 18 s on RocksDB (`index.rebuild`).
 
-**Open: shards by subject range instead of hash.** At 10^12 a sorted run of 262,144 matches still spreads a window of 1,000 lookups over about 1/262 of the subject space. Shards cut at subject boundaries, as `spo`'s split points cut O24's slices, would give a merge global subject order with no sorting. That costs balance: the boundaries are fixed when the index is built, while hash shards stay even as the data grows. To be decided with the measurements at scale (M3).
+**Open: shards by subject range instead of hash.** At 10^12 a sorted run of 262,144 matches still spreads a window of 1,000 lookups over about 1/262 of the subject space. Shards cut at subject boundaries, as `spo`'s split points cut O24's slices, would give a merge global subject order with no sorting. That costs balance: the boundaries are fixed when the index is built, while hash shards stay even as the data grows. To be decided with the measurements at scale (M3). The 100M run (4.11) shows the effect already, but only while lookups miss the cache.
+
+### 4.11 A step up: 100M triples, and two fixes it showed
+
+Every figure above is at 10M triples, a store that fits in memory. On 2026-11-18 the benchmark ran on a store ten times larger, bigger than the development machine's memory (24 GB, NVMe disk), with the same code (`main` at `4ba0faf`) and the same flags as a 10M run of the same day: `bench.sh --triples 100M --entity-index --variant po:query.useindex=false --variant store:`, RocksDB, kept in `tripatha.loader/target/bench-100m`.
+- **The store:** 13,357,823 entities, 99,979,596 triples, 31.5 GB on disk against 3.3 GB at 10M: spo 5,020 MB, po 4,240, osp 4,561, eval 4,638, text 8,383, geo 193, entity 4,450 (1.05 times po).
+- **The load:** 42 minutes, 39,681 triples/s against 104,635 at 10M. The disk was nearly full and space was freed during the load, so that isn't a scaling figure. The store held 37 GB at 91 % of the load, before its compaction.
+- **Reports:** 10M `rocksdb-20261118-174040`; 100M `bench-100m/rocksdb-20261118-185126`, then `-185358` (slices), `-190056` (the cap) and `-190656` (with `iostat`).
+
+**10M → 100M, same code** (p50; the `store` variant unless noted):
+
+| Query | Rows | p50 | What grew |
+|---|---|---|---|
+| `lookup`, `chain-limit`, `type-limit` | 8, 10, 100 | 0.6 → 0.5, 0.6 → 0.5, 1.3 → 1.6 ms | nothing |
+| `range-date`, `prefix`, `range-double` | 5 → 49, 521 → 5,190, 922 → 9,262 | 0.5 → 0.5, 0.6 → 2.9, 1.2 → 6.2 ms | the range: 6.5 to 10 times the cells |
+| `text`, `geo` (indexes) | 78 → 659, 13,432 → 114,433 | 2.0 → 17.8, 135 → 1,388 ms | 8 to 10 times the rows |
+| `class-2`, `class-large` | 312 → 2,041, 14,379 → 143,823 | 3.2 → 10.7, 25.6 → 114 ms | 6.5 to 10 times the cells |
+| `class-count`, `count-class` | 1 | 25.2 → 115, 5.3 → 32.6 ms | 10 times the cells |
+| `star-in`, `chain`, `star-optional` | 7,281 → 44,734, … | 72 → 436, 19 → 198, 19 → 162 ms | 6 to 7 times the lookups |
+| `class-large` and `class-count`, `po` | 14,379 → 143,823 | 31 → 895, 31 → 890 ms | **29 times, for 10 times the cells** |
+| `class-value-int` | 201 → 2,138 | 15.3 → 547 ms | **36 times, for 10 times the rows** |
+| `class-value-mid`, `po` / `store` | 5,233 → 52,537 | 273 → 10,884 / 296 → 16,589 ms | **40 to 56 times** |
+
+**What held:** selective queries don't depend on the store's size; ranges, prefixes and the indexes' searches grow with what they read or less; stars and counts from the entity index grow slower than their cells. **What didn't** had three causes.
+
+**1. Lookups that miss the cache** (measured). In the first runs `class-value-mid`'s 574,058 lookups took 19 µs each, against 4.8 µs at 10M, and `iostat` showed about 19,000 disk reads a second (360 to 500 MB/s) through the timed runs: the store no longer fitted in the page cache. In later runs the cache held more of it (about 640 reads a second), and the same plan took 2.8 s, 4.8 µs a lookup. So the store's size doesn't make a lookup dearer, a miss does: about 4 times on a local NVMe disk, in process. At 10^12 most lookups miss (section 5.8), so queries bound by lookups (joins, value stars, attributes) should be planned with the missing figure. Two effects showed only while lookups missed:
+- the joins grew 1.0 to 1.5 times faster than their lookups, against 0.9 to 1.3 times with the cache warm;
+- `class-value-mid` from the entity index was 50 % slower than from `po` (16.6 against 10.9 s). Its 560,000 matches exceed one sorted run (262,144), so its lookups probably make several passes over the subject space (not tested: the run size has no setting). With the cache warm the two are within 7 % (`class-value-wide`, the same plan). That is the open question of 4.10: order matters most where lookups go to disk.
+
+**2. A fixed cap in O25's estimate** (fixed). At 100M `class-value-int`'s range holds tens of thousands of cells, past the cap of 10,000, so it was estimated as its whole predicate and lost the plan. The count now stops at the estimate of the shortest other pattern of the join: a range holding that many cells is at least as long as that pattern and wouldn't drive, so counting further only costs time. `query.valueranges.count` becomes the ceiling (1,000,000), which bounds what a count reads to the client. Variants of one run, relative cap against the old fixed one (`query.valueranges.count=10000`). Reports `bench-100m/rocksdb-20261118-195356`, `rocksdb-20261118-195416`, `accumulo-20261118-201133`:
+
+| Query | RocksDB 100M, fixed → relative | RocksDB 10M | Accumulo 10M |
+|---|---|---|---|
+| `class-value-int` | 510 → **224 ms** (98,032 → 52,900 ranges) | 16.4 → 15.9 ms (same plan) | 266 → 268 ms (same plan) |
+| `class-value-mid` | 2,769 → **1,865 ms** | 284 → **174 ms** | 2,441 → **2,147 ms** |
+| `class-value-wide` | 2,786 → 2,996 ms (+7.5 %) | 284 → 298 ms (+5 %) | 2,432 → 2,462 ms (+1 %) |
+
+- `class-value-mid` now gets its range plan at 10M too (the cap's cost in 4.8): 39 % faster on RocksDB and 12 % on Accumulo, where lookups cost most.
+- The price is on conditions most values pass: their count reads up to the shortest other list (564,000 more cells at 100M) before giving up, 1 to 7.5 %.
+- **At 10^12** a ceiling of a million is too few: ranges of billions need an estimate the store makes, by counting in the servers or from a sample.
+
+**3. Merge slices that stopped running in parallel** (fixed, O24). Without the entity index, `class-large`'s 4 slices were 11 % faster than one at 100M (885 against 990 ms), against 3 times at 10M. Each slice's queue holds 8 chunks, about 4,000 matches, and the slices were emitted in subject order: at 36,000 matches a slice, the three later ones filled their queues and waited for the query thread to reach them. Now, when no lookups follow the merge, every slice feeds one queue, as the entity index's shards do, and the rows come in chunks as they are ready. When lookups follow, the slices are still emitted in order: the lookups are the slow part, and they read nearby rows. Report `bench-100m/rocksdb-20261118-195109`, 4 slices against 1:
+
+| Query (rows) | Before (4 / 1 slices) | After (4 / 1 slices) |
+|---|---|---|
+| `class-large` (143,823) | 885 / 990 ms | **258** / 943 ms (3.7×) |
+| `class-count` (1) | 867 / 982 ms | **260** / 939 ms (3.6×) |
+
+On Accumulo at 10M, where the slices' queues never filled, 4 slices still beat 1: 63.5 against 110 ms.
+
+**The whole suite after both fixes:** at 10M (`rocksdb-20261118-194151` against `-174040`) every query returns the same rows and reads the same scans, ranges and cells except `class-value-mid` (its new plan) and `class-value-wide` (its longer count). At 100M (`bench-100m/rocksdb-20261118-194955`) a before/after comparison is confounded by the cache: `class-value-wide`, with the same plan before and after, went from 12.1 to 2.8 s. The variants above, timed alternately in one run, are the measurements of the fixes.
 
 ---
 
@@ -945,7 +999,7 @@ A spike measures it before any product change: offline, on a 1B-triple sample, w
 **Where it fits:**
 - `ValueRangeOptimizer`, after `IndexSearchOptimizer` and before join ordering, replaces the pattern with a `ValueRangePattern` holding its ranges.
 - `RyaStoreQueryEngine` reads a `RyaValueRange` as one scan of `po`, with the type check as a row suffix, and the ranges one after the other.
-- **Estimate:** first the predicate's counter times 0.1, a guess without histograms, which made a condition most values pass drive its star (section 4.8). Now (O25) the ranges of a pattern in a join are counted up to `query.valueranges.count` (10,000) cells: a shorter range is estimated at its count, one that reaches the cap like its whole predicate. A cap of 0 restores the guess.
+- **Estimate:** first the predicate's counter times 0.1, a guess without histograms, which made a condition most values pass drive its star (section 4.8). Now (O25) the ranges of a pattern in a join are counted up to the estimate of the shortest other pattern of the join, and at most `query.valueranges.count` (1,000,000) cells: a shorter range is estimated at its count, one that reaches the cap like its whole predicate, since it is at least as long as another pattern and wouldn't drive. The cap was a fixed 10,000 until 2026-11-18, which misplanned at 100M triples (section 4.11). A ceiling of 0 restores the guess.
 
 **Tests:**
 - `ValueRangesTest` checks the bounds against RDF4J's own comparisons, strict and standard. It covers every narrowed type, integer, decimal, float and double constants, and the edges: NaN, ±INF, -0.0, the integer limits, rounding at 2^26 and 2^60, zone-less and sub-millisecond date-times, ill-typed constants.
@@ -1063,7 +1117,7 @@ The target workload (D1) is entities of large classes selected by several proper
     - Merging costs both lengths in sequential cells, about 1.7 µs each on the test cluster.
     - Today's batched lookups cost the driver's length in lookups, about 59 µs each.
     - So merge when the longer list is under about 35 times the driver, and look up otherwise. The ratio is a setting, measured per backend.
-  - **Slices (O24, built):** all of a star's lists are cut at the same subject boundaries, `spo`'s split points cut to their subjects (`TableAdmin.splitRows`: Accumulo's `listSplits`, HBase's region starts, RocksDB's split hints or the first rows of its SST files). Each slice is one ordered scan per pattern, opened on the query thread (so it is traced) and intersected on its own thread, which hands its matches over in chunks of 32 doubling to 1,024 and closes its own scans. The slices are emitted in subject order, so the rows and their order don't depend on the slicing.
+  - **Slices (O24, built):** all of a star's lists are cut at the same subject boundaries, `spo`'s split points cut to their subjects (`TableAdmin.splitRows`: Accumulo's `listSplits`, HBase's region starts, RocksDB's split hints or the first rows of its SST files). Each slice is one ordered scan per pattern, opened on the query thread (so it is traced) and intersected on its own thread, which hands its matches over in chunks of 32 doubling to 1,024 and closes its own scans. When lookups follow the merge, the slices are emitted in subject order, so the lookups read nearby rows; otherwise all slices feed one queue. Emitted in order, a later slice could get only its queue's chunks ahead, and at 100M triples 4 slices were 11 % faster than one (section 4.11).
   - **Subjects only (O24, built):** each cell's subject is cut from the `po` row between the known `p 00 o 00` and the type suffix, and compared as unsigned bytes (code point order). No statement is decoded, and only matches become values.
   - **Scope:** patterns in the default scope or one named graph, constant predicates and objects, one shared subject variable. Patterns with unbound objects stay batched lookups over the merge's output, as entity prefetch does today.
   - **The type check:** each list is a `po` range with its object's row suffix (O20), so a value of another type with the same data is dropped on the server, as in a single lookup.
