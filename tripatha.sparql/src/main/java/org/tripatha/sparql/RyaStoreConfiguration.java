@@ -136,6 +136,10 @@ public class RyaStoreConfiguration {
         conf.setTextIndex(props.textIndex());
         conf.setTextIndexPredicates(props.textIndexPredicates());
         conf.setGeoIndex(props.geoIndex());
+        conf.setEntityIndex(props.entityIndex());
+        if (props.entityIndexShards() != null) {
+            conf.setEntityIndexShards(props.entityIndexShards());
+        }
         conf.setRebuildIndexes(props.rebuildIndexes());
         conf.setAuths(props.sparql().authorizations().toArray(new String[0]));
         if (StringUtils.hasText(props.sparql().defaultVisibility())) {

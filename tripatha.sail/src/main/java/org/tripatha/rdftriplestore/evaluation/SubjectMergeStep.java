@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.common.iteration.LookAheadIteration;
@@ -40,9 +41,12 @@ import org.eclipse.rdf4j.query.algebra.StatementPattern;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryEvaluationStep;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.QueryEvaluationContext;
 import org.tripatha.api.domain.RyaIRI;
+import org.tripatha.api.resolver.RdfToRyaConversions;
 import org.tripatha.api.resolver.RyaToRdfConversions;
 import org.tripatha.rdftriplestore.RdfCloudTripleStoreConnection.StoreTripleSource;
+import org.tripatha.store.index.EntityIndex;
 import org.tripatha.store.trace.StoreTrace;
+import org.tripatha.store.trace.Trace;
 
 /**
  * Evaluates a {@link SubjectMergeJoin}: reads each pattern's subjects in order, one range of
@@ -63,14 +67,34 @@ import org.tripatha.store.trace.StoreTrace;
  * its own. Its matches come back in chunks through a bounded queue, and the slices are emitted in subject
  * order, so the rows are those of one slice, in the same order. The scans are all opened on the
  * query thread, so the trace reports them; a slice's thread reads its scans and closes them.
+ *
+ * <p><b>The entity index</b> (O23): when it is READY, each pattern's list is read shard by shard
+ * from it instead: every shard holds all the postings of its subjects, so the intersection of a
+ * star is the union of the shards' intersections. The shards are cut into contiguous groups, one
+ * per thread (up to {@code query.join.mergeslices}); each thread opens a shard's scans, under the
+ * query's trace ({@link StoreTrace#join}), intersects them and closes them, shard after shard.
+ * Rows then come in shard order, and in subject order within a shard.
+ *
+ * <p><b>By the store</b> (O23): when it can (Accumulo with Tripatha's iterator jar on its servers,
+ * RocksDB with native seeks), each thread's group of shards is intersected by the store instead,
+ * and only the matching subjects, with their counts, come back ({@code Store.intersect}).
  */
 final class SubjectMergeStep implements QueryEvaluationStep {
     /** Threads intersecting slices: daemons, kept a minute when idle. */
-    private static final ExecutorService SLICE_THREADS = Executors.newCachedThreadPool(r -> {
+    static final ExecutorService SLICE_THREADS = Executors.newCachedThreadPool(r -> {
         final Thread t = new Thread(r, "tripatha-merge-slice");
         t.setDaemon(true);
         return t;
     });
+    /**
+     * When lookups follow a merge read from the entity index, its matches are emitted in runs
+     * sorted by subject: a first run of 1,024 (so a LIMIT's first rows come early), then runs of
+     * up to 262,144. Shards are hash partitions, so matches come in no useful order, and a window
+     * of lookups taken from a long sorted run reads few tablets and nearby rows. Shorter runs
+     * scatter the lookups: on Accumulo, runs doubling from 1,024 made class-value-mid 2× slower.
+     */
+    private static final int FIRST_RUN = 1024;
+    private static final int MAX_RUN = 1 << 18;
     /** Chunks of matches a slice's thread may hold ahead of the query thread. */
     private static final int QUEUED = 8;
     /**
@@ -118,6 +142,12 @@ final class SubjectMergeStep implements QueryEvaluationStep {
         private int current;
         private Value subject;
         private long repeats;
+        /** The entity index's matches, from every thread as they come; null for slices of po. */
+        private FanIn shared;
+        /** Whether to emit those matches in sorted runs, and the current run. */
+        private boolean sortMatches;
+        private java.util.Iterator<Match> run;
+        private int runSize = FIRST_RUN;
 
         Merge(final BindingSet bindings) {
             this.bindings = bindings;
@@ -141,6 +171,11 @@ final class SubjectMergeStep implements QueryEvaluationStep {
 
         private void open() {
             final List<StatementPattern> patterns = node.getPatterns();
+            final EntityIndex entity = source.entityIndex();
+            if (entity != null) {
+                openShards(entity, patterns);
+                return;
+            }
             final int wanted = Math.max(1, source.getConf().getJoinMergeSlices());
             final List<byte[]> bounds = wanted > 1 ? source.subjectBoundaries(wanted) : List.of();
             slices = new ArrayList<>(bounds.size() + 1);
@@ -167,10 +202,61 @@ final class SubjectMergeStep implements QueryEvaluationStep {
             if (slices.size() > 1) {
                 tasks = new ArrayList<>(slices.size());
                 for (final Intersection slice : slices) {
-                    final SliceTask task = new SliceTask(slice);
+                    final SliceTask task = new SliceTask(List.of(() -> slice), List.of(slice), null, null,
+                            new ArrayBlockingQueue<>(QUEUED));
                     tasks.add(task);
                     SLICE_THREADS.execute(task);
                 }
+            }
+        }
+
+        /** The star read from the entity index: its shards in groups, each on a thread of its own. */
+        private void openShards(final EntityIndex entity, final List<StatementPattern> patterns) {
+            final List<byte[]> terms = entityTerms(patterns);
+            for (int i = 0; i < patterns.size(); i++) {
+                source.countLookup();
+            }
+            final List<byte[]> shards = entity.shardRows();
+            final int threads = Math.max(1, Math.min(source.getConf().getJoinMergeSlices(), shards.size()));
+            final boolean byStore = source.entityIntersectsInServers();
+            final Trace trace = StoreTrace.current();
+            final String reason = "merge join: the subjects of " + patterns.size() + " constant patterns on ?"
+                    + node.getSubjectName() + (byStore ? ", intersected by the store" : ", intersected shard by shard")
+                    + " in the entity index (" + shards.size() + " shards, " + threads + " threads)";
+            slices = List.of();
+            sortMatches = lookupsFollow(node);
+            // Shards are hash partitions: their order doesn't matter, so every thread feeds one queue.
+            final BlockingQueue<Object> queue = new ArrayBlockingQueue<>(QUEUED * threads);
+            shared = new FanIn(queue, threads);
+            tasks = new ArrayList<>(threads);
+            for (int t = 0; t < threads; t++) {
+                final List<byte[]> group = shards.subList(t * shards.size() / threads, (t + 1) * shards.size() / threads);
+                final List<Supplier<Unit>> units = new ArrayList<>();
+                if (byStore) {
+                    // The whole group in one call: the store intersects its shards (in its servers, or with seeks).
+                    units.add(() -> new Matches(source.entityMatches(group, terms)));
+                    tasks.add(new SliceTask(units, List.of(), trace, reason, queue));
+                    continue;
+                }
+                for (final byte[] shard : group) {
+                    units.add(() -> {
+                        final List<CloseableIteration<byte[]>> lists = new ArrayList<>(terms.size());
+                        final Intersection intersection = new Intersection(lists);
+                        try {
+                            for (final byte[] term : terms) {
+                                lists.add(source.entitySubjects(shard, term));
+                            }
+                        } catch (final RuntimeException e) {
+                            intersection.closeQuietly(e);
+                            throw e;
+                        }
+                        return intersection;
+                    });
+                }
+                tasks.add(new SliceTask(units, List.of(), trace, reason, queue));
+            }
+            for (final SliceTask task : tasks) {
+                SLICE_THREADS.execute(task);
             }
         }
 
@@ -185,6 +271,15 @@ final class SubjectMergeStep implements QueryEvaluationStep {
                 repeats = only.repeats();
                 return true;
             }
+            if (shared != null) {
+                final Match match = sortMatches ? nextSorted() : shared.take();
+                if (match == null) {
+                    return false;
+                }
+                subject = value(match.subject());
+                repeats = match.repeats();
+                return true;
+            }
             while (current < tasks.size()) {
                 final Match match = tasks.get(current).take();
                 if (match == null) {
@@ -196,6 +291,40 @@ final class SubjectMergeStep implements QueryEvaluationStep {
                 return true;
             }
             return false;
+        }
+
+        /**
+         * Whether lookups follow the merge: it is a join's or an OPTIONAL's left side, maybe
+         * under filters and BINDs. Then they get subject order.
+         */
+        private static boolean lookupsFollow(final SubjectMergeJoin merge) {
+            org.eclipse.rdf4j.query.algebra.QueryModelNode child = merge;
+            org.eclipse.rdf4j.query.algebra.QueryModelNode parent = merge.getParentNode();
+            while (parent instanceof org.eclipse.rdf4j.query.algebra.Filter
+                    || parent instanceof org.eclipse.rdf4j.query.algebra.Extension) {
+                child = parent;
+                parent = parent.getParentNode();
+            }
+            return (parent instanceof org.eclipse.rdf4j.query.algebra.Join join && join.getLeftArg() == child)
+                    || (parent instanceof org.eclipse.rdf4j.query.algebra.LeftJoin left && left.getLeftArg() == child);
+        }
+
+        /** The next match of the current sorted run, reading the next run when it is done; null at the end. */
+        private Match nextSorted() {
+            if (run == null || !run.hasNext()) {
+                final List<Match> batch = new ArrayList<>(runSize);
+                Match match;
+                while (batch.size() < runSize && (match = shared.take()) != null) {
+                    batch.add(match);
+                }
+                if (batch.isEmpty()) {
+                    return null;
+                }
+                batch.sort((a, b) -> Arrays.compareUnsigned(a.subject(), b.subject()));
+                run = batch.iterator();
+                runSize = MAX_RUN;
+            }
+            return run.next();
         }
 
         @Override
@@ -220,6 +349,16 @@ final class SubjectMergeStep implements QueryEvaluationStep {
         }
     }
 
+    /** The entity index's terms of a star's constant patterns. */
+    static List<byte[]> entityTerms(final List<StatementPattern> patterns) {
+        final List<byte[]> terms = new ArrayList<>(patterns.size());
+        for (final StatementPattern sp : patterns) {
+            terms.add(EntityIndex.term(RdfToRyaConversions.convertIRI((IRI) sp.getPredicateVar().getValue()),
+                    RdfToRyaConversions.convertValue(sp.getObjectVar().getValue())));
+        }
+        return terms;
+    }
+
     private static Value value(final byte[] subject) {
         return RyaToRdfConversions.convertResource(new RyaIRI(new String(subject, StandardCharsets.UTF_8)));
     }
@@ -235,11 +374,67 @@ final class SubjectMergeStep implements QueryEvaluationStep {
     /** The end of a slice's matches. */
     private static final Object END = new Object();
 
+    /** A source of matches: subjects with the rows each gives. Used by one thread at a time. */
+    interface Unit {
+        /** @return false when there is no match left */
+        boolean advance();
+
+        byte[] subject();
+
+        long repeats();
+
+        /** Closes what the unit reads; returns the first failure, added to {@code failure} when there is one. */
+        RuntimeException closeQuietly(RuntimeException failure);
+    }
+
+    /** The matches a store intersected ({@code Store.intersect}). */
+    static final class Matches implements Unit {
+        private final CloseableIteration<EntityIndex.Match> matches;
+        private EntityIndex.Match current;
+
+        Matches(final CloseableIteration<EntityIndex.Match> matches) {
+            this.matches = matches;
+        }
+
+        @Override
+        public boolean advance() {
+            if (!matches.hasNext()) {
+                return false;
+            }
+            current = matches.next();
+            return true;
+        }
+
+        @Override
+        public byte[] subject() {
+            return current.subject();
+        }
+
+        @Override
+        public long repeats() {
+            return current.count();
+        }
+
+        @Override
+        public RuntimeException closeQuietly(final RuntimeException failure) {
+            try {
+                matches.close();
+                return failure;
+            } catch (final RuntimeException e) {
+                if (failure == null) {
+                    return e;
+                }
+                failure.addSuppressed(e);
+                return failure;
+            }
+        }
+    }
+
     /**
      * The subjects every list of one slice has, in order, each with the product of its counts in
      * the lists. Used by one thread at a time.
      */
-    static final class Intersection {
+    static final class Intersection implements Unit {
         private final List<CloseableIteration<byte[]>> lists;
         private byte[][] heads;
         private byte[] subject;
@@ -249,11 +444,13 @@ final class SubjectMergeStep implements QueryEvaluationStep {
             this.lists = lists;
         }
 
-        byte[] subject() {
+        @Override
+        public byte[] subject() {
             return subject;
         }
 
-        long repeats() {
+        @Override
+        public long repeats() {
             return repeats;
         }
 
@@ -263,7 +460,8 @@ final class SubjectMergeStep implements QueryEvaluationStep {
          *
          * @return false when a list has run out
          */
-        boolean advance() {
+        @Override
+        public boolean advance() {
             if (heads == null) {
                 heads = new byte[lists.size()][];
                 for (int i = 0; i < heads.length; i++) {
@@ -315,7 +513,8 @@ final class SubjectMergeStep implements QueryEvaluationStep {
         }
 
         /** Closes every list; returns the first failure, added to {@code failure} when there is one. */
-        RuntimeException closeQuietly(RuntimeException failure) {
+        @Override
+        public RuntimeException closeQuietly(RuntimeException failure) {
             for (final CloseableIteration<byte[]> it : lists) {
                 try {
                     it.close();
@@ -332,12 +531,70 @@ final class SubjectMergeStep implements QueryEvaluationStep {
     }
 
     /**
-     * One slice intersected on a thread of its own. Whoever claims it first owns its scans: its
-     * thread when it starts, or the query thread when the merge is closed before it started.
+     * The chunks of several tasks that share one queue, in the order they come, for the query
+     * thread: each task ends with its own {@code END}.
+     */
+    private static final class FanIn {
+        private final BlockingQueue<Object> queue;
+        private int running;
+        private List<Match> chunk = List.of();
+        private int read;
+
+        FanIn(final BlockingQueue<Object> queue, final int tasks) {
+            this.queue = queue;
+            this.running = tasks;
+        }
+
+        /** @return the next match of any task, or null when every task has ended */
+        @SuppressWarnings("unchecked")
+        Match take() {
+            while (true) {
+                if (read < chunk.size()) {
+                    return chunk.get(read++);
+                }
+                if (running == 0) {
+                    return null;
+                }
+                final Object item;
+                try {
+                    item = queue.take();
+                } catch (final InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new QueryEvaluationException("Interrupted while merging", e);
+                }
+                if (item == END) {
+                    running--;
+                } else if (item instanceof List<?> next) {
+                    chunk = (List<Match>) next;
+                    read = 0;
+                } else if (item instanceof Failure f) {
+                    running = 0;
+                    if (f.cause() instanceof RuntimeException r) {
+                        throw r;
+                    }
+                    if (f.cause() instanceof Error err) {
+                        throw err;
+                    }
+                    throw new QueryEvaluationException(f.cause());
+                } else {
+                    throw new IllegalStateException("Unexpected item: " + item);
+                }
+            }
+        }
+    }
+
+    /**
+     * Units of work (slices, or shards of the entity index) intersected one after the other on a
+     * thread of its own. Whoever claims the task first owns its scans: its thread when it starts,
+     * or the query thread when the merge is closed before it started.
      */
     private static final class SliceTask implements Runnable {
-        private final Intersection slice;
-        private final BlockingQueue<Object> queue = new ArrayBlockingQueue<>(QUEUED);
+        private final List<Supplier<Unit>> units;
+        /** Units opened on the query thread, closed by whoever owns them. */
+        private final List<? extends Unit> preopened;
+        private final Trace trace;
+        private final String reason;
+        private final BlockingQueue<Object> queue;
         /** The chunk the query thread is reading, and where in it. */
         private List<Match> chunk = List.of();
         private int read;
@@ -345,8 +602,19 @@ final class SubjectMergeStep implements QueryEvaluationStep {
         private final AtomicBoolean stopped = new AtomicBoolean();
         private final CountDownLatch done = new CountDownLatch(1);
 
-        SliceTask(final Intersection slice) {
-            this.slice = slice;
+        /**
+         * @param preopened the units already opened (closed here if never reached)
+         * @param trace the trace the units' scans report to, or null when they are opened traced already
+         * @param reason the reason those scans give
+         * @param queue where its chunks go: its own, or one it shares with tasks read through a {@link FanIn}
+         */
+        SliceTask(final List<Supplier<Unit>> units, final List<? extends Unit> preopened, final Trace trace,
+                final String reason, final BlockingQueue<Object> queue) {
+            this.queue = queue;
+            this.units = units;
+            this.preopened = preopened;
+            this.trace = trace;
+            this.reason = reason;
         }
 
         @Override
@@ -354,15 +622,25 @@ final class SubjectMergeStep implements QueryEvaluationStep {
             if (!claimed.compareAndSet(false, true)) {
                 return;
             }
-            try {
+            Unit current = null;
+            int next = 0;
+            try (StoreTrace.Scope joined = StoreTrace.join(trace, reason)) {
                 int size = FIRST_CHUNK;
                 List<Match> matches = new ArrayList<>(size);
-                while (!stopped.get() && slice.advance()) {
-                    matches.add(new Match(slice.subject(), slice.repeats()));
-                    if (matches.size() >= size) {
-                        put(matches);
-                        size = Math.min(MAX_CHUNK, size * 2);
-                        matches = new ArrayList<>(size);
+                while (!stopped.get() && next < units.size()) {
+                    current = units.get(next++).get();
+                    while (!stopped.get() && current.advance()) {
+                        matches.add(new Match(current.subject(), current.repeats()));
+                        if (matches.size() >= size) {
+                            put(matches);
+                            size = Math.min(MAX_CHUNK, size * 2);
+                            matches = new ArrayList<>(size);
+                        }
+                    }
+                    final RuntimeException failure = current.closeQuietly(null);
+                    current = null;
+                    if (failure != null) {
+                        throw failure;
                     }
                 }
                 if (!matches.isEmpty()) {
@@ -372,9 +650,11 @@ final class SubjectMergeStep implements QueryEvaluationStep {
             } catch (final Throwable t) {
                 put(new Failure(t));
             } finally {
-                final RuntimeException failure = slice.closeQuietly(null);
-                if (failure != null && !stopped.get()) {
-                    put(new Failure(failure));
+                if (current != null) {
+                    current.closeQuietly(null);
+                }
+                for (int i = next; i < preopened.size(); i++) {
+                    preopened.get(i).closeQuietly(null);
                 }
                 done.countDown();
             }
@@ -425,12 +705,15 @@ final class SubjectMergeStep implements QueryEvaluationStep {
             throw new IllegalStateException("Unexpected item: " + item);
         }
 
-        /** Stops the slice and waits until its scans are closed. */
+        /** Stops the task and waits until its scans are closed. */
         void stop() {
             stopped.set(true);
             if (claimed.compareAndSet(false, true)) {
-                // Never started: its scans are ours to close.
-                final RuntimeException failure = slice.closeQuietly(null);
+                // Never started: the scans opened for it are ours to close.
+                RuntimeException failure = null;
+                for (final Unit unit : preopened) {
+                    failure = unit.closeQuietly(failure);
+                }
                 done.countDown();
                 if (failure != null) {
                     throw failure;

@@ -73,7 +73,7 @@ public class DatatypeMarkersIT extends StoreITBase {
     @Test
     public void aStoreCreatedNowHasCompleteMarkersAndTheNewVersion() {
         assertTrue(dao.hasDatatypeMarkers());
-        assertEquals(RdfCloudTripleStoreConstants.VERSION.stringValue(), dao.getVersion());
+        assertEquals(RdfCloudTripleStoreConstants.VERSION_WITH_MARKERS, dao.getVersion());
     }
 
     @Test
@@ -146,7 +146,7 @@ public class DatatypeMarkersIT extends StoreITBase {
     public void aPurgeKeepsTheVersionAndTheFlag() {
         dao.add(statement(S, AGE, new RyaType(XSD.INT, "40"), null, null));
         dao.purge(conf);
-        assertEquals(RdfCloudTripleStoreConstants.VERSION.stringValue(), dao.getVersion());
+        assertEquals(RdfCloudTripleStoreConstants.VERSION_WITH_MARKERS, dao.getVersion());
         final RyaStoreDAO again = new RyaStoreDAO(getStore(), conf);
         again.init();
         try {

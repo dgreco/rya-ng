@@ -43,6 +43,7 @@ under the License.
         <module>tripatha.api</module>
         <module>tripatha.store</module>
         <module>tripatha.accumulo</module>
+        <module>tripatha.accumulo.iterators</module>
         <module>tripatha.hbase</module>
         <module>tripatha.hbase.coprocessor</module>
         <module>tripatha.rocksdb</module>
@@ -158,6 +159,11 @@ under the License.
             <dependency>
                 <groupId>org.tripatha</groupId>
                 <artifactId>tripatha.hbase.coprocessor</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.tripatha</groupId>
+                <artifactId>tripatha.accumulo.iterators</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

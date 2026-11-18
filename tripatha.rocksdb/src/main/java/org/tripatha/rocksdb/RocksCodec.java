@@ -64,6 +64,18 @@ final class RocksCodec {
         return out;
     }
 
+    /** The start of every key of one row and family: {@code esc(row) 00 01 family 00}, the qualifier next. */
+    static byte[] familyPrefix(final byte[] row, final byte[] family) {
+        checkNoZero(family, "column family");
+        final byte[] out = new byte[escapedLength(row) + 2 + family.length + 1];
+        int pos = escape(row, out, 0);
+        out[pos++] = 0;
+        out[pos++] = 1;
+        pos = append(family, out, pos);
+        out[pos] = 0;
+        return out;
+    }
+
     private static void checkNoZero(final byte[] part, final String what) {
         for (final byte b : part) {
             if (b == 0) {

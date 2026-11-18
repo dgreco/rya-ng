@@ -617,6 +617,77 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
         }
 
         /**
+         * The entity index (SCALE-STUDY.md O23), when queries may use it: it is READY and
+         * {@code query.useindex} is on. Null otherwise.
+         */
+        public org.tripatha.store.index.EntityIndex entityIndex() {
+            if (!conf.isUseIndex() || !(ryaDAO instanceof RyaStoreDAO dao)) {
+                return null;
+            }
+            final IndexCatalog catalog = dao.getIndexCatalog();
+            return catalog.isReady(org.tripatha.store.index.IndexType.ENTITY) ? catalog.entityIndex() : null;
+        }
+
+        /**
+         * The subjects filed under {@code ?s predicate object} in one shard of the entity index,
+         * in subject order, once per statement. Safe from any thread: it only opens a scan.
+         */
+        public CloseableIteration<byte[]> entitySubjects(final byte[] shardRow, final byte[] term) {
+            if (!(ryaDAO.getQueryEngine() instanceof org.tripatha.store.query.RyaStoreQueryEngine engine)
+                    || !(conf instanceof StoreRdfConfiguration storeConf)) {
+                throw new QueryEvaluationException("The entity index needs Tripatha's store query engine");
+            }
+            try {
+                return engine.entitySubjects(shardRow, term, storeConf);
+            } catch (final RyaDAOException e) {
+                throw new QueryEvaluationException(e);
+            }
+        }
+
+        /**
+         * Whether stars read from the entity index are intersected in the servers: the index is
+         * usable and the store can (Accumulo with Tripatha's iterators, {@code query.entityindex.servers}).
+         */
+        public boolean entityIntersectsInServers() {
+            return entityIndex() != null && ryaDAO.getQueryEngine() instanceof org.tripatha.store.query.RyaStoreQueryEngine engine
+                    && conf instanceof StoreRdfConfiguration storeConf && engine.intersectsEntitiesInServers(storeConf);
+        }
+
+        /** The subjects every term has in each shard, intersected in the servers; unordered across shards. */
+        public CloseableIteration<org.tripatha.store.index.EntityIndex.Match> entityMatches(final List<byte[]> shardRows,
+                final List<byte[]> terms) {
+            if (!(ryaDAO.getQueryEngine() instanceof org.tripatha.store.query.RyaStoreQueryEngine engine)
+                    || !(conf instanceof StoreRdfConfiguration storeConf)) {
+                throw new QueryEvaluationException("The entity index needs Tripatha's store query engine");
+            }
+            storeLookups++;
+            try {
+                return engine.entityMatches(shardRows, terms, storeConf);
+            } catch (final RyaDAOException e) {
+                throw new QueryEvaluationException(e);
+            }
+        }
+
+        /** How many subjects every term has in these shards, and their rows, counted by the store. */
+        public org.tripatha.store.spi.IntersectionCount entityCount(final List<byte[]> shardRows, final List<byte[]> terms) {
+            if (!(ryaDAO.getQueryEngine() instanceof org.tripatha.store.query.RyaStoreQueryEngine engine)
+                    || !(conf instanceof StoreRdfConfiguration storeConf)) {
+                throw new QueryEvaluationException("The entity index needs Tripatha's store query engine");
+            }
+            storeLookups++;
+            try {
+                return engine.entityCount(shardRows, terms, storeConf);
+            } catch (final RyaDAOException e) {
+                throw new QueryEvaluationException(e);
+            }
+        }
+
+        /** Counts one more store lookup: for merges, whose scans other threads open. */
+        public void countLookup() {
+            storeLookups++;
+        }
+
+        /**
          * Subjects that divide the store's subjects into about {@code slices} parts, sorted by
          * their UTF-8 bytes, for a merge join read in slices; none when the store can't tell.
          */

@@ -193,6 +193,108 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
         }
     }
 
+    /**
+     * The subjects filed under one term (a predicate and an object) in one shard of the entity
+     * index (SCALE-STUDY.md O23), in subject order, once per posting: so a subject with several
+     * statements (graphs, labels) comes once per statement, as in a po range.
+     *
+     * @param shardRow the shard's row ({@code EntityIndex.shardRows})
+     * @param term the term ({@code EntityIndex.term})
+     */
+    public CloseableIteration<byte[]> entitySubjects(final byte[] shardRow, final byte[] term, StoreRdfConfiguration conf) {
+        if (conf == null) {
+            conf = configuration;
+        }
+        final ScanSpec.Builder spec = ScanSpec.builder(conf.getStoreAuths()).batchSize(conf.getBatchSize()).family(term);
+        final Long ttl = conf.getTtl();
+        if (ttl != null) {
+            final Long now = conf.getStartTime();
+            spec.timestamps((now != null ? now : System.currentTimeMillis()) - ttl, now);
+        }
+        final CellScanner cells = store.scan(conf.getTableLayoutStrategy().getEntity(), KeyRange.row(shardRow), spec.build());
+        return new CloseableIteration<>() {
+            @Override
+            public boolean hasNext() {
+                return cells.hasNext();
+            }
+
+            @Override
+            public byte[] next() {
+                return org.tripatha.store.index.EntityIndex.subject(cells.next().qualifier());
+            }
+
+            @Override
+            public void close() {
+                cells.close();
+            }
+        };
+    }
+
+    /**
+     * Whether the store intersects the entity index's shards itself: the setting is on, and the
+     * store can (Accumulo with Tripatha's iterator jar on its servers, RocksDB with native seeks).
+     */
+    public boolean intersectsEntitiesInServers(StoreRdfConfiguration conf) {
+        if (conf == null) {
+            conf = configuration;
+        }
+        return conf.isEntityIndexServers() && store.canIntersect(conf.getTableLayoutStrategy().getEntity());
+    }
+
+    /**
+     * The subjects every term has in each of these shards of the entity index, intersected by the
+     * store (SCALE-STUDY.md O23): one match per subject and shard, with the rows it gives. Only
+     * when {@link #intersectsEntitiesInServers} says so.
+     */
+    /**
+     * How many subjects {@link #entityMatches} would give for these shards, and their rows,
+     * counted by the store: in its servers on Accumulo, so only a count per shard comes back.
+     */
+    public org.tripatha.store.spi.IntersectionCount entityCount(final List<byte[]> shardRows, final List<byte[]> terms,
+            StoreRdfConfiguration conf) {
+        if (conf == null) {
+            conf = configuration;
+        }
+        return store.countIntersection(conf.getTableLayoutStrategy().getEntity(), shardRows, terms, entitySpec(conf));
+    }
+
+    /** The labels, threads and time range of a read of the entity index. */
+    private ScanSpec entitySpec(final StoreRdfConfiguration conf) {
+        final ScanSpec.Builder spec = ScanSpec.builder(conf.getStoreAuths()).threads(numThreads(conf));
+        final Long ttl = conf.getTtl();
+        if (ttl != null) {
+            final Long now = conf.getStartTime();
+            spec.timestamps((now != null ? now : System.currentTimeMillis()) - ttl, now);
+        }
+        return spec.build();
+    }
+
+    public CloseableIteration<org.tripatha.store.index.EntityIndex.Match> entityMatches(final List<byte[]> shardRows,
+            final List<byte[]> terms, StoreRdfConfiguration conf) {
+        if (conf == null) {
+            conf = configuration;
+        }
+        final CellScanner cells = store.intersect(conf.getTableLayoutStrategy().getEntity(), shardRows, terms, entitySpec(conf));
+        return new CloseableIteration<>() {
+            @Override
+            public boolean hasNext() {
+                return cells.hasNext();
+            }
+
+            @Override
+            public org.tripatha.store.index.EntityIndex.Match next() {
+                final Cell cell = cells.next();
+                return new org.tripatha.store.index.EntityIndex.Match(cell.qualifier(),
+                        Long.parseLong(new String(cell.value(), java.nio.charset.StandardCharsets.UTF_8)));
+            }
+
+            @Override
+            public void close() {
+                cells.close();
+            }
+        };
+    }
+
     /** The subject bytes of po rows {@code p 00 object 00 subject typeInfo}. */
     private static final class SubjectIterator implements CloseableIteration<byte[]> {
         private final CellScanner cells;

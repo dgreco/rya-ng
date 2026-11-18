@@ -95,6 +95,23 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
     public static final String CONF_INDEX_TEXT_PREDICATES = "index.text.predicates";
     /** Maintain the geospatial index (table {@code <prefix>geo}). */
     public static final String CONF_INDEX_GEO = "index.geo";
+    /**
+     * Maintain the entity index (table {@code <prefix>entity}, SCALE-STUDY.md O23): every
+     * statement's subject, filed under its predicate and object in one of a fixed number of
+     * shards, so that a star's constant patterns can be intersected shard by shard.
+     */
+    public static final String CONF_INDEX_ENTITY = "index.entity";
+    /**
+     * How many shards the entity index has (default 16). Part of its definition: changing it
+     * means a rebuild. A shard is one row, which no backend splits, so about one per 200 M
+     * triples of the store's expected size.
+     */
+    public static final String CONF_INDEX_ENTITY_SHARDS = "index.entity.shards";
+    /**
+     * Let the servers intersect the entity index's shards when they can (Accumulo with Tripatha's
+     * iterator jar; default true). Off, merge joins intersect the shards on the client.
+     */
+    public static final String CONF_QUERY_ENTITY_SERVERS = "query.entityindex.servers";
     /** Rebuild indexes that are not ready (enabled on existing data, or redefined) when the store starts. */
     public static final String CONF_INDEX_REBUILD = "index.rebuild";
     /** Let queries use the secondary indexes (they are still maintained when this is false). */
@@ -263,6 +280,30 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setGeoIndex(final boolean enabled) {
         setBoolean(CONF_INDEX_GEO, enabled);
+    }
+
+    public boolean isEntityIndex() {
+        return getBoolean(CONF_INDEX_ENTITY, false);
+    }
+
+    public void setEntityIndex(final boolean enabled) {
+        setBoolean(CONF_INDEX_ENTITY, enabled);
+    }
+
+    public int getEntityIndexShards() {
+        return getInt(CONF_INDEX_ENTITY_SHARDS, 16);
+    }
+
+    public void setEntityIndexShards(final int shards) {
+        setInt(CONF_INDEX_ENTITY_SHARDS, shards);
+    }
+
+    public boolean isEntityIndexServers() {
+        return getBoolean(CONF_QUERY_ENTITY_SERVERS, true);
+    }
+
+    public void setEntityIndexServers(final boolean enabled) {
+        setBoolean(CONF_QUERY_ENTITY_SERVERS, enabled);
     }
 
     public boolean isRebuildIndexes() {

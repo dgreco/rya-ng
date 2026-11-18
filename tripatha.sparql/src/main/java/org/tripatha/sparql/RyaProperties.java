@@ -50,7 +50,10 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *        default.
  * @param textIndex whether to keep the full-text index that speeds up {@code text:matches}.
  * @param textIndexPredicates the predicates whose text literals are indexed; empty for all.
- * @param geoIndex whether to keep the geospatial index that speeds up GeoSPARQL filters.
+ * @param geoIndex whether to keep the geospatial index that speeds up GeoSPARQL filters
+ * @param entityIndex whether to keep the entity index, in which stars of constant patterns are
+ *        intersected shard by shard (SCALE-STUDY.md O23).
+ * @param entityIndexShards its shard count; unset takes the count it was built with..
  * @param rebuildIndexes whether to build, at startup, indexes that don't cover the stored
  *        statements yet (turned on over existing data, or redefined).
  * @param sparql endpoint behavior.
@@ -72,6 +75,8 @@ public record RyaProperties(
         @DefaultValue("false") boolean textIndex,
         @DefaultValue List<String> textIndexPredicates,
         @DefaultValue("false") boolean geoIndex,
+        @DefaultValue("false") boolean entityIndex,
+        Integer entityIndexShards,
         @DefaultValue("false") boolean rebuildIndexes,
         @DefaultValue Sparql sparql) {
 

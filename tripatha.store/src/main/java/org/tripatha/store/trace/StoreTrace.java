@@ -36,6 +36,8 @@ import java.util.function.Supplier;
  */
 public final class StoreTrace {
     private static final ThreadLocal<Trace> CURRENT = new ThreadLocal<>();
+    /** The reason of a thread that joined another thread's trace ({@link #join}), or null. */
+    private static final ThreadLocal<String> JOINED_REASON = new ThreadLocal<>();
     /** Traces running now, for the progress thread. */
     private static final Set<Trace> ACTIVE = ConcurrentHashMap.newKeySet();
     private static final Reason NO_REASON = () -> {
@@ -113,6 +115,44 @@ public final class StoreTrace {
         static void start() {
             // Loading the class starts the thread.
         }
+    }
+
+    /**
+     * Makes this thread report to another thread's trace until the scope is closed, its scans
+     * with {@code reason}: for work a traced query hands to other threads. Closing the scope
+     * detaches the thread without finishing the trace; the thread that started it does that,
+     * after this work has ended. Does nothing when {@code trace} is null.
+     */
+    public static Scope join(final Trace trace, final String reason) {
+        if (trace == null) {
+            return () -> {
+            };
+        }
+        final Trace previous = CURRENT.get();
+        final String previousReason = JOINED_REASON.get();
+        CURRENT.set(trace);
+        JOINED_REASON.set(reason);
+        return () -> {
+            if (previous == null) {
+                CURRENT.remove();
+            } else {
+                CURRENT.set(previous);
+            }
+            if (previousReason == null) {
+                JOINED_REASON.remove();
+            } else {
+                JOINED_REASON.set(previousReason);
+            }
+        };
+    }
+
+    /**
+     * The reason a scan this thread starts reports: its own reason when it joined a trace, else
+     * the trace's open reasons.
+     */
+    static String reasonFor(final Trace trace) {
+        final String joined = JOINED_REASON.get();
+        return joined != null ? joined : trace.reason();
     }
 
     /** The trace of this thread, or null. */

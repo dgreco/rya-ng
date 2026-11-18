@@ -44,6 +44,8 @@ import org.tripatha.api.domain.RyaStatement;
 import org.tripatha.rdftriplestore.RdfCloudTripleStore;
 import org.tripatha.store.RyaStoreDAO;
 import org.tripatha.store.StoreRdfConfiguration;
+import org.tripatha.store.index.IndexType;
+import org.tripatha.store.index.IndexVerifier;
 import org.tripatha.store.trace.StoreTrace;
 import org.tripatha.store.trace.TraceEvent;
 
@@ -196,7 +198,8 @@ public class SubjectMergeIT extends RyaSailITBase {
         // The lists of the first query are within 1.5 times of each other: merged at any backend's ratio.
         final StoreRdfConfiguration conf = newConf();
         conf.unset(RdfCloudTripleStoreConfiguration.CONF_JOIN_MERGE_RATIO);
-        conf.setJoinMergeSlices(1); // the whole lists, as the count below expects
+        conf.setJoinMergeSlices(1); // the whole lists of po, as the count below expects
+        conf.setUseIndex(false);
         conf.setAuths("A");
         final SailRepository unset = new SailRepository(newStore(conf, false));
         unset.init();
@@ -288,6 +291,165 @@ public class SubjectMergeIT extends RyaSailITBase {
     }
 
     @Test
+    public void starsReadFromTheEntityIndexGiveTheAnswersOfNestedLoops() throws Exception {
+        // Built over the loaded data (BUILDING, then rebuilt: READY), in 4 shards.
+        final StoreRdfConfiguration indexed = newConf();
+        indexed.setEntityIndex(true);
+        indexed.setEntityIndexShards(4);
+        indexed.setRebuildIndexes(true);
+        newDao(indexed).destroy();
+        assertTrue(IndexVerifier.verify(getStore(), indexed, IndexType.ENTITY).isClean());
+        for (final boolean labelled : List.of(true, false)) {
+            // The index table exists now: every store opens with the index on, this one without using it.
+            final SailRepository plain = indexed(labelled, 0, 1, false, false);
+            // By the store where it can (Accumulo's servers, RocksDB's seeks), and on the client in 1 or 3 threads.
+            for (final int threads : List.of(0, 1, 3)) {
+                final boolean servers = threads == 0;
+                final SailRepository fromIndex = indexed(labelled, 1_000_000, Math.max(1, threads), true, servers);
+                for (final String query : QUERIES) {
+                    assertEquals(rows(plain, query), rows(fromIndex, query), query + (labelled ? " (label A)" : "")
+                            + ", " + threads + " threads");
+                }
+                final String[] reason = new String[1];
+                try (StoreTrace.Scope scope = StoreTrace.start(event -> {
+                    if (event instanceof TraceEvent.ScanStart scan && scan.reason().contains("merge join")) {
+                        reason[0] = scan.reason();
+                    }
+                })) {
+                    rows(fromIndex, QUERIES.get(0));
+                }
+                assertTrue(reason[0] != null && reason[0].contains("entity index"), String.valueOf(reason[0]));
+                // The store intersects on Accumulo (in its servers) and RocksDB (native seeks); HBase not yet.
+                assertEquals(servers && !onBackend("hbase"), reason[0].contains("by the store"), reason[0]);
+            }
+        }
+    }
+
+    @Test
+    public void countsOfAStarAreTheStoresWhenItIntersects() throws Exception {
+        final StoreRdfConfiguration indexed = newConf();
+        indexed.setEntityIndex(true);
+        indexed.setEntityIndexShards(4);
+        indexed.setRebuildIndexes(true);
+        newDao(indexed).destroy();
+        final String star = "?x <urn:p> <urn:A> ; <urn:q> \"x\"";
+        // Counted by the store: rows and subjects differ, the subjects of urn:g1 giving four rows each.
+        final List<String> counted = List.of(
+                "SELECT (COUNT(*) AS ?c) WHERE { " + star + " }",
+                "SELECT (COUNT(?x) AS ?c) WHERE { " + star + " }",
+                "SELECT (COUNT(DISTINCT ?x) AS ?c) WHERE { " + star + " }",
+                "SELECT (COUNT(DISTINCT *) AS ?c) WHERE { " + star + " }",
+                "SELECT (COUNT(*) AS ?c) (COUNT(DISTINCT ?x) AS ?d) WHERE { " + star + " }",
+                "SELECT (COUNT(*) AS ?c) WHERE { ?x a <urn:C> ; <urn:p> <urn:A> ; <urn:q> \"x\" }",
+                "SELECT (COUNT(*) AS ?c) WHERE { ?x <urn:p> <urn:nothing> ; <urn:q> \"x\" }",
+                "SELECT ?y ?c WHERE { ?y <urn:name> \"n0\" { SELECT (COUNT(*) AS ?c) WHERE { " + star + " } } }",
+                // HAVING adds a count of its own, under a name RDF4J makes up.
+                "SELECT (COUNT(*) AS ?c) WHERE { " + star + " } HAVING (COUNT(DISTINCT ?x) > 5)",
+                "SELECT (COUNT(*) AS ?c) WHERE { " + star + " } HAVING (COUNT(*) > 1000)");
+        // Not counted by the store: a GROUP BY, a filter, another aggregate.
+        final List<String> grouped = List.of(
+                "SELECT ?x (COUNT(*) AS ?c) WHERE { " + star + " } GROUP BY ?x",
+                "SELECT (COUNT(*) AS ?c) WHERE { " + star + " FILTER(?x != <urn:s0>) }",
+                "SELECT (COUNT(*) AS ?c) (SUM(1) AS ?s) WHERE { " + star + " }",
+                "SELECT ?x ?n WHERE { ?x <urn:name> ?n FILTER EXISTS { SELECT (COUNT(*) AS ?c) WHERE { " + star + " } } }");
+        final boolean storeCounts = !onBackend("hbase");
+        for (final boolean labelled : List.of(true, false)) {
+            final SailRepository plain = indexed(labelled, 0, 1, false, false);
+            // The shards counted on the query thread, or in groups on 3 threads.
+            for (final int threads : List.of(1, 3)) {
+                final SailRepository fromIndex = indexed(labelled, 1_000_000, threads, true, true);
+                final String which = (labelled ? " (label A)" : "") + ", " + threads + " threads";
+                for (final String query : counted) {
+                    assertEquals(rows(plain, query), rows(fromIndex, query), query + which);
+                    final List<String> reasons = reasons(fromIndex, query);
+                    assertEquals(storeCounts, reasons.stream().anyMatch(r -> r.startsWith("count:")), query + which + ": " + reasons);
+                    assertEquals(!storeCounts, reasons.stream().anyMatch(r -> r.startsWith("merge join")),
+                            query + which + ": " + reasons);
+                }
+                for (final String query : grouped) {
+                    assertEquals(rows(plain, query), rows(fromIndex, query), query + which);
+                    assertFalse(reasons(fromIndex, query).stream().anyMatch(r -> r.startsWith("count:")), query + which);
+                }
+            }
+        }
+        // The counts themselves, without the label: 11 subjects, 8 of them also in urn:g1 (every sixth,
+        // one of the odd ones too), where each gives 2 × 2 rows: 8 × 4 + 3 = 35 rows.
+        assertEquals(List.of("c=\"35\"^^<http://www.w3.org/2001/XMLSchema#integer> d=\"11\"^^<http://www.w3.org/2001/XMLSchema#integer> "),
+                rows(indexed(false, 1_000_000, 1, true, true), counted.get(4)));
+    }
+
+    /** The reasons of the scans a query makes. */
+    private static List<String> reasons(final SailRepository repo, final String query) {
+        // Scans of other threads report here too.
+        final List<String> reasons = Collections.synchronizedList(new ArrayList<>());
+        try (StoreTrace.Scope scope = StoreTrace.start(event -> {
+            if (event instanceof TraceEvent.ScanStart scan && scan.reason() != null) {
+                reasons.add(scan.reason());
+            }
+        })) {
+            rows(repo, query);
+        }
+        synchronized (reasons) {
+            return List.copyOf(reasons);
+        }
+    }
+
+    @Test
+    public void manyMatchesFromTheEntityIndexAreJoinedInSortedRuns() throws Exception {
+        // 3,000 more matches: more than the first sorted run (1,024) holds.
+        final SailRepository repo = repository(false, 0);
+        try (RepositoryConnection conn = repo.getConnection()) {
+            conn.begin();
+            for (int i = 0; i < 3000; i++) {
+                final IRI s = VF.createIRI(String.format("urn:m%05d", (i * 7919) % 3000));
+                conn.add(s, P, A);
+                conn.add(s, Q, VF.createLiteral("x"));
+                if (i % 10 == 0) {
+                    conn.add(s, Q, VF.createLiteral("x"), G1); // two rows for this match
+                }
+                conn.add(s, NAME, VF.createLiteral("m" + i));
+            }
+            conn.commit();
+        }
+        final StoreRdfConfiguration indexed = newConf();
+        indexed.setEntityIndex(true);
+        indexed.setEntityIndexShards(4);
+        indexed.setRebuildIndexes(true);
+        newDao(indexed).destroy();
+        final String query = "SELECT ?x ?n WHERE { ?x <urn:p> <urn:A> ; <urn:q> \"x\" ; <urn:name> ?n }";
+        final List<String> expected = rows(indexed(false, 0, 1, false, false), query);
+        assertTrue(expected.size() > 3300, String.valueOf(expected.size()));
+        for (final int threads : List.of(0, 1, 3)) {
+            final SailRepository fromIndex = indexed(false, 1_000_000, Math.max(1, threads), true, threads == 0);
+            assertEquals(expected, rows(fromIndex, query), threads + " threads");
+            // The first run's matches come in subject order, and so do the rest's, in one run.
+            final List<String> matches = new ArrayList<>();
+            for (final String row : rowsInOrder(fromIndex, query)) {
+                final String x = row.substring(row.indexOf("x=") + 2, row.indexOf(' ', row.indexOf("x=")));
+                if (matches.isEmpty() || !matches.get(matches.size() - 1).equals(x)) {
+                    matches.add(x);
+                }
+            }
+            for (final List<String> run : List.of(matches.subList(0, 1024), matches.subList(1024, matches.size()))) {
+                // In the stored order: UTF-8 bytes, which isn't String's for the odd subjects.
+                final List<String> sorted = new ArrayList<>(run);
+                sorted.sort((a, b) -> java.util.Arrays.compareUnsigned(a.getBytes(StandardCharsets.UTF_8),
+                        b.getBytes(StandardCharsets.UTF_8)));
+                assertEquals(sorted, run, threads + " threads");
+            }
+            try (RepositoryConnection conn = fromIndex.getConnection();
+                    TupleQueryResult result = conn.prepareTupleQuery(query + " LIMIT 5").evaluate()) {
+                int n = 0;
+                while (result.hasNext()) {
+                    result.next();
+                    n++;
+                }
+                assertEquals(5, n);
+            }
+        }
+    }
+
+    @Test
     public void slicedMergesGiveTheRowsOfOneSliceInTheSameOrder() throws Exception {
         for (final boolean labelled : List.of(true, false)) {
             final SailRepository plain = repository(labelled, 0, false, 1);
@@ -351,10 +513,30 @@ public class SubjectMergeIT extends RyaSailITBase {
         final StoreRdfConfiguration conf = newConf();
         conf.setJoinMergeRatio(mergeRatio);
         conf.setJoinMergeSlices(slices == null ? 1 : slices);
+        // The lists of po, whose scans these tests count, even when -Dtripatha.test.indexes keeps the entity index.
+        conf.setUseIndex(false);
         if (labelled) {
             conf.setAuths("A");
         }
         final SailRepository repo = new SailRepository(newStore(conf, inference));
+        repo.init();
+        repositories.add(repo);
+        return repo;
+    }
+
+    /** A store with the entity index on, used by queries or not, intersected in the servers or not. */
+    private SailRepository indexed(final boolean labelled, final double mergeRatio, final int threads, final boolean useIndex,
+            final boolean servers) {
+        final StoreRdfConfiguration conf = newConf();
+        conf.setEntityIndex(true);
+        conf.setEntityIndexServers(servers);
+        conf.setJoinMergeRatio(mergeRatio);
+        conf.setJoinMergeSlices(threads);
+        conf.setUseIndex(useIndex);
+        if (labelled) {
+            conf.setAuths("A");
+        }
+        final SailRepository repo = new SailRepository(newStore(conf, false));
         repo.init();
         repositories.add(repo);
         return repo;

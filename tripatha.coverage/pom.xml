@@ -48,6 +48,10 @@
         </dependency>
         <dependency>
             <groupId>org.tripatha</groupId>
+            <artifactId>tripatha.accumulo.iterators</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.tripatha</groupId>
             <artifactId>tripatha.hbase</artifactId>
         </dependency>
         <dependency>

@@ -65,8 +65,17 @@ final class RocksScan implements CellScanner {
         this.counters = database.isCounters(table);
         this.spec = spec;
         this.bounds = new ArrayList<>(ranges.size());
+        // One row and one family: seek to that family's keys instead of reading the row's every cell.
+        final byte[] onlyFamily = spec.families().size() == 1 && spec.columns().isEmpty() ? spec.families().get(0) : null;
         for (final KeyRange r : ranges) {
-            bounds.add(new byte[][] {RocksCodec.lowerBound(r), RocksCodec.upperBound(r)});
+            if (onlyFamily != null && r.kind() == KeyRange.Kind.ROW) {
+                final byte[] lower = RocksCodec.familyPrefix(r.start(), onlyFamily);
+                final byte[] upper = lower.clone();
+                upper[upper.length - 1] = 1; // esc(row) 00 01 family 01: above every key of the family
+                bounds.add(new byte[][] {lower, upper});
+            } else {
+                bounds.add(new byte[][] {RocksCodec.lowerBound(r), RocksCodec.upperBound(r)});
+            }
         }
         this.rowRegex = spec.rowRegex() == null ? null : Pattern.compile(spec.rowRegex());
         this.rowSuffix = spec.rowSuffix();

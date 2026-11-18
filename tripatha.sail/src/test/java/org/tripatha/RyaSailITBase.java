@@ -41,7 +41,7 @@ public abstract class RyaSailITBase extends StoreITBase {
     /**
      * @return a configuration that points at this test's tables. System properties change every
      *         test that uses it: {@code -Dtripatha.test.joinBatchSize=2} sets the join batch size, and
-     *         {@code -Dtripatha.test.indexes=true} turns on the text and geo indexes (each test then
+     *         {@code -Dtripatha.test.indexes=true} turns on the text, geo and entity indexes (each test then
      *         checks that the indexes match the stored statements), and
      *         {@code -Dtripatha.test.mergeRatio=1000000} merges every star of constant patterns
      *         (O22), whatever their lengths.
@@ -60,6 +60,8 @@ public abstract class RyaSailITBase extends StoreITBase {
         if (Boolean.getBoolean("tripatha.test.indexes")) {
             conf.setTextIndex(true);
             conf.setGeoIndex(true);
+            conf.setEntityIndex(true);
+            conf.setEntityIndexShards(4);
         }
         return conf;
     }

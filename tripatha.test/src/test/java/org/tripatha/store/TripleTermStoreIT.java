@@ -154,7 +154,9 @@ class TripleTermStoreIT extends StoreITBase {
         assertEquals(1, query(new RyaStatement(null, null, text)).size());
         assertEquals(2, count(CARDINALITY_OF.OBJECT, bob));
         for (final IndexType type : IndexType.values()) {
-            assertTrue(IndexVerifier.verify(getStore(), conf, type).isClean(), type.toString());
+            if (type.isEnabled(conf)) {
+                assertTrue(IndexVerifier.verify(getStore(), conf, type).isClean(), type.toString());
+            }
         }
 
         // An exact delete removes that term's statements only.

@@ -73,11 +73,11 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
      - the benchmark's two blind spots (M8): it now reports CPU apart from waiting, and compares settings within one run. It shows Accumulo joins are bound by the servers, not the client;
      - the type check without a regex (O20) and RocksDB key decoding (O19): on RocksDB, range scans are 23 to 31 % faster and joins 13 to 19 %.
    - **Then,** if the split profile supports them: more lookups in flight (O16), less client work per cell (O17), and parallel reads of one large range (O7).
-5. **"All entities matching X" (D1): class stars in the benchmark (M10), merge joins (O22) and value ranges (O14) done.**
+5. **"All entities matching X" (D1): class stars in the benchmark (M10), merge joins (O22), value ranges (O14) and stars in the servers (O23) done.**
    - O22 reads a star's constant patterns as subject-sorted `po` ranges and intersects them. On the Accumulo test cluster that is 3 to 10 times faster than one lookup per driver row: `class-large` 1,446 → 137 ms, `class-2` 267 → 47 ms. On RocksDB, where a lookup is cheap, it gains only for lists of similar lengths, so the ratio that decides is per backend (section 4.7).
    - O14 makes a selective value condition the driver of its star: `class-value` 3,964 → 151 ms on Accumulo, `class-value-int` 1,796 → 408 ms (section 4.8). With O25 a condition most values pass leaves the star to its constant patterns.
    - O24 reads the merges' lists as subjects only, in 4 slices of the subject space on threads of their own: `class-large` 109 → 67 ms on Accumulo, 94 → 30 ms on RocksDB (section 4.9).
-   - Stars in the servers (O23): D13 decided (a), next. On these queries the client's merge reads 50k to 400k cells in 50 to 140 ms on Accumulo, so the transfer of the lists is not the limit at 10M; it is with lists of billions.
+   - O23 keeps an optional entity index, sharded by subject, and the store intersects a star's lists in each shard: in Accumulo's tablet servers, with native seeks on RocksDB. Stars are 2.3 to 4 times faster on the benchmark, with 15 to 160 times fewer cells reaching the client. Counts are 2.7 to 4.2 times faster on Accumulo, which returns one cell per shard. Value stars are 5 to 10 % slower. It costs 17 % more disk and about a fifth of the load rate (section 4.10). HBase still intersects on the client: a coprocessor endpoint when HBase at 10^12 is active (D14). Hash versus subject-range shards is open until M3.
 6. **IRI prefix codes: measured (M9), and deferred.**
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
@@ -108,6 +108,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | D11 | IRI prefix codes in the stored keys | (a) decide after M9, on the criteria of section 6.9; (b) start now; (c) never | (a), and M9 says **not now**: −4 to −5 % on disk is far below the bar. The cache gain (−25 to −35 %) is worth revisiting if a cluster shows lookups bound by cache misses (M3) | |
 | D12 | Datatype markers for O14 (section 6.7) | (a) write them on every add from now on, flag new stores, rebuild old stores with O5; (b) no markers, so no O14 | (a) if range filters on numbers and dates matter to the workload. They cost one more `eval` cell per single-statement insert, cover new stores only until a rebuild, and forbid writes from older versions into flagged stores | 2026-11-16: **(a), with a storage-version check.** The workload's value conditions need O14. The DAO gets a version check: the markers raise the storage version, and a DAO refuses to write to a store whose version is newer than its own (older stores stay writable). Today it writes the version when missing and never checks it. A rebuild command for older stores comes with O5. O14 comes after O22 |
 | D13 | The subject-partitioned table of O23 | (a) an optional table like the text and geo indexes, with Tripatha server code on the tablet servers (an Accumulo iterator jar, an HBase coprocessor); (b) none, so stars stay with O22 on the client | decide after O22 is measured: (a) only if the client's intersection is the limit. It costs about another copy of `po` on disk and in writes, and an iterator jar to deploy | 2026-11-17: **(a).** At 10M the client is not the limit (`class-large` merges 247,677 cells in 137 ms on Accumulo). At 10^12 it is: the lists of large classes and common values grow about 10^5 times, so `class-large`'s merge would read about 25 billion cells, some 4 hours on one thread, every cell crossing to one client, and `class-count` the same to return one number. In the servers each shard is intersected in parallel, with seeks that skip what can't match, and only matches or counts come back. It pays for counts, `LIMIT`s and intersections much smaller than their lists. **How:** optional and off by default, like the text and geo indexes; built after O25 and O24; Accumulo first, the same shards on local threads for RocksDB, HBase after. The benchmark gets counts and selective intersections of long lists; proving the gain at scale needs M3 and a larger load, deferred with the load work |
+| D14 | How HBase intersects the entity index (O23, phase 4) | (a) a coprocessor endpoint on each region server doing what the Accumulo iterator does; (b) a semi-join: the shortest term's subjects per shard, then a seeking filter checks only those in each next term; (c) defer: HBase keeps the client intersection | An HBase filter sees a shard's cells as one stream ordered by term, so it can't leapfrog between the terms' lists, and it can't add a cell with a match's count without buffering the whole row. (a) is the right design but needs protobuf service definitions in the build; (b) still moves the shortest list whole | 2026-11-18: **(c), defer,** until phase 5's measurements; then, the same day, **(a), when HBase at 10^12 is an active target** (the milestone is deferred with the load work). The client intersection is about as fast as no index (section 4.10), so until then the index is to be left off on HBase (README). (b) is out: it moves the shortest list whole, and for stars whose every list is long that is the 10^12 problem D13 is about |
 
 **Where to read what:**
 
@@ -152,7 +153,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O20 | **The object-type check as a row suffix:** `ScanSpec.rowSuffix`, set by the query engine when the type is the only row condition. RocksDB compares bytes. Accumulo and HBase filter with the equivalent linear `[\s\S]*` and the quoted suffix, instead of three open groups. It also fixes datatype IRIs being pasted into the expression unquoted, which let a `.` in a custom datatype IRI match any character | R2 | measured with O19, above. On Accumulo it means less tablet-server CPU per type-checked cell, not measured separately | — | 1 | Built on branch `loader-skip-singleton-counters`; green everywhere, `RangeParityIT` on all three backends |
 | O21 | **One range per subject:** when a window looks up two or more links of the same subject in `spo`, it reads the subject's range once and lets `BatchLookup`'s exact matching keep the cells asked for. A batch whose subject ranges return more than 64 cells per subject plus 1,024 is re-read one range per link (section 6.8) | R2 | measured (M8): `star-in` 17,594 → 8,799 ranges but 25,445 → 103,265 cells; `star-optional` 7,601 → 2,537 ranges, 9,345 → 28,772 cells. Accumulo: no change beyond noise. RocksDB: +64 % and +49 %. So `query.join.subjectranges` is **off by default**. Untested hypothesis: on a cold cache a seek is a block read and the extra cells are in the same block (M3) | M8 | 1 | Built, off by default |
 | O22 | **Merge joins of subject-sorted ranges:** for a star with constant objects (`?x a :Person ; :worksFor :Acme ; :nationality :IT`), each pattern is a `po` range sorted by subject. Stream them side by side and intersect, instead of one lookup per row. The subject space is sliced so several slices are intersected at once (section 6.10) | R2 | expected from 4.6: a sequentially read cell costs about 1/35 of a lookup on the Accumulo test cluster. To be measured on M10's class stars | M10 | 1 | Done: `SubjectMergeJoin`, on by default with a ratio per backend (35 Accumulo, 20 HBase, 8 RocksDB); measured in section 4.7. Slices in parallel and subject-only reads are O24 |
-| O23 | **Stars evaluated in the servers:** an optional subject-partitioned table, maintained like an index. A shard holds, per predicate and object, the sorted subjects of its share of the store. A server-side iterator (Accumulo) or coprocessor (HBase) intersects a star's lists inside every shard in parallel, and returns only the matching subjects (section 6.10) | R2 | the distributed join for "all entities matching X" (D1). To be measured against O22 | O22, D13 | 2 | Not started |
+| O23 | **Stars evaluated in the servers:** an optional subject-partitioned table, maintained like an index. A shard holds, per predicate and object, the sorted subjects of its share of the store. A server-side iterator (Accumulo) or coprocessor (HBase) intersects a star's lists inside every shard in parallel, and returns only the matching subjects (section 6.10) | R2 | the distributed join for "all entities matching X" (D1). To be measured against O22 | O22, D13 | 2 | Phases 1 to 3 of 5 done: the entity index (`index.entity`, storage version 1.2.0), merge joins reading it shard by shard, and the intersection by the store (`Store.intersect`): in Accumulo's tablet servers (`tripatha.accumulo.iterators`) and with RocksDB's native seeks, the client as fallback. HBase deferred (D14). Phase 5 done: on the benchmark, stars 2.3 to 4 times faster and counts 2.7 to 4.2 times on Accumulo (one cell per shard back), value stars 5 to 10 % slower; the index costs 17 % more disk and a fifth of the load rate (section 4.10) |
 | O24 | **Merge joins, part 2:** intersect a star's lists in slices of the subject space on several threads at once (cut at `spo`'s tablet splits or at sampled subjects), and read only each cell's subject instead of decoding the whole statement (section 6.10) | R2 | O22 reads one list per pattern on one thread, and decodes every cell | O22 | 1 | Done: subjects read as bytes, no statement decoding; slices cut at `spo`'s split points (`TableAdmin.splitRows`), up to `query.join.mergeslices` (4) on threads of their own. With 4 slices merges are 1.6 to 2 times faster on Accumulo and HBase and 3 times on RocksDB (section 4.9) |
 | O25 | **A real estimate for a value range:** count the range's cells up to a cap (about 10,000) when its pattern is in a join, and use the count when the range is shorter, or assume most of the predicate when it isn't. Only the join order depends on it, so a pattern on its own needs none | R2 | O14's estimate is a fixed tenth of the predicate: `class-value-wide` (`?v > 0`, 91 % pass) is 8.2 times slower on Accumulo with it, 4.1 on RocksDB and 3.6 on HBase (section 4.8) | O14 | 1 | Done: counted up to `query.valueranges.count` (10,000) for a pattern in a join. `class-value-wide` is back within 1 to 6 % of the merge plan, and the selective stars keep their gains; a condition between the cap and the star's lists (`class-value-mid`) gets the merge plan, 1.2 to 2.75 times slower than the range would be (section 4.8) |
 
@@ -479,6 +480,61 @@ As variants of one run per backend, `query.join.mergeslices` 1 (subjects only, o
 - **Hence 4 slices by default** on every backend: the best or close to it everywhere, and a bound on the threads one query takes on a busy endpoint.
 - **Rows** were the same in every variant. Sliced merges read a few cells fewer: each slice stops reading as soon as one of its lists runs out. The other 18 queries read exactly the same cells (RocksDB, whole suite).
 - **At 10^12** this divides the time by a constant: the lists still all cross to one client. O23 is the answer there.
+
+### 4.10 Stars from the entity index (O23)
+
+The benchmark store with the entity index (`bench.sh --entity-index`: built on the kept RocksDB store in 18 s, loaded with it on Accumulo; 16 shards). Three variants of one run per backend:
+- **po:** without the index (`query.useindex=false`): O22 and O24's merge of `po` lists.
+- **client:** shards intersected on the client (`query.entityindex.servers=false`).
+- **store:** shards intersected by the store: in Accumulo's tablet servers, with RocksDB's native seeks.
+
+`class-2` and `class-3` from reports `rocksdb-20261118-065152` and `accumulo-20261118-071358`; the rest from `rocksdb-20261118-071754` and `accumulo-20261118-073754`, the final code. p50, and the cells the query reads:
+
+| Query (rows) | RocksDB po / client / store | Accumulo po / client / store | Cells, po / store |
+|---|---|---|---|
+| `class-2` (312) | 8.6 / 8.4 / **3.5 ms** | 19.6 / 18.2 / **7.8 ms** | 49,686 / 314 |
+| `class-3` (312) | 14.4 / 14.0 / **5.1 ms** | 68.8 / 67.5 / **17.8 ms** | 49,999 / 315 |
+| `class-attrs` (361) | 27.2 / 27.5 / **8.0 ms** | 69.3 / 69.8 / 68.7 ms | 50,646 / 962 |
+| `class-large` (14,379) | 29.8 / 24.2 / **24.3 ms** | 62.4 / 55.3 / **24.5 ms** | 247,657 / 14,382 |
+| `class-count` (1) | 28.9 / 22.9 / **22.5 ms** | 54.2 / 52.2 / **23.2 ms** | 247,657 / 14,382 |
+| `class-value-mid` (5,233) | **251** / 279 / 278 ms | **2,464** / 2,580 / 2,602 ms | 362,784 / 122,350 |
+| `class-value-wide` (51,116) | **259** / 283 / 282 ms | **2,452** / 2,572 / 2,593 ms | 362,784 / 122,350 |
+
+Cells are Accumulo's; RocksDB's `po` variant reads fewer on the small stars (2,846 and 5,379), because its lower merge ratio looks up the long lists instead.
+
+**What it shows:**
+- **Stars and counts:** 2.3 to 4 times faster when the store intersects, on both backends, and 15 to 160 times fewer cells cross to the client. `class-attrs` on Accumulo gains nothing: its time is the lookups of the 361 matches' attributes.
+- **Value stars:** 5 to 10 % slower. 56,000 matches are each looked up for their value, and that is most of the time. The intersection itself is cheap, but its matches come in hash order. They are sorted before the lookups, in runs (below), and the query thread waits for the second run to fill.
+- **The client intersection** gains little on its own: it reads the same postings as the `po` lists.
+- Rows were the same in every variant.
+
+**Three faults the first runs showed** (reports `…-20261118-021952` and `…-024319`, fixed since):
+- **RocksDB read a whole shard row for one term.** A one-family scan of one row read every cell of the row and filtered: the client intersection of `class-large` took 1,897 ms. `RocksScan` now seeks to the family's keys.
+- **Matches in hash order scattered the lookups.** Shards are hash partitions, so matches come in no useful order across them. On Accumulo, `class-value-mid` took 6.3 s instead of 2.4 s: each scattered lookup reads and decompresses a block of its own. Matches are now sorted by subject when a join or an OPTIONAL follows the merge. There is a first run of 1,024, so a `LIMIT`'s first rows come early, then runs of up to 262,144. Runs doubling from 1,024 were still 2 times slower on Accumulo.
+- **The threads were drained one after the other.** While the query thread read the first group of shards, the others stopped after 8 chunks. They now share one queue, since their order doesn't matter.
+
+**Counts by the store** (`SubjectMergeCount`): a count of a whole star is `Store.countIntersection`, one call per group of shards on 4 threads. On Accumulo the iterator counts in the servers, and one cell per shard comes back. On RocksDB the matches are summed in the process. Reports `rocksdb-20261118-093328` and `accumulo-20261118-094955`; `class-3-count` is new, `class-3` counted, a selective intersection of long lists:
+
+| Query (rows) | RocksDB po / client / store | Accumulo po / client / store | Cells, po / store (Accumulo) |
+|---|---|---|---|
+| `class-count` (1) | 30.3 / 23.1 / **23.6 ms** | 51.8 / 52.0 / **18.9 ms** | 247,657 / **19** |
+| `class-3-count` (1) | 14.8 / 14.8 / **5.0 ms** | 61.1 / 62.9 / **14.7 ms** | 49,999 / **19** |
+
+- On Accumulo, counting in the servers beats returning the matches: 18.9 ms against 24.9 for `class-large`'s 14,379 matches. At 10^12 that is the difference between one cell per shard and a cell per matching entity.
+- **The first version was slower than the merge:** one call for all the shards, 53.5 ms on Accumulo and 83.6 on RocksDB, all on one thread (Accumulo's batch scanner uses `query.numthreads`, 2). Counting the groups of shards in parallel, as the merge reads them, fixed it.
+
+**Write and storage cost.** Fresh loads of the 10M dataset, the same day, without and with the index (RocksDB in a new directory each; Accumulo a new test cluster each). Sizes are the tables' files after the load's compaction, one copy, compressed (`TableAdmin.diskUsage`):
+
+| | RocksDB, without / with | Accumulo, without / with |
+|---|---|---|
+| Load rate | 125,715 / 104,635 triples/s (−17 %) | 14,121 / 11,203 triples/s (−21 %) |
+| Load and compaction | 113 / 137 s | 784 / 984 s |
+| `entity` | 464 MB, 1.06 times `po` (438 MB) | 233 MB, 1.10 times `po` (212 MB) |
+| All tables | 2,786 / 3,250 MB (+17 %) | 1,341 / 1,574 MB (+17 %) |
+
+So the estimate holds: about another copy of `po`, 23 B per triple on Accumulo, about 23 TB at 10^12 (one copy), and a fifth of the load rate. Building it on a loaded store took 18 s on RocksDB (`index.rebuild`).
+
+**Open: shards by subject range instead of hash.** At 10^12 a sorted run of 262,144 matches still spreads a window of 1,000 lookups over about 1/262 of the subject space. Shards cut at subject boundaries, as `spo`'s split points cut O24's slices, would give a merge global subject order with no sorting. That costs balance: the boundaries are fixed when the index is built, while hash shards stay even as the data grows. To be decided with the measurements at scale (M3).
 
 ---
 
@@ -1008,17 +1064,28 @@ The target workload (D1) is entities of large classes selected by several proper
 
 
 **O23: the same intersection in the servers.**
-- **The table:** optional, `<prefix>entity`, maintained by `IndexManager` like the text and geo indexes.
-  - Row: a shard, from a hash of the subject, so a subject's postings are all in one shard and the shards spread over every tablet server.
-  - Column family: the predicate and object.
-  - Column qualifier: the subject.
+- **The table** (built, phase 1): optional, `<prefix>entity` (`index.entity`), maintained by `IndexManager` like the text and geo indexes (ARCH.md 13.7).
+  - Row: a shard, `murmur3(subject) mod shards`, so a subject's postings are all in one shard and the shards spread over every tablet server.
+  - Column family: the term, predicate `01` object, the object as `po` encodes it.
+  - Column qualifier: subject `01` graph `01` statement qualifier. The graph and qualifier make one posting per stored statement, as in `spo`: the first design, with the subject alone, would have merged a triple's graphs into one posting and miscounted the rows.
   - Visibility: the statement's label.
+- **Its matches are answers,** not candidates checked against `spo` as the text and geo indexes' are. So:
+  - `dropGraph` deletes the postings by the graph in their qualifier, since their family is the term;
+  - turning the index on raises the store's version to 1.2.0, so older code, which would write statements without postings, refuses to write to it (the mechanism of D12);
+  - it is used only when READY, and `IndexVerifier` checks it against `spo`.
+- **The shard count** is part of the index's definition (a change means a rebuild). A shard is one row, which no backend splits, so about one per 200 M triples of the expected size, 16 at least: `prepare` chooses it from `--triples` and splits the table at every shard. That is 16 at 10M, about 5,000 at 10^12.
 - **The work:** a star is sent to every shard at once, with a batch scan over all shard rows. In each shard a server-side iterator seeks the star's posting lists and intersects them, the way Accumulo's intersecting iterator does for documents. Only matching subjects come back; their attributes are then batched lookups.
 - **Cost:**
   - about another copy of `po`, on disk and in writes (roughly 20 B per triple);
   - Tripatha code on the servers: an iterator jar on Accumulo's tablet servers, a second coprocessor on HBase. RocksDB has no servers, but its shards could be intersected on several local threads;
   - value filters need O14's ranges inside a posting list.
-- **When:** decided (D13, 2026-11-17): at 10^12 the transfer of the lists is the limit, though at 10M it isn't. Built after O25 (done) and O24, off by default, Accumulo first.
+- **When:** decided (D13, 2026-11-17): at 10^12 the transfer of the lists is the limit, though at 10M it isn't. Built after O25 (done) and O24 (done), off by default, Accumulo first.
+- **Phases:**
+  1. The table and its maintenance, and merge joins reading it shard by shard on the client: correct everywhere, not yet faster (done).
+  2. The intersection in Accumulo's servers: an iterator in a jar of its own, with the client intersection as the fallback when it isn't installed (done).
+  3. RocksDB: the shards intersected with native seeks on local threads (done).
+  4. HBase: a coprocessor endpoint doing what the Accumulo iterator does, built when HBase at 10^12 is an active target (D14). A seeking filter can't do it, and a semi-join moves the shortest list whole.
+  5. Counts in the servers, benchmark queries it should win (counts, selective intersections of long lists), and the measurements: query times, and the write and storage cost (done, section 4.10).
 
 ---
 
@@ -1047,7 +1114,7 @@ In this order, each measured on M8 before and after (on RocksDB and on the Accum
 7. **O14**, comparisons as value ranges, with the datatype markers and the storage-version check (D12), and **O25**, their counted estimate: done;
 8. **O16** and **O17**, only if the split profile shows where the Accumulo joins' time goes;
 9. **O7**, parallel reads of one large range;
-10. **O23**, stars evaluated in the servers (D13: decided), next, with benchmark queries it should win (counts, selective intersections of long lists).
+10. **O23**, stars evaluated in the servers (D13): done on Accumulo and RocksDB, with counts in the servers and benchmark queries it wins (section 4.10); on HBase a coprocessor endpoint when HBase at 10^12 is active (D14).
 
 **Exit:**
 - every change has an M8 report;

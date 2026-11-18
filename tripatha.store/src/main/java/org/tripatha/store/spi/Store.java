@@ -16,6 +16,7 @@
 package org.tripatha.store.spi;
 
 import java.util.Collection;
+import java.util.List;
 
 /**
  * A storage backend, as Tripatha uses it: sorted tables of labelled cells. Each cell has a row,
@@ -65,6 +66,45 @@ public interface Store extends AutoCloseable {
      * {@link RowMutation#addToCounter}).
      */
     long counterValue(byte[] value);
+
+    /**
+     * Whether this store does {@link #intersect} on this table: in its servers (Accumulo, with
+     * Tripatha's iterator jar on them) or with native seeks (RocksDB).
+     */
+    default boolean canIntersect(final String table) {
+        return false;
+    }
+
+    /**
+     * The entity index's intersection, done by the store (SCALE-STUDY.md O23): in each row, the
+     * subjects (a cell's qualifier up to its first {@code 01} byte) found under every one of the
+     * families. Each comes as one cell: the row, an empty family, the subject as qualifier, an
+     * empty visibility, and as value the product of its cells under each family, in decimal. Only
+     * the cells the spec's labels and time range show count. Subjects come in order within a row;
+     * rows in any order. Only where {@link #canIntersect} says so.
+     */
+    default CellScanner intersect(final String table, final List<byte[]> rows, final List<byte[]> families,
+            final ScanSpec spec) {
+        throw new UnsupportedOperationException(backend() + " does not intersect");
+    }
+
+    /**
+     * How many subjects {@link #intersect} would return, and the sum of their values, without
+     * returning them. This default adds them up as they come; a store whose servers intersect
+     * counts there instead, so only a count per row comes back.
+     */
+    default IntersectionCount countIntersection(final String table, final List<byte[]> rows, final List<byte[]> families,
+            final ScanSpec spec) {
+        long subjects = 0;
+        long matches = 0;
+        try (CellScanner cells = intersect(table, rows, families, spec)) {
+            while (cells.hasNext()) {
+                subjects++;
+                matches = Math.addExact(matches, IntersectionCount.parse(cells.next().value()));
+            }
+        }
+        return new IntersectionCount(subjects, matches);
+    }
 
     /** Releases what the store opened itself. A client supplied by the caller stays open. */
     @Override

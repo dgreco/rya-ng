@@ -255,11 +255,16 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
         return super.prepare(node, context);
     }
 
-    /** Adds the one node type RDF4J's dispatch doesn't know: a {@link SubjectMergeJoin}. */
+    /** Adds the node types RDF4J's dispatch doesn't know: a {@link SubjectMergeJoin} and a {@link SubjectMergeCount}. */
     @Override
     public QueryEvaluationStep precompile(final TupleExpr expr, final QueryEvaluationContext context) {
         if (expr instanceof SubjectMergeJoin merge) {
             return prepare(merge, context);
+        }
+        if (expr instanceof SubjectMergeCount count) {
+            final QueryEvaluationStep group = precompile(count.getGroup(), context);
+            return tripleSource instanceof StoreTripleSource<?> source ? new SubjectMergeCountStep(count, source, group, context)
+                    : group;
         }
         return super.precompile(expr, context);
     }
