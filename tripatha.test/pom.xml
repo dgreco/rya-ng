@@ -50,6 +50,11 @@ under the License.
             <artifactId>tripatha.hbase.coprocessor</artifactId>
         </dependency>
         <dependency>
+            <!-- On the test Accumulo cluster's classpath (its servers start with this JVM's), as in lib/ext on real tablet servers. -->
+            <groupId>org.tripatha</groupId>
+            <artifactId>tripatha.accumulo.iterators</artifactId>
+        </dependency>
+        <dependency>
             <!-- The in-process HBase cluster. Its Hadoop is pinned to ${hadoop.version} by the root POM. -->
             <groupId>org.apache.hbase</groupId>
             <artifactId>hbase-testing-util</artifactId>

@@ -91,6 +91,7 @@ The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.ja
 | `tripatha.accumulo` | The Accumulo backend |
 | `tripatha.hbase` | The HBase backend |
 | `tripatha.hbase.coprocessor` | The region observer for HBase's counter table, installed on the region servers |
+| `tripatha.accumulo.iterators` | Server-side iterators for Accumulo's tablet servers: the entity index's intersection (optional) |
 | `tripatha.rocksdb` | The RocksDB backend: a store in a local directory, without a cluster |
 | `tripatha.sail` | RDF4J Sail (`RdfCloudTripleStore`), query planning, inference, and `RyaSailFactory` |
 | `tripatha.sparql` | Spring Boot SPARQL endpoint |
@@ -114,6 +115,8 @@ The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.ja
   - Configure the same mode for every endpoint and loader of a store. A writer reads the counter table's mode from its descriptor, but an account that may not read descriptors (with HBase's `AccessController`, that needs ADMIN or CREATE) falls back to its configured mode. Writing in the wrong mode loses counts.
 - Literals of more than about 32 KB (rows over 32,767 bytes, HBase's limit) are refused.
 - **Finding the cluster:** give the cluster's `hbase-site.xml` (`tripatha.hbase.site`), or only a ZooKeeper quorum (`tripatha.hbase.conf[hbase.zookeeper.quorum]`), in which case Tripatha finds the cluster through ZooKeeper. HBase 3's client otherwise asks its masters (`hbase.client.bootstrap.servers`, by default `localhost:16000`).
+
+**Accumulo**, with the entity index on (`tripatha.entity-index`), intersects its shards in the tablet servers if they have `tripatha.accumulo.iterators/target/tripatha.accumulo.iterators-<version>.jar` on their classpath (`lib/ext`). It depends only on Accumulo. Without it, stars are intersected on the client: same answers, more data moved. The store checks once per table and logs which it uses.
 
 **RocksDB** is a store in a local directory, in the endpoint's or the loader's own process: nothing to install or run besides Tripatha.
 

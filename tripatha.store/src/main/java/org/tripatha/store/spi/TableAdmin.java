@@ -65,6 +65,15 @@ public interface TableAdmin {
         return List.of();
     }
 
+    /**
+     * Whether the servers holding a table can run a server-side iterator class (Accumulo), as
+     * Tripatha's own iterators need their jar on every server. False for backends without such
+     * iterators, or when the class can't be loaded.
+     */
+    default boolean canLoadIterator(final String table, final String className) {
+        return false;
+    }
+
     /** At most {@code max} of {@code sorted}, spread evenly over it. */
     static List<byte[]> spread(final List<byte[]> sorted, final int max) {
         if (max <= 0) {

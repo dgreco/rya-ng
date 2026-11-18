@@ -355,13 +355,14 @@ flowchart LR
     test -.-> loader
 ```
 
-An arrow `A → B` means *B depends on A*. `tripatha.coverage` only exists under `-Pcoverage` and merges the coverage reports. `tripatha.hbase.coprocessor` is installed on HBase region servers; nothing depends on it but the test cluster.
+An arrow `A → B` means *B depends on A*. `tripatha.coverage` only exists under `-Pcoverage` and merges the coverage reports. `tripatha.hbase.coprocessor` is installed on HBase region servers, and `tripatha.accumulo.iterators` on Accumulo tablet servers; nothing depends on them but the test clusters (the code names the iterator's class, without linking it).
 
 | Module | Role | Main classes |
 |---|---|---|
 | `tripatha.api` | Storage-independent model, DAO interfaces, how statements and values become bytes, which table answers which pattern | `RyaStatement`, `RyaType`, `RyaIRI`, `RyaContext`, `WholeRowTripleResolver`, `*TriplePatternStrategy`, `RdfCloudTripleStoreConfiguration` |
 | `tripatha.store` | The storage SPI (labelled cells, ranges, batched reads, writers, counters), and everything written once on top of it: writes, scans, statistics, graph markers, namespaces, the text and geo indexes, the trace | `Store`, `RyaStoreDAO`, `RyaStoreQueryEngine`, `EvalStatsMutations`, `RyaStoreEvalStatsDAO`, `IndexManager`, `IndexSearcher`, `StoreTrace` |
 | `tripatha.accumulo` | The Accumulo backend: each SPI call is one Accumulo call | `AccumuloStore`, `AccumuloCellWriter`, `AccumuloClients` |
+| `tripatha.accumulo.iterators` | Iterators for the tablet servers; depends only on Accumulo | `EntityIntersectingIterator` |
 | `tripatha.hbase` | The HBase backend: the cell mapping, labels, batched reads, counters | `HBaseStore`, `HBaseCodec`, `HBaseBatchScan`, `HBaseLabels` |
 | `tripatha.rocksdb` | The RocksDB backend: a store in a local directory, in the caller's process | `RocksStore`, `RocksCodec`, `RocksScan`, `RocksCellWriter`, `RocksDatabase` |
 | `tripatha.sail` | The RDF4J Sail: connection, optimizer pipeline, evaluation strategy, batched joins, inference, index-search rewrite | `RdfCloudTripleStore`, `RdfCloudTripleStoreConnection`, `RyaEvaluationStrategy`, `BatchedJoinStep`, `InferenceEngine`, `IndexSearchOptimizer`, `RyaSailFactory` |
@@ -1255,9 +1256,16 @@ visibility  the statement's label, timestamp the statement's
 - each thread opens a shard's scans, intersects them, closes them and moves to the next, reporting to the query's trace through `StoreTrace.join`;
 - rows come in shard order, and in subject order within a shard: SPARQL fixes no order without `ORDER BY`.
 
-This first phase intersects on the client, which reads every posting of the star's terms, as the merge of 13.6 does: it is correct everywhere, not yet faster. The intersection in the servers (an Accumulo iterator, an HBase filter, native seeks on RocksDB) is the next phase.
+**In the servers** (Accumulo): `EntityIntersectingIterator`, in the `tripatha.accumulo.iterators` jar on every tablet server, intersects a star's terms inside each shard row.
+- **The leapfrog:** it seeks each term's list to the largest subject the lists are at, until they all agree, so a long list costs about as many seeks as the shortest has postings, not its length.
+- **What comes back:** one key per match, `(shard, empty family, subject)`, with the product of the subject's postings per term as value. Labels are applied below user iterators, so only visible postings count. Resumed after a key, it resumes after that subject.
+- **The query:** one batch scan over every shard row with the iterator (priority 50, above Accumulo's TTL and regular-expression filters), traced as any scan (`RyaStoreQueryEngine.entityMatches`). Matches come back unordered across shards.
+- **When:** the index is READY, `query.useindex` and `query.entityindex.servers` are on, and the servers can load the class: the store asks once per table (`TableAdmin.canLoadIterator`, Accumulo's `testClassLoad`) and logs when they can't. Then stars are intersected on the client as above: same answers, more data moved.
+- **Every constant pattern joins the intersection** when the servers intersect: `SubjectMergeOptimizer` then merges each star pattern on the subject, whatever its length (the merge ratio of 13.6 is for reading whole lists on the client).
 
-**Testing:** `EntityIndexIT` checks the postings against `spo` after adds, deletes, graph drops, a purge and a rebuild, the version raise and the shard count. `SubjectMergeIT` reads its stars from the index too. `-Dtripatha.test.indexes=true` keeps the index in every IT, checked after each test by `verifyIndexes`.
+The client intersection, used on the other backends and as the fallback, reads every posting of the star's terms, as the merge of 13.6 does: it is correct everywhere, not faster. Native seeks on RocksDB and a seeking filter on HBase are the next phases.
+
+**Testing:** `EntityIndexIT` checks the postings against `spo` after adds, deletes, graph drops, a purge and a rebuild, the version raise and the shard count. `SubjectMergeIT` reads its stars from the index too, in the servers and on the client; the test Accumulo cluster's servers run with the test classpath, which holds the iterator. `EntityIntersectingIteratorTest` checks the iterator alone: counts, subjects that start others, three terms, and resuming. `-Dtripatha.test.indexes=true` keeps the index in every IT, checked after each test by `verifyIndexes`.
 
 ---
 

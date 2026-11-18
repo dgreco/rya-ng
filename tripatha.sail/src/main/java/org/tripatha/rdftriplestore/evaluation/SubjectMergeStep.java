@@ -74,6 +74,10 @@ import org.tripatha.store.trace.Trace;
  * per thread (up to {@code query.join.mergeslices}); each thread opens a shard's scans, under the
  * query's trace ({@link StoreTrace#join}), intersects them and closes them, shard after shard.
  * Rows then come in shard order, and in subject order within a shard.
+ *
+ * <p><b>In the servers</b> (O23): when the store can (Accumulo with Tripatha's iterator jar), the
+ * shards are intersected there instead, in one batch scan over every shard row, and only the
+ * matching subjects, with their counts, come back. Their order across shards is the scan's.
  */
 final class SubjectMergeStep implements QueryEvaluationStep {
     /** Threads intersecting slices: daemons, kept a minute when idle. */
@@ -126,6 +130,8 @@ final class SubjectMergeStep implements QueryEvaluationStep {
         private List<Intersection> slices;
         /** One per slice when they run on threads of their own; null for one slice. */
         private List<SliceTask> tasks;
+        /** The matches the servers intersected, when they do; null otherwise. */
+        private CloseableIteration<EntityIndex.Match> serverMatches;
         private int current;
         private Value subject;
         private long repeats;
@@ -199,6 +205,15 @@ final class SubjectMergeStep implements QueryEvaluationStep {
                 source.countLookup();
             }
             final List<byte[]> shards = entity.shardRows();
+            if (source.entityIntersectsInServers()) {
+                try (StoreTrace.Reason why = StoreTrace.reason(() -> "merge join: the subjects of " + patterns.size()
+                        + " constant patterns on ?" + node.getSubjectName() + ", intersected in the servers, in each of the "
+                        + shards.size() + " shards of the entity index")) {
+                    serverMatches = source.entityMatches(shards, terms);
+                }
+                slices = List.of();
+                return;
+            }
             final int threads = Math.max(1, Math.min(source.getConf().getJoinMergeSlices(), shards.size()));
             final Trace trace = StoreTrace.current();
             final String reason = "merge join: the subjects of " + patterns.size() + " constant patterns on ?"
@@ -232,6 +247,15 @@ final class SubjectMergeStep implements QueryEvaluationStep {
 
         /** Moves to the next subject every list has, and how many rows it gives; false when none is left. */
         private boolean nextMatch() {
+            if (serverMatches != null) {
+                if (!serverMatches.hasNext()) {
+                    return false;
+                }
+                final EntityIndex.Match match = serverMatches.next();
+                subject = value(match.subject());
+                repeats = match.count();
+                return true;
+            }
             if (tasks == null) {
                 final Intersection only = slices.isEmpty() ? null : slices.get(0);
                 if (only == null || !only.advance()) {
@@ -256,6 +280,10 @@ final class SubjectMergeStep implements QueryEvaluationStep {
 
         @Override
         protected void handleClose() {
+            if (serverMatches != null) {
+                serverMatches.close();
+                return;
+            }
             final List<Intersection> opened = slices;
             if (opened == null) {
                 return;

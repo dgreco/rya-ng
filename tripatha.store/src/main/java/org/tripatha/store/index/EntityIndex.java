@@ -61,6 +61,16 @@ import com.google.common.primitives.Bytes;
  * with the store: about one per 200 M triples of its expected size.
  */
 public final class EntityIndex implements SecondaryIndex {
+    /**
+     * The class of the iterator that intersects the shards in Accumulo's servers, in the jar of
+     * {@code tripatha.accumulo.iterators}; named here, not linked, so nothing else needs the jar.
+     */
+    public static final String ACCUMULO_ITERATOR = "org.tripatha.accumulo.iterators.EntityIntersectingIterator";
+
+    /** A subject every term of a star has in one shard, and the rows it gives: the product of its postings per term. */
+    public record Match(byte[] subject, long count) {
+    }
+
     /** The layout's version: changing the key layout means a rebuild. */
     public static final String VERSION = "entity/1";
     private static final String SHARDS = ";shards=";

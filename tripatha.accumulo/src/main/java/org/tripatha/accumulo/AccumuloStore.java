@@ -544,6 +544,17 @@ public final class AccumuloStore implements Store {
         }
 
         @Override
+        public boolean canLoadIterator(final String table, final String className) {
+            try {
+                return client.tableOperations().testClassLoad(table, className,
+                        org.apache.accumulo.core.iterators.SortedKeyValueIterator.class.getName());
+            } catch (final AccumuloException | AccumuloSecurityException | TableNotFoundException | RuntimeException e) {
+                log.debug("Can't tell whether {} loads {}: {}", table, className, e.toString());
+                return false;
+            }
+        }
+
+        @Override
         public List<byte[]> splitRows(final String table, final int max) {
             if (max <= 0) {
                 return List.of();

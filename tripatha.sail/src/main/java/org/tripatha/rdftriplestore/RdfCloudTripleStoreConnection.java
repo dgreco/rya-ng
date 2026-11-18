@@ -644,6 +644,30 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
             }
         }
 
+        /**
+         * Whether stars read from the entity index are intersected in the servers: the index is
+         * usable and the store can (Accumulo with Tripatha's iterators, {@code query.entityindex.servers}).
+         */
+        public boolean entityIntersectsInServers() {
+            return entityIndex() != null && ryaDAO.getQueryEngine() instanceof org.tripatha.store.query.RyaStoreQueryEngine engine
+                    && conf instanceof StoreRdfConfiguration storeConf && engine.intersectsEntitiesInServers(storeConf);
+        }
+
+        /** The subjects every term has in each shard, intersected in the servers; unordered across shards. */
+        public CloseableIteration<org.tripatha.store.index.EntityIndex.Match> entityMatches(final List<byte[]> shardRows,
+                final List<byte[]> terms) {
+            if (!(ryaDAO.getQueryEngine() instanceof org.tripatha.store.query.RyaStoreQueryEngine engine)
+                    || !(conf instanceof StoreRdfConfiguration storeConf)) {
+                throw new QueryEvaluationException("The entity index needs Tripatha's store query engine");
+            }
+            storeLookups++;
+            try {
+                return engine.entityMatches(shardRows, terms, storeConf);
+            } catch (final RyaDAOException e) {
+                throw new QueryEvaluationException(e);
+            }
+        }
+
         /** Counts one more store lookup: for merges, whose scans other threads open. */
         public void countLookup() {
             storeLookups++;

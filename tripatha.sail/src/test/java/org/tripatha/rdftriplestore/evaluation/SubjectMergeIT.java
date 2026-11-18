@@ -301,9 +301,11 @@ public class SubjectMergeIT extends RyaSailITBase {
         assertTrue(IndexVerifier.verify(getStore(), indexed, IndexType.ENTITY).isClean());
         for (final boolean labelled : List.of(true, false)) {
             // The index table exists now: every store opens with the index on, this one without using it.
-            final SailRepository plain = indexed(labelled, 0, 1, false);
-            for (final int threads : List.of(1, 3)) {
-                final SailRepository fromIndex = indexed(labelled, 1_000_000, threads, true);
+            final SailRepository plain = indexed(labelled, 0, 1, false, false);
+            // In the servers where they can (Accumulo), and on the client in 1 or 3 threads.
+            for (final int threads : List.of(0, 1, 3)) {
+                final boolean servers = threads == 0;
+                final SailRepository fromIndex = indexed(labelled, 1_000_000, Math.max(1, threads), true, servers);
                 for (final String query : QUERIES) {
                     assertEquals(rows(plain, query), rows(fromIndex, query), query + (labelled ? " (label A)" : "")
                             + ", " + threads + " threads");
@@ -317,6 +319,7 @@ public class SubjectMergeIT extends RyaSailITBase {
                     rows(fromIndex, QUERIES.get(0));
                 }
                 assertTrue(reason[0] != null && reason[0].contains("entity index"), String.valueOf(reason[0]));
+                assertEquals(servers && onBackend("accumulo"), reason[0].contains("in the servers"), reason[0]);
             }
         }
     }
@@ -396,10 +399,12 @@ public class SubjectMergeIT extends RyaSailITBase {
         return repo;
     }
 
-    /** A store with the entity index on, used by queries or not. */
-    private SailRepository indexed(final boolean labelled, final double mergeRatio, final int threads, final boolean useIndex) {
+    /** A store with the entity index on, used by queries or not, intersected in the servers or not. */
+    private SailRepository indexed(final boolean labelled, final double mergeRatio, final int threads, final boolean useIndex,
+            final boolean servers) {
         final StoreRdfConfiguration conf = newConf();
         conf.setEntityIndex(true);
+        conf.setEntityIndexServers(servers);
         conf.setJoinMergeRatio(mergeRatio);
         conf.setJoinMergeSlices(threads);
         conf.setUseIndex(useIndex);

@@ -146,7 +146,9 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
                 // batched join and the entity prefetch work on.
                 new LeftDeepJoinOptimizer(),
                 // Last: a star's merge becomes the driver of the left-deep chain.
-                new SubjectMergeOptimizer(statistics, conf, !strategy.isTrackResultSize() && !strategy.isTrackTime())));
+                new SubjectMergeOptimizer(statistics, conf, !strategy.isTrackResultSize() && !strategy.isTrackTime(),
+                        tripleSource instanceof org.tripatha.rdftriplestore.RdfCloudTripleStoreConnection.StoreTripleSource<?> store
+                                && store.entityIntersectsInServers())));
         return optimizers;
     }
 }

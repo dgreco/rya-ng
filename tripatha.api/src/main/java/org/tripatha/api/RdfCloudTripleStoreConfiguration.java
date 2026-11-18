@@ -107,6 +107,11 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
      * triples of the store's expected size.
      */
     public static final String CONF_INDEX_ENTITY_SHARDS = "index.entity.shards";
+    /**
+     * Let the servers intersect the entity index's shards when they can (Accumulo with Tripatha's
+     * iterator jar; default true). Off, merge joins intersect the shards on the client.
+     */
+    public static final String CONF_QUERY_ENTITY_SERVERS = "query.entityindex.servers";
     /** Rebuild indexes that are not ready (enabled on existing data, or redefined) when the store starts. */
     public static final String CONF_INDEX_REBUILD = "index.rebuild";
     /** Let queries use the secondary indexes (they are still maintained when this is false). */
@@ -291,6 +296,14 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setEntityIndexShards(final int shards) {
         setInt(CONF_INDEX_ENTITY_SHARDS, shards);
+    }
+
+    public boolean isEntityIndexServers() {
+        return getBoolean(CONF_QUERY_ENTITY_SERVERS, true);
+    }
+
+    public void setEntityIndexServers(final boolean enabled) {
+        setBoolean(CONF_QUERY_ENTITY_SERVERS, enabled);
     }
 
     public boolean isRebuildIndexes() {

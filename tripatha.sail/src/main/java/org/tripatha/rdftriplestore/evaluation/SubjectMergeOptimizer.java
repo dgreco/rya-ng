@@ -61,6 +61,7 @@ public final class SubjectMergeOptimizer implements QueryOptimizer {
     private final EvaluationStatistics statistics;
     private final RdfCloudTripleStoreConfiguration conf;
     private final boolean allowed;
+    private final boolean everyStarPattern;
 
     /**
      * @param statistics the counters; nothing is merged unless they are the store's
@@ -69,9 +70,20 @@ public final class SubjectMergeOptimizer implements QueryOptimizer {
      */
     public SubjectMergeOptimizer(final EvaluationStatistics statistics, final RdfCloudTripleStoreConfiguration conf,
             final boolean allowed) {
+        this(statistics, conf, allowed, false);
+    }
+
+    /**
+     * @param everyStarPattern merge every star pattern on the subject, whatever its length: the
+     *        servers intersect the entity index's shards, seeking past what can't match, so a
+     *        long list costs little more than a short one (SCALE-STUDY.md O23)
+     */
+    public SubjectMergeOptimizer(final EvaluationStatistics statistics, final RdfCloudTripleStoreConfiguration conf,
+            final boolean allowed, final boolean everyStarPattern) {
         this.statistics = statistics;
         this.conf = conf;
         this.allowed = allowed;
+        this.everyStarPattern = everyStarPattern;
     }
 
     @Override
@@ -112,7 +124,7 @@ public final class SubjectMergeOptimizer implements QueryOptimizer {
                 shortest = Math.min(shortest, length);
             }
         }
-        final double limit = ratio * Math.max(1, shortest);
+        final double limit = everyStarPattern ? Double.POSITIVE_INFINITY : ratio * Math.max(1, shortest);
         final List<StatementPattern> merged = new ArrayList<>();
         final List<TupleExpr> rest = new ArrayList<>();
         for (final TupleExpr arg : args) {
