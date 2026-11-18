@@ -20,13 +20,15 @@ import java.util.Objects;
 
 import org.eclipse.rdf4j.query.algebra.Group;
 import org.eclipse.rdf4j.query.algebra.QueryModelVisitor;
+import org.eclipse.rdf4j.query.algebra.StatementPattern;
+import org.eclipse.rdf4j.query.algebra.TupleExpr;
 import org.eclipse.rdf4j.query.algebra.UnaryTupleOperator;
 
 /**
  * Counts of a star, {@code SELECT (COUNT(*) AS ?n) WHERE { ?x p1 o1 ; p2 o2 }}, that the store can
  * give without returning the matches (SCALE-STUDY.md O23): its argument is the {@link Group} it
- * stands for, whose own argument is a {@link SubjectMergeJoin}, and which is evaluated as it is
- * whenever the store can't count.
+ * stands for, and which is evaluated as it is whenever the store can't count. The group's own
+ * argument is a {@link SubjectMergeJoin}, or a single star pattern ({@code ?x a :C}, a class's size).
  *
  * <p>Built by {@link SubjectMergeCountOptimizer}, evaluated by {@code RyaEvaluationStrategy}.
  */
@@ -52,9 +54,21 @@ public final class SubjectMergeCount extends UnaryTupleOperator {
         return (Group) getArg();
     }
 
-    /** The star whose matches are counted. */
-    public SubjectMergeJoin getMerge() {
-        return (SubjectMergeJoin) getGroup().getArg();
+    /** The star's constant patterns, whose matches are counted: the merge's, or the group's one pattern. */
+    public List<StatementPattern> getPatterns() {
+        return getGroup().getArg() instanceof SubjectMergeJoin merge ? merge.getPatterns()
+                : List.of((StatementPattern) getGroup().getArg());
+    }
+
+    /** The name of the star's subject variable. */
+    public String getSubjectName() {
+        return subjectName(getGroup().getArg());
+    }
+
+    /** The subject variable's name of a star: a merge, or one star pattern. */
+    static String subjectName(final TupleExpr star) {
+        return star instanceof SubjectMergeJoin merge ? merge.getSubjectName()
+                : ((StatementPattern) star).getSubjectVar().getName();
     }
 
     public List<Counted> getCounted() {

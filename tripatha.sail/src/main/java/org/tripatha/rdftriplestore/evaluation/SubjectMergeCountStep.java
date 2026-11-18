@@ -27,6 +27,7 @@ import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
 import org.eclipse.rdf4j.query.BindingSet;
 import org.eclipse.rdf4j.query.MutableBindingSet;
 import org.eclipse.rdf4j.query.QueryEvaluationException;
+import org.eclipse.rdf4j.query.algebra.StatementPattern;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryEvaluationStep;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.QueryEvaluationContext;
 import org.tripatha.rdftriplestore.RdfCloudTripleStoreConnection.StoreTripleSource;
@@ -37,10 +38,11 @@ import org.tripatha.store.trace.Trace;
 
 /**
  * Evaluates a {@link SubjectMergeCount}: the store counts the star's matches in every shard of the
- * entity index (in its servers on Accumulo), and the group's one row is built from the counts, as
- * RDF4J's {@code GroupIterator} builds it: the parent bindings, and each count an
- * {@code xsd:integer}. The shards are counted in groups, one per thread ({@code query.join.mergeslices}),
- * as a merge reads them: one call for all of them ran on one thread, 3 times slower than the merge.
+ * entity index (in its servers on Accumulo), a single pattern's being its postings. The group's one
+ * row is built from the counts, as RDF4J's {@code GroupIterator} builds it: the parent bindings,
+ * and each count an {@code xsd:integer}. The shards are counted in groups, one per thread
+ * ({@code query.join.mergeslices}), as a merge reads them: one call for all of them ran on one
+ * thread, 3 times slower than the merge.
  * When the store can't count, or the subject is already bound, the group is evaluated as it is.
  */
 final class SubjectMergeCountStep implements QueryEvaluationStep {
@@ -59,17 +61,18 @@ final class SubjectMergeCountStep implements QueryEvaluationStep {
 
     @Override
     public CloseableIteration<BindingSet> evaluate(final BindingSet bindings) {
-        final SubjectMergeJoin merge = node.getMerge();
+        final List<StatementPattern> patterns = node.getPatterns();
+        final String subject = node.getSubjectName();
         final EntityIndex entity = source.entityIndex();
-        if (entity == null || !source.entityIntersectsInServers() || bindings.hasBinding(merge.getSubjectName())) {
+        if (entity == null || !source.entityIntersectsInServers() || bindings.hasBinding(subject)) {
             return group.evaluate(bindings);
         }
         final List<byte[]> shards = entity.shardRows();
-        final List<byte[]> terms = SubjectMergeStep.entityTerms(merge.getPatterns());
+        final List<byte[]> terms = SubjectMergeStep.entityTerms(patterns);
         final int threads = Math.max(1, Math.min(source.getConf().getJoinMergeSlices(), shards.size()));
-        final String reason = "count: the subjects of " + merge.getPatterns().size() + " constant patterns on ?"
-                + merge.getSubjectName() + ", counted by the store in the entity index (" + shards.size() + " shards, "
-                + threads + " threads)";
+        final String reason = "count: the subjects of " + (patterns.size() == 1 ? "1 constant pattern" : patterns.size()
+                + " constant patterns") + " on ?" + subject + ", counted by the store in the entity index ("
+                + shards.size() + " shards, " + threads + " threads)";
         final IntersectionCount counts = threads == 1 ? countOnThisThread(shards, terms, reason) : count(shards, terms, threads, reason);
         final MutableBindingSet row = bindings.isEmpty() ? context.createBindingSet() : context.createBindingSet(bindings);
         for (final SubjectMergeCount.Counted counted : node.getCounted()) {

@@ -346,12 +346,27 @@ public class SubjectMergeIT extends RyaSailITBase {
                 // HAVING adds a count of its own, under a name RDF4J makes up.
                 "SELECT (COUNT(*) AS ?c) WHERE { " + star + " } HAVING (COUNT(DISTINCT ?x) > 5)",
                 "SELECT (COUNT(*) AS ?c) WHERE { " + star + " } HAVING (COUNT(*) > 1000)");
-        // Not counted by the store: a GROUP BY, a filter, another aggregate.
+        // One pattern, the size of a class: counted by the store too, even on its own.
+        final List<String> onePattern = List.of(
+                "SELECT (COUNT(*) AS ?c) WHERE { ?x <urn:p> <urn:A> }",
+                "SELECT (COUNT(*) AS ?c) (COUNT(DISTINCT ?x) AS ?d) WHERE { ?x <urn:p> <urn:A> }",
+                "SELECT (COUNT(?x) AS ?c) WHERE { ?x a <urn:C> }",
+                "SELECT (COUNT(DISTINCT *) AS ?c) WHERE { ?x <urn:q> \"x\" }",
+                "SELECT (COUNT(*) AS ?c) WHERE { ?x <urn:q> \"x\"^^<urn:dt> }",
+                "SELECT (COUNT(*) AS ?c) WHERE { ?x <urn:p> <urn:nothing> }",
+                "SELECT ?y ?c WHERE { ?y <urn:name> \"n0\" { SELECT (COUNT(*) AS ?c) WHERE { ?x a <urn:C> } } }");
+        // Not counted by the store: a GROUP BY, a filter, another aggregate; for one pattern, a
+        // dataset, a graph, a variable object or a constant subject.
         final List<String> grouped = List.of(
                 "SELECT ?x (COUNT(*) AS ?c) WHERE { " + star + " } GROUP BY ?x",
                 "SELECT (COUNT(*) AS ?c) WHERE { " + star + " FILTER(?x != <urn:s0>) }",
                 "SELECT (COUNT(*) AS ?c) (SUM(1) AS ?s) WHERE { " + star + " }",
-                "SELECT ?x ?n WHERE { ?x <urn:name> ?n FILTER EXISTS { SELECT (COUNT(*) AS ?c) WHERE { " + star + " } } }");
+                "SELECT ?x ?n WHERE { ?x <urn:name> ?n FILTER EXISTS { SELECT (COUNT(*) AS ?c) WHERE { " + star + " } } }",
+                "SELECT (COUNT(*) AS ?c) FROM <urn:g1> WHERE { ?x <urn:p> <urn:A> }",
+                "SELECT (COUNT(*) AS ?c) WHERE { GRAPH ?g { ?x <urn:p> <urn:A> } }",
+                "SELECT (COUNT(*) AS ?c) WHERE { ?x <urn:q> ?o }",
+                "SELECT (COUNT(*) AS ?c) WHERE { <urn:s0> <urn:p> <urn:A> }",
+                "SELECT ?x (COUNT(*) AS ?c) WHERE { ?x a <urn:C> } GROUP BY ?x");
         final boolean storeCounts = !onBackend("hbase");
         for (final boolean labelled : List.of(true, false)) {
             final SailRepository plain = indexed(labelled, 0, 1, false, false);
@@ -366,16 +381,32 @@ public class SubjectMergeIT extends RyaSailITBase {
                     assertEquals(!storeCounts, reasons.stream().anyMatch(r -> r.startsWith("merge join")),
                             query + which + ": " + reasons);
                 }
+                for (final String query : onePattern) {
+                    assertEquals(rows(plain, query), rows(fromIndex, query), query + which);
+                    assertEquals(storeCounts, reasons(fromIndex, query).stream().anyMatch(r -> r.startsWith("count:")),
+                            query + which);
+                }
                 for (final String query : grouped) {
                     assertEquals(rows(plain, query), rows(fromIndex, query), query + which);
                     assertFalse(reasons(fromIndex, query).stream().anyMatch(r -> r.startsWith("count:")), query + which);
                 }
             }
         }
+        // query.limit caps a pattern's rows, and so its count: left to RDF4J.
+        final SailRepository limited = indexed(false, 1_000_000, 1, true, true);
+        final SailRepository limitedPlain = indexed(false, 0, 1, false, false);
+        for (final SailRepository repo : List.of(limited, limitedPlain)) {
+            ((RdfCloudTripleStore<?>) repo.getSail()).getConf().setLimit(5L);
+        }
+        assertEquals(rows(limitedPlain, onePattern.get(2)), rows(limited, onePattern.get(2)));
+        assertFalse(reasons(limited, onePattern.get(2)).stream().anyMatch(r -> r.startsWith("count:")));
         // The counts themselves, without the label: 11 subjects, 8 of them also in urn:g1 (every sixth,
         // one of the odd ones too), where each gives 2 × 2 rows: 8 × 4 + 3 = 35 rows.
         assertEquals(List.of("c=\"35\"^^<http://www.w3.org/2001/XMLSchema#integer> d=\"11\"^^<http://www.w3.org/2001/XMLSchema#integer> "),
                 rows(indexed(false, 1_000_000, 1, true, true), counted.get(4)));
+        // One pattern: 24 subjects have urn:p urn:A, 8 of them in urn:g1 too (every sixth, one odd one too).
+        assertEquals(List.of("c=\"32\"^^<http://www.w3.org/2001/XMLSchema#integer> d=\"24\"^^<http://www.w3.org/2001/XMLSchema#integer> "),
+                rows(indexed(false, 1_000_000, 1, true, true), onePattern.get(1)));
     }
 
     /** The reasons of the scans a query makes. */
