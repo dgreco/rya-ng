@@ -106,6 +106,7 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
         // The store intersects the entity index's shards (SCALE-STUDY.md O23).
         final boolean storeIntersects = tripleSource instanceof org.tripatha.rdftriplestore.RdfCloudTripleStoreConnection.StoreTripleSource<?> store
                 && store.entityIntersectsInServers();
+        final boolean untracked = !strategy.isTrackResultSize() && !strategy.isTrackTime();
         final List<QueryOptimizer> optimizers = new ArrayList<>(List.of(
                 StandardQueryOptimizerPipeline.BINDING_ASSIGNER,
                 StandardQueryOptimizerPipeline.BINDING_SET_ASSIGNMENT_INLINER,
@@ -149,11 +150,10 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
                 // batched join and the entity prefetch work on.
                 new LeftDeepJoinOptimizer(),
                 // Last: a star's merge becomes the driver of the left-deep chain.
-                new SubjectMergeOptimizer(statistics, conf, !strategy.isTrackResultSize() && !strategy.isTrackTime(),
-                        storeIntersects)));
+                new SubjectMergeOptimizer(statistics, conf, untracked, storeIntersects)));
         if (storeIntersects) {
-            // The counts of a whole star, done by the store too.
-            optimizers.add(new SubjectMergeCountOptimizer());
+            // The counts of a whole star, or of one pattern, done by the store too.
+            optimizers.add(new SubjectMergeCountOptimizer(conf, untracked));
         }
         return optimizers;
     }

@@ -24,28 +24,51 @@ import org.eclipse.rdf4j.query.algebra.Count;
 import org.eclipse.rdf4j.query.algebra.Group;
 import org.eclipse.rdf4j.query.algebra.GroupElem;
 import org.eclipse.rdf4j.query.algebra.QueryModelNode;
+import org.eclipse.rdf4j.query.algebra.StatementPattern;
 import org.eclipse.rdf4j.query.algebra.TupleExpr;
 import org.eclipse.rdf4j.query.algebra.Var;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryOptimizer;
 import org.eclipse.rdf4j.query.algebra.helpers.AbstractQueryModelVisitor;
+import org.tripatha.api.RdfCloudTripleStoreConfiguration;
 
 /**
  * Turns the counts of a star into a {@link SubjectMergeCount}, for the store to count (SCALE-STUDY.md
- * O23): a group with no {@code GROUP BY} over a {@link SubjectMergeJoin}, whose every element is
- * {@code COUNT(*)}, {@code COUNT(?x)}, {@code COUNT(DISTINCT ?x)} or {@code COUNT(DISTINCT *)}, ?x
- * being the star's subject. The star binds only ?x, and on every row, so the first two count its
- * rows and the last two its subjects.
+ * O23): a group with no {@code GROUP BY} over a {@link SubjectMergeJoin}, or over a single star
+ * pattern ({@code ?x a :C}, the size of a class), whose every element is {@code COUNT(*)},
+ * {@code COUNT(?x)}, {@code COUNT(DISTINCT ?x)} or {@code COUNT(DISTINCT *)}, ?x being the star's
+ * subject. The star binds only ?x, and on every row, so the first two count its rows and the last
+ * two its subjects.
+ *
+ * <p>A merge exists only where {@link SubjectMergeOptimizer} found it safe. A single pattern takes
+ * the same conditions, except that it needs neither counters nor the ratio, which choose what to
+ * merge: no dataset (the index holds every graph), no {@code query.limit} (which caps the pattern's
+ * rows, and so the count), not the hashed row layout, no result-size or time tracking.
  *
  * <p>Runs after {@link SubjectMergeOptimizer}, and only when the store intersects the entity index.
  */
 public final class SubjectMergeCountOptimizer implements QueryOptimizer {
+    private final RdfCloudTripleStoreConfiguration conf;
+    private final boolean allowed;
+
+    /**
+     * @param conf the query's configuration; null counts merges only
+     * @param allowed false when the query is evaluated with RDF4J's result-size or time tracking
+     */
+    public SubjectMergeCountOptimizer(final RdfCloudTripleStoreConfiguration conf, final boolean allowed) {
+        this.conf = conf;
+        this.allowed = allowed;
+    }
+
     @Override
     public void optimize(final TupleExpr tupleExpr, final Dataset dataset, final BindingSet bindings) {
+        final boolean onePattern = allowed && conf != null && dataset == null && conf.getLimit() == null
+                && !Boolean.TRUE.equals(conf.isPrefixRowsWithHash());
         final List<Group> groups = new ArrayList<>();
         tupleExpr.visit(new AbstractQueryModelVisitor<RuntimeException>() {
             @Override
             public void meet(final Group node) {
-                if (node.getGroupBindingNames().isEmpty() && node.getArg() instanceof SubjectMergeJoin) {
+                if (node.getGroupBindingNames().isEmpty() && (node.getArg() instanceof SubjectMergeJoin
+                        || onePattern && node.getArg() instanceof StatementPattern sp && SubjectMergeOptimizer.isStarPattern(sp))) {
                     groups.add(node);
                 }
                 super.meet(node);
@@ -64,7 +87,7 @@ public final class SubjectMergeCountOptimizer implements QueryOptimizer {
 
     /** The group's counts, or null if one of its elements is anything else. */
     private static List<SubjectMergeCount.Counted> counted(final Group group) {
-        final String subject = ((SubjectMergeJoin) group.getArg()).getSubjectName();
+        final String subject = SubjectMergeCount.subjectName(group.getArg());
         final List<SubjectMergeCount.Counted> counted = new ArrayList<>();
         for (final GroupElem elem : group.getGroupElements()) {
             if (!(elem.getOperator() instanceof Count count)) {

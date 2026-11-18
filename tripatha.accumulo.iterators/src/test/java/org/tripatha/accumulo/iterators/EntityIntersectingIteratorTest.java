@@ -131,6 +131,22 @@ public class EntityIntersectingIteratorTest {
     }
 
     @Test
+    public void oneTermGivesEachOfItsSubjects() throws Exception {
+        posting("0", A, "s1", "", "");
+        posting("0", A, "s2", "", "");
+        posting("0", A, "s2", "urn:g1", "");
+        posting("0", B, "s3", "", "");
+        posting("1", A, "s5", "", "X");
+        posting("1", B, "s6", "", "");
+        posting("2", B, "s7", "", "");
+        assertEquals(List.of("0 s1 1", "0 s2 2", "1 s5 1"), matches(new Range(), A));
+        assertEquals(List.of("0 count  2,3", "1 count  1,1"), counts(new Range(), A));
+        assertEquals(List.of("1 count  1,1"), counts(new Range(new Key("0", "count", ""), false, null, false), A),
+                "resumed after row 0's count");
+        assertEquals(List.of(), counts(new Range(), C));
+    }
+
+    @Test
     public void aCopyCountsToo() throws Exception {
         posting("0", A, "s1", "", "");
         posting("0", B, "s1", "", "");

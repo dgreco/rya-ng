@@ -176,46 +176,50 @@ public class EntityIndexIT extends StoreITBase {
             }
         }
         dao.add(statements.iterator());
-        final List<byte[]> terms = List.of(EntityIndex.term(WORKS_FOR, ACME), EntityIndex.term(type, person));
+        final List<byte[]> both = List.of(EntityIndex.term(WORKS_FOR, ACME), EntityIndex.term(type, person));
         final List<byte[]> shards = dao.getIndexCatalog().entityIndex().shardRows();
-        for (final Auths auths : List.of(Auths.NONE, Auths.of("A"))) {
-            final java.util.Map<String, Long> expected = new java.util.TreeMap<>();
-            for (final byte[] shard : shards) {
-                final java.util.Map<String, long[]> counts = new java.util.HashMap<>();
-                for (int t = 0; t < terms.size(); t++) {
-                    try (CellScanner cells = getStore().scan(table, KeyRange.row(shard),
-                            ScanSpec.builder(auths).family(terms.get(t)).build())) {
-                        while (cells.hasNext()) {
-                            final String subject = new String(EntityIndex.subject(cells.next().qualifier()), StandardCharsets.UTF_8);
-                            counts.computeIfAbsent(subject, k -> new long[terms.size()])[t]++;
+        // Two lists, and each on its own: one list's matches are its postings (the size of a class).
+        for (final List<byte[]> terms : List.of(both, both.subList(0, 1), both.subList(1, 2))) {
+            for (final Auths auths : List.of(Auths.NONE, Auths.of("A"))) {
+                final java.util.Map<String, Long> expected = new java.util.TreeMap<>();
+                for (final byte[] shard : shards) {
+                    final java.util.Map<String, long[]> counts = new java.util.HashMap<>();
+                    for (int t = 0; t < terms.size(); t++) {
+                        try (CellScanner cells = getStore().scan(table, KeyRange.row(shard),
+                                ScanSpec.builder(auths).family(terms.get(t)).build())) {
+                            while (cells.hasNext()) {
+                                final String subject = new String(EntityIndex.subject(cells.next().qualifier()), StandardCharsets.UTF_8);
+                                counts.computeIfAbsent(subject, k -> new long[terms.size()])[t]++;
+                            }
                         }
                     }
+                    counts.forEach((subject, perTerm) -> {
+                        long product = 1;
+                        for (final long n : perTerm) {
+                            product *= n;
+                        }
+                        if (product > 0) {
+                            expected.put(new String(shard, StandardCharsets.UTF_8) + " " + subject, product);
+                        }
+                    });
                 }
-                counts.forEach((subject, perTerm) -> {
-                    long product = 1;
-                    for (final long n : perTerm) {
-                        product *= n;
+                final java.util.Map<String, Long> actual = new java.util.TreeMap<>();
+                try (CellScanner matches = getStore().intersect(table, shards, terms, ScanSpec.of(auths))) {
+                    while (matches.hasNext()) {
+                        final var m = matches.next();
+                        actual.put(new String(m.row(), StandardCharsets.UTF_8) + " " + new String(m.qualifier(), StandardCharsets.UTF_8),
+                                Long.parseLong(new String(m.value(), StandardCharsets.UTF_8)));
                     }
-                    if (product > 0) {
-                        expected.put(new String(shard, StandardCharsets.UTF_8) + " " + subject, product);
-                    }
-                });
-            }
-            final java.util.Map<String, Long> actual = new java.util.TreeMap<>();
-            try (CellScanner matches = getStore().intersect(table, shards, terms, ScanSpec.of(auths))) {
-                while (matches.hasNext()) {
-                    final var m = matches.next();
-                    actual.put(new String(m.row(), StandardCharsets.UTF_8) + " " + new String(m.qualifier(), StandardCharsets.UTF_8),
-                            Long.parseLong(new String(m.value(), StandardCharsets.UTF_8)));
                 }
+                assertFalse(expected.isEmpty());
+                assertEquals(expected, actual, terms.size() + " terms, " + auths);
+                // Counted by the store: the same subjects and rows.
+                final org.tripatha.store.spi.IntersectionCount count = getStore().countIntersection(table, shards, terms,
+                        ScanSpec.of(auths));
+                assertEquals(expected.size(), count.subjects(), terms.size() + " terms, " + auths);
+                assertEquals(expected.values().stream().mapToLong(Long::longValue).sum(), count.rows(),
+                        terms.size() + " terms, " + auths);
             }
-            assertFalse(expected.isEmpty());
-            assertEquals(expected, actual, auths.toString());
-            // Counted by the store: the same subjects and rows.
-            final org.tripatha.store.spi.IntersectionCount count = getStore().countIntersection(table, shards, terms,
-                    ScanSpec.of(auths));
-            assertEquals(expected.size(), count.subjects(), auths.toString());
-            assertEquals(expected.values().stream().mapToLong(Long::longValue).sum(), count.rows(), auths.toString());
         }
     }
 
