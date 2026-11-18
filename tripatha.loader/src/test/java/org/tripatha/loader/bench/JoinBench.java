@@ -149,6 +149,9 @@ public final class JoinBench {
         final List<String> a = new ArrayList<>(List.of(command, "--table-prefix", PREFIX, "--triples", settings.triples,
                 "--text-index", "--geo-index", "--threads", Integer.toString(settings.loadThreads), "--progress-file",
                 progressFile().toString(), "--report-interval", "30s"));
+        if (settings.entityIndex) {
+            a.add("--entity-index");
+        }
         return a.toArray(new String[0]);
     }
 
@@ -175,6 +178,7 @@ public final class JoinBench {
         final Path marker = loadedMarker(backend, dataset.genConfig());
         if (stored != null && stored.equals(dataset.genConfig().fingerprint()) && Files.exists(marker)) {
             out.println("Store already loaded; reusing it.");
+            matchEntityIndex(store, conf);
             return;
         }
         if (exists) {
@@ -193,13 +197,35 @@ public final class JoinBench {
         out.println("Compacting…");
         final TableLayoutStrategy t = conf.getTableLayoutStrategy();
         for (final String table : List.of(t.getSpo(), t.getPo(), t.getOsp(), t.getEval(), t.getGraphs(), t.getNs(), t.getText(),
-                t.getGeo())) {
+                t.getGeo(), t.getEntity())) {
             if (store.tables().exists(table)) {
                 backend.compact(table);
             }
         }
         Files.writeString(marker, dataset.genConfig().fingerprint() + "\n", StandardCharsets.UTF_8);
         out.printf(Locale.ROOT, "Loaded and compacted in %.0f s.%n", (System.nanoTime() - t0) / 1e9);
+    }
+
+    /**
+     * Gives a kept store the entity index if this run wants it (built from spo), or drops it if
+     * not: a store with the index can only be opened with it on.
+     */
+    private void matchEntityIndex(final Store store, final StoreRdfConfiguration conf) {
+        final String table = conf.getTableLayoutStrategy().getEntity();
+        if (!settings.entityIndex) {
+            if (store.tables().exists(table)) {
+                out.println("Dropping the entity index this run doesn't keep.");
+                store.tables().delete(table);
+            }
+            return;
+        }
+        final StoreRdfConfiguration rebuild = new StoreRdfConfiguration(conf);
+        rebuild.setRebuildIndexes(true);
+        final long t0 = System.nanoTime();
+        final org.tripatha.store.RyaStoreDAO dao = new org.tripatha.store.RyaStoreDAO(store, rebuild);
+        dao.init();
+        dao.destroy();
+        out.printf(Locale.ROOT, "Entity index ready (%.0f s).%n", (System.nanoTime() - t0) / 1e9);
     }
 
     // ---- the suite ----
@@ -714,13 +740,14 @@ public final class JoinBench {
     // ---- settings ----
 
     record Settings(String triples, int warmup, int runs, int timeoutSeconds, int loadThreads, boolean profile, Path out,
-            Path baseline, List<String> only, Map<String, String> conf, List<Variant> variants) {
+            Path baseline, List<String> only, Map<String, String> conf, List<Variant> variants, boolean entityIndex) {
         static final String USAGE = """
                 Usage: bench.sh [--backend rocksdb|accumulo|hbase] [options]
                   --triples 10M        dataset size (the loader's generator, both indexes on)
                   --warmup 3 --runs 10 runs per query, before and while timing
                   --timeout 120        seconds per query run
                   --profile            record where the CPU time of the timed runs goes (JFR)
+                  --entity-index       keep the entity index too (O23): loaded with it, or built on a kept store
                   --only a,b           run only these queries
                   --conf key=value     a store configuration setting, for example query.join.batchsize=100
                   --variant NAME:k=v,k=v  run every query under this variant too, alternating with the others on the
@@ -737,6 +764,7 @@ public final class JoinBench {
             int timeout = 120;
             int loadThreads = 8;
             boolean profile = false;
+            boolean entityIndex = false;
             Path out = Path.of("target", "bench");
             Path baseline = null;
             List<String> only = List.of();
@@ -746,6 +774,10 @@ public final class JoinBench {
                 final String a = args[i];
                 if (a.equals("--profile")) {
                     profile = true;
+                    continue;
+                }
+                if (a.equals("--entity-index")) {
+                    entityIndex = true;
                     continue;
                 }
                 if (i + 1 >= args.length) {
@@ -775,7 +807,8 @@ public final class JoinBench {
             if (variants.isEmpty()) {
                 variants.add(new Variant("default", Map.of()));
             }
-            return new Settings(triples, warmup, runs, timeout, loadThreads, profile, out, baseline, only, conf, List.copyOf(variants));
+            return new Settings(triples, warmup, runs, timeout, loadThreads, profile, out, baseline, only, conf, List.copyOf(variants),
+                    entityIndex);
         }
 
         private static Variant variant(final String v) {

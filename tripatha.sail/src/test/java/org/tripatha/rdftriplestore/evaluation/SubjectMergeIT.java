@@ -326,6 +326,61 @@ public class SubjectMergeIT extends RyaSailITBase {
     }
 
     @Test
+    public void manyMatchesFromTheEntityIndexAreJoinedInSortedRuns() throws Exception {
+        // 3,000 more matches: more than the first sorted run (1,024) holds.
+        final SailRepository repo = repository(false, 0);
+        try (RepositoryConnection conn = repo.getConnection()) {
+            conn.begin();
+            for (int i = 0; i < 3000; i++) {
+                final IRI s = VF.createIRI(String.format("urn:m%05d", (i * 7919) % 3000));
+                conn.add(s, P, A);
+                conn.add(s, Q, VF.createLiteral("x"));
+                if (i % 10 == 0) {
+                    conn.add(s, Q, VF.createLiteral("x"), G1); // two rows for this match
+                }
+                conn.add(s, NAME, VF.createLiteral("m" + i));
+            }
+            conn.commit();
+        }
+        final StoreRdfConfiguration indexed = newConf();
+        indexed.setEntityIndex(true);
+        indexed.setEntityIndexShards(4);
+        indexed.setRebuildIndexes(true);
+        newDao(indexed).destroy();
+        final String query = "SELECT ?x ?n WHERE { ?x <urn:p> <urn:A> ; <urn:q> \"x\" ; <urn:name> ?n }";
+        final List<String> expected = rows(indexed(false, 0, 1, false, false), query);
+        assertTrue(expected.size() > 3300, String.valueOf(expected.size()));
+        for (final int threads : List.of(0, 1, 3)) {
+            final SailRepository fromIndex = indexed(false, 1_000_000, Math.max(1, threads), true, threads == 0);
+            assertEquals(expected, rows(fromIndex, query), threads + " threads");
+            // The first run's matches come in subject order, and so do the rest's, in one run.
+            final List<String> matches = new ArrayList<>();
+            for (final String row : rowsInOrder(fromIndex, query)) {
+                final String x = row.substring(row.indexOf("x=") + 2, row.indexOf(' ', row.indexOf("x=")));
+                if (matches.isEmpty() || !matches.get(matches.size() - 1).equals(x)) {
+                    matches.add(x);
+                }
+            }
+            for (final List<String> run : List.of(matches.subList(0, 1024), matches.subList(1024, matches.size()))) {
+                // In the stored order: UTF-8 bytes, which isn't String's for the odd subjects.
+                final List<String> sorted = new ArrayList<>(run);
+                sorted.sort((a, b) -> java.util.Arrays.compareUnsigned(a.getBytes(StandardCharsets.UTF_8),
+                        b.getBytes(StandardCharsets.UTF_8)));
+                assertEquals(sorted, run, threads + " threads");
+            }
+            try (RepositoryConnection conn = fromIndex.getConnection();
+                    TupleQueryResult result = conn.prepareTupleQuery(query + " LIMIT 5").evaluate()) {
+                int n = 0;
+                while (result.hasNext()) {
+                    result.next();
+                    n++;
+                }
+                assertEquals(5, n);
+            }
+        }
+    }
+
+    @Test
     public void slicedMergesGiveTheRowsOfOneSliceInTheSameOrder() throws Exception {
         for (final boolean labelled : List.of(true, false)) {
             final SailRepository plain = repository(labelled, 0, false, 1);

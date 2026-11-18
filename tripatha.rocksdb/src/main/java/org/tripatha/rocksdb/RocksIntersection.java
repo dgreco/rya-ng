@@ -57,6 +57,12 @@ final class RocksIntersection implements CellScanner {
     private final Map<ByteBuffer, Boolean> visible = new HashMap<>();
     /** The key prefix of each family in the current row, or null between rows. */
     private byte[][] prefixes;
+    /**
+     * Each list's key and its subject, read once per position (each read of a key crosses JNI and
+     * copies it); null when the list has left its row and family.
+     */
+    private final byte[][] keys;
+    private final byte[][] heads;
     private int row = -1;
     private Cell next;
     private boolean closed;
@@ -71,6 +77,8 @@ final class RocksIntersection implements CellScanner {
         this.snapshot = database.db().getSnapshot();
         this.options = new ReadOptions().setSnapshot(snapshot);
         this.lists = new RocksIterator[this.families.length];
+        this.keys = new byte[this.families.length][];
+        this.heads = new byte[this.families.length][];
         for (int i = 0; i < lists.length; i++) {
             lists[i] = database.db().newIterator(database.family(table), options);
         }
@@ -110,10 +118,9 @@ final class RocksIntersection implements CellScanner {
             long count = 1;
             for (int i = 0; i < lists.length; i++) {
                 long n = 0;
-                while (Arrays.equals(head(i), match)) {
+                while (Arrays.equals(heads[i], match)) {
                     n++;
-                    lists[i].next();
-                    skipHidden(i);
+                    step(i);
                 }
                 count = Math.multiplyExact(count, n);
             }
@@ -129,8 +136,9 @@ final class RocksIntersection implements CellScanner {
             for (int i = 0; i < families.length && all; i++) {
                 prefixes[i] = RocksCodec.familyPrefix(rows.get(row), families[i]);
                 lists[i].seek(prefixes[i]);
+                load(i);
                 skipHidden(i);
-                all = head(i) != null;
+                all = heads[i] != null;
             }
             if (all) {
                 return true;
@@ -144,7 +152,7 @@ final class RocksIntersection implements CellScanner {
     private byte[] intersect() {
         byte[] target = null;
         for (int i = 0; i < lists.length; i++) {
-            final byte[] head = head(i);
+            final byte[] head = heads[i];
             if (head == null) {
                 return null;
             }
@@ -156,11 +164,12 @@ final class RocksIntersection implements CellScanner {
         do {
             agreed = true;
             for (int i = 0; i < lists.length; i++) {
-                byte[] head = head(i);
+                byte[] head = heads[i];
                 if (head != null && Arrays.compareUnsigned(head, target) < 0) {
                     lists[i].seek(concat(prefixes[i], target));
+                    load(i);
                     skipHidden(i);
-                    head = head(i);
+                    head = heads[i];
                 }
                 if (head == null) {
                     return null;
@@ -174,33 +183,44 @@ final class RocksIntersection implements CellScanner {
         return target;
     }
 
-    /** The subject of the cell a list is at, or null when it has left its row and family. */
-    private byte[] head(final int list) {
+    /** Reads the key and subject of the cell a list is at: none when it has left its row and family. */
+    private void load(final int list) {
         final RocksIterator it = lists[list];
+        keys[list] = null;
+        heads[list] = null;
         if (!it.isValid()) {
-            return null;
+            return;
         }
         final byte[] key = it.key();
         final byte[] prefix = prefixes[list];
         if (key.length < prefix.length || !Arrays.equals(key, 0, prefix.length, prefix, 0, prefix.length)) {
-            return null;
+            return;
         }
         int end = prefix.length;
         while (end < key.length && key[end] != SEP && key[end] != 0) {
             end++;
         }
-        return Arrays.copyOfRange(key, prefix.length, end);
+        keys[list] = key;
+        heads[list] = Arrays.copyOfRange(key, prefix.length, end);
+    }
+
+    /** Moves a list to its next shown cell. */
+    private void step(final int list) {
+        lists[list].next();
+        load(list);
+        skipHidden(list);
     }
 
     /** Moves a list past the cells of its row and family that the labels or the time range hide. */
     private void skipHidden(final int list) {
-        final RocksIterator it = lists[list];
-        while (head(list) != null && !shown(it)) {
-            it.next();
+        while (heads[list] != null && !shown(list)) {
+            lists[list].next();
+            load(list);
         }
     }
 
-    private boolean shown(final RocksIterator it) {
+    private boolean shown(final int list) {
+        final RocksIterator it = lists[list];
         if (spec.minTimestamp() != null || spec.maxTimestamp() != null) {
             final long ts = RocksCodec.timestamp(it.value());
             if ((spec.minTimestamp() != null && ts < spec.minTimestamp()) || (spec.maxTimestamp() != null && ts > spec.maxTimestamp())) {
@@ -210,7 +230,7 @@ final class RocksIntersection implements CellScanner {
         if (spec.auths().isAllHeld()) {
             return true;
         }
-        final byte[] key = it.key();
+        final byte[] key = keys[list];
         int qualifierEnd = key.length - 1;
         while (qualifierEnd >= 0 && key[qualifierEnd] != 0) {
             qualifierEnd--;

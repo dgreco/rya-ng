@@ -1267,7 +1267,9 @@ On Accumulo:
 - **The query:** a batch scan over the shard rows with the iterator (priority 50, above Accumulo's TTL and regular-expression filters), traced as any scan.
 - **When it can:** the servers must load the class: the store asks once per table (`Store.canIntersect`, through Accumulo's `testClassLoad`) and logs when they can't.
 
-**In a merge join** (`RyaStoreQueryEngine.entityMatches`), when the index is READY, `query.useindex` and `query.entityindex.servers` are on and the store can intersect, each thread's group of shards is one `Store.intersect` call, under the query's trace; matches come back in no particular order across shards. Otherwise the shards are intersected on the client as above: same answers, more data moved.
+**In a merge join** (`RyaStoreQueryEngine.entityMatches`), when the index is READY, `query.useindex` and `query.entityindex.servers` are on and the store can intersect, each thread's group of shards is one `Store.intersect` call, under the query's trace. Otherwise the shards are intersected on the client as above: same answers, more data moved.
+- **One queue:** the threads, one per group of shards (`query.join.mergeslices`), all feed one queue, since shards are hash partitions and their order doesn't matter.
+- **Sorted runs:** when lookups follow the merge (it is the left side of a join or an OPTIONAL, maybe under filters and BINDs), its matches are sorted by subject in runs: a first run of 1,024, so a `LIMIT`'s first rows come early, then runs of up to 262,144. Lookups in hash order each read a block of their own; on the benchmark's Accumulo store that made a value star 2.6 times slower (SCALE-STUDY.md 4.10).
 - **Every constant pattern joins the intersection** when the store intersects: `SubjectMergeOptimizer` then merges each star pattern on the subject, whatever its length (the merge ratio of 13.6 is for reading whole lists on the client).
 
 The client intersection, used on HBase and as the fallback, reads every posting of the star's terms, as the merge of 13.6 does: correct everywhere, not faster.
