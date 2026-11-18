@@ -66,6 +66,12 @@ public final class EntityIndex implements SecondaryIndex {
      * {@code tripatha.accumulo.iterators}; named here, not linked, so nothing else needs the jar.
      */
     public static final String ACCUMULO_ITERATOR = "org.tripatha.accumulo.iterators.EntityIntersectingIterator";
+    /**
+     * The iterator's option to count instead (its {@code COUNT}), and the family of the cell it
+     * then returns per row, valued {@code subjects,rows} (its {@code COUNT_FAMILY}).
+     */
+    public static final String ACCUMULO_COUNT_OPTION = "count";
+    public static final String ACCUMULO_COUNT_FAMILY = "count";
 
     /** A subject every term of a star has in one shard, and the rows it gives: the product of its postings per term. */
     public record Match(byte[] subject, long count) {

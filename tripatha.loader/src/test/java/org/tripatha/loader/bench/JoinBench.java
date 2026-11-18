@@ -118,6 +118,8 @@ public final class JoinBench {
                 gen.entities(), settings.triples, Runtime.getRuntime().availableProcessors(), Runtime.version());
         try (Store store = backend.openStore()) {
             ensureLoaded(backend, store, dataset);
+            tableSizes = tableSizes(store, dataset.rdfConf());
+            out.println("Tables on disk: " + tableSizes + ".");
             final List<Query> suite = suite(new EntityGenerator(gen));
             final Map<Variant, SailRepository> repos = new LinkedHashMap<>();
             try {
@@ -141,6 +143,24 @@ public final class JoinBench {
                 repos.values().forEach(SailRepository::shutDown);
             }
         }
+    }
+
+    /** The tables' sizes on disk, as the store reports them after the load's compaction; for the report. */
+    private String tableSizes = "";
+
+    private static String tableSizes(final Store store, final StoreRdfConfiguration conf) {
+        final TableLayoutStrategy t = conf.getTableLayoutStrategy();
+        final List<String> parts = new ArrayList<>();
+        long total = 0;
+        for (final String table : List.of(t.getSpo(), t.getPo(), t.getOsp(), t.getEval(), t.getText(), t.getGeo(), t.getEntity())) {
+            final long bytes = store.tables().exists(table) ? store.tables().diskUsage(table) : -1;
+            if (bytes >= 0) {
+                parts.add(String.format(Locale.ROOT, "%s %.0f MB", table.substring(PREFIX.length()), bytes / 1e6));
+                total += bytes;
+            }
+        }
+        return parts.isEmpty() ? "not reported by this backend"
+                : String.join(", ", parts) + String.format(Locale.ROOT, " (%.0f MB in all)", total / 1e6);
     }
 
     // ---- dataset ----
@@ -280,6 +300,8 @@ public final class JoinBench {
                 "SELECT ?x WHERE { " + product + "}"));
         q.add(new Query("class-count", "class-large, counted",
                 "SELECT (COUNT(*) AS ?n) WHERE { " + product + "}"));
+        q.add(new Query("class-3-count", "class-3, counted: a selective intersection of long lists",
+                "SELECT (COUNT(*) AS ?n) WHERE { " + person + "; a o:Person }"));
         q.add(new Query("class-value", "observations of one property above a value (xsd:double)",
                 "SELECT ?obs ?v WHERE { ?obs a o:Observation ; o:observedProperty <" + c.topProperty
                         + "> ; o:hasResult ?v FILTER(?v > 60) }"));
@@ -638,6 +660,7 @@ public final class JoinBench {
                 + "%d processors, Java %s.%s%n", LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS), gen.entities(), settings.triples,
                 settings.warmup, settings.runs, Runtime.getRuntime().availableProcessors(), Runtime.version(),
                 settings.conf.isEmpty() ? "" : " Settings: " + settings.conf + "."));
+        md.append("\nTables on disk: ").append(tableSizes).append(".\n");
         if (variants) {
             md.append("\nVariants, timed alternately: ").append(settings.variants.stream()
                     .map(v -> "`" + v.name() + "` " + (v.conf().isEmpty() ? "(no change)" : v.conf().toString()))

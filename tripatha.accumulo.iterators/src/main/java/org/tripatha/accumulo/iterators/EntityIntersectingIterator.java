@@ -50,20 +50,31 @@ import org.apache.hadoop.io.Text;
  * value      the product of the counts, in decimal: the rows the match gives in a join
  * </pre>
  *
+ * <p>With option {@code count=true} it counts instead: one key per row that has matches, with
+ * family {@code count}, an empty qualifier, and the value {@code subjects,rows} in decimal (the
+ * matches, and the sum of their products).
+ *
  * <p>Labels are applied below user iterators, so only visible postings are counted. Keys come in
  * row and subject order; when the scan is resumed after a key, the intersection resumes after its
- * subject. Option {@code terms}: the terms' bytes, each in Base64, separated by commas.
+ * subject, or at the next row after a count. Option {@code terms}: the terms' bytes, each in
+ * Base64, separated by commas.
  *
  * <p>Depends only on Accumulo, so that its jar is all an operator puts on the tablet servers.
  */
 public final class EntityIntersectingIterator implements SortedKeyValueIterator<Key, Value> {
     /** The option naming the terms. */
     public static final String TERMS = "terms";
+    /** The option to count each row's matches instead of returning them. */
+    public static final String COUNT = "count";
+    /** The family of a row's count. */
+    public static final Text COUNT_FAMILY = new Text("count");
     private static final byte SEP = 1;
     private static final Text EMPTY = new Text();
 
     private SortedKeyValueIterator<Key, Value> source;
     private IteratorEnvironment env;
+    private Map<String, String> options;
+    private boolean count;
     private byte[][] terms;
     private Text[] termTexts;
     private SortedKeyValueIterator<Key, Value>[] lists;
@@ -91,6 +102,8 @@ public final class EntityIntersectingIterator implements SortedKeyValueIterator<
             final IteratorEnvironment env) throws IOException {
         this.source = source;
         this.env = env;
+        this.options = Map.copyOf(options);
+        this.count = Boolean.parseBoolean(options.get(COUNT));
         final String encoded = options.get(TERMS);
         if (encoded == null || encoded.isEmpty()) {
             throw new IllegalArgumentException("Option " + TERMS + " is required");
@@ -110,7 +123,7 @@ public final class EntityIntersectingIterator implements SortedKeyValueIterator<
     public SortedKeyValueIterator<Key, Value> deepCopy(final IteratorEnvironment environment) {
         final EntityIntersectingIterator copy = new EntityIntersectingIterator();
         try {
-            copy.init(source.deepCopy(environment), Map.of(TERMS, encodeTerms(List.of(terms))), environment);
+            copy.init(source.deepCopy(environment), options, environment);
         } catch (final IOException e) {
             throw new IllegalStateException(e);
         }
@@ -129,10 +142,13 @@ public final class EntityIntersectingIterator implements SortedKeyValueIterator<
             row = firstRow(null);
         } else {
             row = new Text(start.getRow());
-            // Resumed after a key this iterator returned: (row, empty family, subject).
-            if (start.getColumnFamilyData().length() == 0 && start.getColumnQualifierData().length() > 0
-                    && !range.isStartKeyInclusive()) {
+            if (!range.isStartKeyInclusive() && start.getColumnFamilyData().length() == 0
+                    && start.getColumnQualifierData().length() > 0) {
+                // Resumed after a match this iterator returned: (row, empty family, subject).
                 after = start.getColumnQualifierData().toArray();
+            } else if (!range.isStartKeyInclusive() && count && start.compareColumnFamily(COUNT_FAMILY) == 0) {
+                // Resumed after a row's count: the row is done.
+                row = firstRow(new Key(row).followingKey(PartialKey.ROW));
             }
         }
         if (row != null && !openRow(after)) {
@@ -150,6 +166,9 @@ public final class EntityIntersectingIterator implements SortedKeyValueIterator<
     public void next() throws IOException {
         topKey = null;
         topValue = null;
+        if (count && row != null) {
+            nextRow(); // a count is the whole row's
+        }
         findNext();
     }
 
@@ -163,26 +182,46 @@ public final class EntityIntersectingIterator implements SortedKeyValueIterator<
         return topValue;
     }
 
-    /** Finds the next match, row after row, and makes it the top. */
+    /** Finds the next match, or the next row's count, row after row, and makes it the top. */
     private void findNext() throws IOException {
         while (row != null) {
-            final byte[] match = intersect();
-            if (match != null) {
-                long rows = 1;
-                for (int i = 0; i < lists.length; i++) {
-                    long count = 0;
-                    while (match.length > 0 && same(i, match)) {
-                        count++;
-                        lists[i].next();
-                    }
-                    rows = Math.multiplyExact(rows, count);
+            if (count) {
+                long subjects = 0;
+                long rows = 0;
+                for (byte[] match = intersect(); match != null; match = intersect()) {
+                    subjects++;
+                    rows = Math.addExact(rows, consume(match));
                 }
-                topKey = new Key(row, EMPTY, new Text(match));
-                topValue = new Value(Long.toString(rows).getBytes(StandardCharsets.UTF_8));
-                return;
+                if (subjects > 0) {
+                    topKey = new Key(row, COUNT_FAMILY, EMPTY);
+                    topValue = new Value((subjects + "," + rows).getBytes(StandardCharsets.UTF_8));
+                    return;
+                }
+            } else {
+                final byte[] match = intersect();
+                if (match != null) {
+                    final long rows = consume(match);
+                    topKey = new Key(row, EMPTY, new Text(match));
+                    topValue = new Value(Long.toString(rows).getBytes(StandardCharsets.UTF_8));
+                    return;
+                }
             }
             nextRow();
         }
+    }
+
+    /** Moves every list past a match's postings; returns the product of their counts, the rows it gives. */
+    private long consume(final byte[] match) throws IOException {
+        long rows = 1;
+        for (int i = 0; i < lists.length; i++) {
+            long postings = 0;
+            while (match.length > 0 && same(i, match)) {
+                postings++;
+                lists[i].next();
+            }
+            rows = Math.multiplyExact(rows, postings);
+        }
+        return rows;
     }
 
     /**

@@ -81,7 +81,7 @@ import org.tripatha.store.trace.Trace;
  */
 final class SubjectMergeStep implements QueryEvaluationStep {
     /** Threads intersecting slices: daemons, kept a minute when idle. */
-    private static final ExecutorService SLICE_THREADS = Executors.newCachedThreadPool(r -> {
+    static final ExecutorService SLICE_THREADS = Executors.newCachedThreadPool(r -> {
         final Thread t = new Thread(r, "tripatha-merge-slice");
         t.setDaemon(true);
         return t;
@@ -212,10 +212,8 @@ final class SubjectMergeStep implements QueryEvaluationStep {
 
         /** The star read from the entity index: its shards in groups, each on a thread of its own. */
         private void openShards(final EntityIndex entity, final List<StatementPattern> patterns) {
-            final List<byte[]> terms = new ArrayList<>(patterns.size());
-            for (final StatementPattern sp : patterns) {
-                terms.add(EntityIndex.term(RdfToRyaConversions.convertIRI((IRI) sp.getPredicateVar().getValue()),
-                        RdfToRyaConversions.convertValue(sp.getObjectVar().getValue())));
+            final List<byte[]> terms = entityTerms(patterns);
+            for (int i = 0; i < patterns.size(); i++) {
                 source.countLookup();
             }
             final List<byte[]> shards = entity.shardRows();
@@ -349,6 +347,16 @@ final class SubjectMergeStep implements QueryEvaluationStep {
                 task.stop();
             }
         }
+    }
+
+    /** The entity index's terms of a star's constant patterns. */
+    static List<byte[]> entityTerms(final List<StatementPattern> patterns) {
+        final List<byte[]> terms = new ArrayList<>(patterns.size());
+        for (final StatementPattern sp : patterns) {
+            terms.add(EntityIndex.term(RdfToRyaConversions.convertIRI((IRI) sp.getPredicateVar().getValue()),
+                    RdfToRyaConversions.convertValue(sp.getObjectVar().getValue())));
+        }
+        return terms;
     }
 
     private static Value value(final byte[] subject) {

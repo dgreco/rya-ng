@@ -267,6 +267,18 @@ final class RocksDatabase {
      * data (RocksDB keeps each level's files in disjoint key ranges). None for a table still in
      * memory.
      */
+    /** The bytes of a table's SST files. */
+    long diskUsage(final String table) {
+        final byte[] familyName = name(table);
+        long bytes = 0;
+        for (final org.rocksdb.LiveFileMetaData file : db.getLiveFilesMetaData()) {
+            if (java.util.Arrays.equals(file.columnFamilyName(), familyName)) {
+                bytes += file.size();
+            }
+        }
+        return bytes;
+    }
+
     List<byte[]> splitRows(final String table) {
         final java.util.SortedSet<byte[]> hints = splitHints.get(table);
         if (hints != null && !hints.isEmpty()) {

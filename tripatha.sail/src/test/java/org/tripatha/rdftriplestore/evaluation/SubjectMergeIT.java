@@ -326,6 +326,72 @@ public class SubjectMergeIT extends RyaSailITBase {
     }
 
     @Test
+    public void countsOfAStarAreTheStoresWhenItIntersects() throws Exception {
+        final StoreRdfConfiguration indexed = newConf();
+        indexed.setEntityIndex(true);
+        indexed.setEntityIndexShards(4);
+        indexed.setRebuildIndexes(true);
+        newDao(indexed).destroy();
+        final String star = "?x <urn:p> <urn:A> ; <urn:q> \"x\"";
+        // Counted by the store: rows and subjects differ, the subjects of urn:g1 giving four rows each.
+        final List<String> counted = List.of(
+                "SELECT (COUNT(*) AS ?c) WHERE { " + star + " }",
+                "SELECT (COUNT(?x) AS ?c) WHERE { " + star + " }",
+                "SELECT (COUNT(DISTINCT ?x) AS ?c) WHERE { " + star + " }",
+                "SELECT (COUNT(DISTINCT *) AS ?c) WHERE { " + star + " }",
+                "SELECT (COUNT(*) AS ?c) (COUNT(DISTINCT ?x) AS ?d) WHERE { " + star + " }",
+                "SELECT (COUNT(*) AS ?c) WHERE { ?x a <urn:C> ; <urn:p> <urn:A> ; <urn:q> \"x\" }",
+                "SELECT (COUNT(*) AS ?c) WHERE { ?x <urn:p> <urn:nothing> ; <urn:q> \"x\" }",
+                "SELECT ?y ?c WHERE { ?y <urn:name> \"n0\" { SELECT (COUNT(*) AS ?c) WHERE { " + star + " } } }");
+        // Not counted by the store: a GROUP BY, a filter, another aggregate.
+        final List<String> grouped = List.of(
+                "SELECT ?x (COUNT(*) AS ?c) WHERE { " + star + " } GROUP BY ?x",
+                "SELECT (COUNT(*) AS ?c) WHERE { " + star + " FILTER(?x != <urn:s0>) }",
+                "SELECT (COUNT(*) AS ?c) (SUM(1) AS ?s) WHERE { " + star + " }",
+                "SELECT ?x ?n WHERE { ?x <urn:name> ?n FILTER EXISTS { SELECT (COUNT(*) AS ?c) WHERE { " + star + " } } }");
+        final boolean storeCounts = !onBackend("hbase");
+        for (final boolean labelled : List.of(true, false)) {
+            final SailRepository plain = indexed(labelled, 0, 1, false, false);
+            // The shards counted on the query thread, or in groups on 3 threads.
+            for (final int threads : List.of(1, 3)) {
+                final SailRepository fromIndex = indexed(labelled, 1_000_000, threads, true, true);
+                final String which = (labelled ? " (label A)" : "") + ", " + threads + " threads";
+                for (final String query : counted) {
+                    assertEquals(rows(plain, query), rows(fromIndex, query), query + which);
+                    final List<String> reasons = reasons(fromIndex, query);
+                    assertEquals(storeCounts, reasons.stream().anyMatch(r -> r.startsWith("count:")), query + which + ": " + reasons);
+                    assertEquals(!storeCounts, reasons.stream().anyMatch(r -> r.startsWith("merge join")),
+                            query + which + ": " + reasons);
+                }
+                for (final String query : grouped) {
+                    assertEquals(rows(plain, query), rows(fromIndex, query), query + which);
+                    assertFalse(reasons(fromIndex, query).stream().anyMatch(r -> r.startsWith("count:")), query + which);
+                }
+            }
+        }
+        // The counts themselves, without the label: 11 subjects, 8 of them also in urn:g1 (every sixth,
+        // one of the odd ones too), where each gives 2 × 2 rows: 8 × 4 + 3 = 35 rows.
+        assertEquals(List.of("c=\"35\"^^<http://www.w3.org/2001/XMLSchema#integer> d=\"11\"^^<http://www.w3.org/2001/XMLSchema#integer> "),
+                rows(indexed(false, 1_000_000, 1, true, true), counted.get(4)));
+    }
+
+    /** The reasons of the scans a query makes. */
+    private static List<String> reasons(final SailRepository repo, final String query) {
+        // Scans of other threads report here too.
+        final List<String> reasons = Collections.synchronizedList(new ArrayList<>());
+        try (StoreTrace.Scope scope = StoreTrace.start(event -> {
+            if (event instanceof TraceEvent.ScanStart scan && scan.reason() != null) {
+                reasons.add(scan.reason());
+            }
+        })) {
+            rows(repo, query);
+        }
+        synchronized (reasons) {
+            return List.copyOf(reasons);
+        }
+    }
+
+    @Test
     public void manyMatchesFromTheEntityIndexAreJoinedInSortedRuns() throws Exception {
         // 3,000 more matches: more than the first sorted run (1,024) holds.
         final SailRepository repo = repository(false, 0);

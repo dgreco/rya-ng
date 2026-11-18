@@ -211,6 +211,11 @@ public class EntityIndexIT extends StoreITBase {
             }
             assertFalse(expected.isEmpty());
             assertEquals(expected, actual, auths.toString());
+            // Counted by the store: the same subjects and rows.
+            final org.tripatha.store.spi.IntersectionCount count = getStore().countIntersection(table, shards, terms,
+                    ScanSpec.of(auths));
+            assertEquals(expected.size(), count.subjects(), auths.toString());
+            assertEquals(expected.values().stream().mapToLong(Long::longValue).sum(), count.rows(), auths.toString());
         }
     }
 

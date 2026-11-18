@@ -246,18 +246,35 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
      * store (SCALE-STUDY.md O23): one match per subject and shard, with the rows it gives. Only
      * when {@link #intersectsEntitiesInServers} says so.
      */
-    public CloseableIteration<org.tripatha.store.index.EntityIndex.Match> entityMatches(final List<byte[]> shardRows,
-            final List<byte[]> terms, StoreRdfConfiguration conf) {
+    /**
+     * How many subjects {@link #entityMatches} would give for these shards, and their rows,
+     * counted by the store: in its servers on Accumulo, so only a count per shard comes back.
+     */
+    public org.tripatha.store.spi.IntersectionCount entityCount(final List<byte[]> shardRows, final List<byte[]> terms,
+            StoreRdfConfiguration conf) {
         if (conf == null) {
             conf = configuration;
         }
+        return store.countIntersection(conf.getTableLayoutStrategy().getEntity(), shardRows, terms, entitySpec(conf));
+    }
+
+    /** The labels, threads and time range of a read of the entity index. */
+    private ScanSpec entitySpec(final StoreRdfConfiguration conf) {
         final ScanSpec.Builder spec = ScanSpec.builder(conf.getStoreAuths()).threads(numThreads(conf));
         final Long ttl = conf.getTtl();
         if (ttl != null) {
             final Long now = conf.getStartTime();
             spec.timestamps((now != null ? now : System.currentTimeMillis()) - ttl, now);
         }
-        final CellScanner cells = store.intersect(conf.getTableLayoutStrategy().getEntity(), shardRows, terms, spec.build());
+        return spec.build();
+    }
+
+    public CloseableIteration<org.tripatha.store.index.EntityIndex.Match> entityMatches(final List<byte[]> shardRows,
+            final List<byte[]> terms, StoreRdfConfiguration conf) {
+        if (conf == null) {
+            conf = configuration;
+        }
+        final CellScanner cells = store.intersect(conf.getTableLayoutStrategy().getEntity(), shardRows, terms, entitySpec(conf));
         return new CloseableIteration<>() {
             @Override
             public boolean hasNext() {

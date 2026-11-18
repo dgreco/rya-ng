@@ -109,6 +109,41 @@ public class EntityIntersectingIteratorTest {
         assertEquals(expected, matches(new Range(), C, A, B), "in any order");
     }
 
+    @Test
+    public void countingGivesEachRowsMatchesAndRows() throws Exception {
+        posting("0", A, "s1", "", "");
+        posting("0", A, "s2", "", "");
+        posting("0", A, "s2", "urn:g1", "");
+        posting("0", B, "s2", "", "");
+        posting("0", B, "s3", "", "");
+        posting("1", A, "s5", "", "");
+        posting("1", B, "s4", "", ""); // no match in row 1
+        posting("2", A, "s7", "", "");
+        posting("2", A, "s8", "", "");
+        posting("2", B, "s7", "", "");
+        posting("2", B, "s7", "", "X");
+        posting("2", B, "s8", "", "");
+        assertEquals(List.of("0 count  1,2", "2 count  2,3"), counts(new Range(), A, B));
+        assertEquals(List.of("2 count  2,3"), counts(new Range(new Key("0", "count", ""), false, null, false), A, B),
+                "resumed after row 0's count");
+        assertEquals(List.of("0 count  1,2"), counts(Range.exact("0"), A, B));
+        assertEquals(List.of(), counts(new Range(), A, C));
+    }
+
+    @Test
+    public void aCopyCountsToo() throws Exception {
+        posting("0", A, "s1", "", "");
+        posting("0", B, "s1", "", "");
+        final EntityIntersectingIterator it = new EntityIntersectingIterator();
+        it.init(new SortedMapIterator(postings), Map.of(EntityIntersectingIterator.TERMS,
+                EntityIntersectingIterator.encodeTerms(List.of(A.getBytes(StandardCharsets.UTF_8), B.getBytes(StandardCharsets.UTF_8))),
+                EntityIntersectingIterator.COUNT, "true"), null);
+        final var copy = it.deepCopy(null);
+        copy.seek(new Range(), Set.of(), false);
+        assertEquals(new Key("0", "count", ""), copy.getTopKey());
+        assertEquals("1,1", copy.getTopValue().toString());
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private void posting(final String shard, final String term, final String subject, final String graph, final String label) {
@@ -116,19 +151,28 @@ public class EntityIntersectingIteratorTest {
                 new Value(new byte[0]));
     }
 
+    private List<String> counts(final Range range, final String... terms) throws Exception {
+        return read(range, true, terms);
+    }
+
     private List<String> matches(final Range range, final String... terms) throws Exception {
+        return read(range, false, terms);
+    }
+
+    private List<String> read(final Range range, final boolean count, final String... terms) throws Exception {
         final List<byte[]> bytes = new ArrayList<>();
         for (final String t : terms) {
             bytes.add(t.getBytes(StandardCharsets.UTF_8));
         }
         final EntityIntersectingIterator it = new EntityIntersectingIterator();
         it.init(new SortedMapIterator(postings), Map.of(EntityIntersectingIterator.TERMS,
-                EntityIntersectingIterator.encodeTerms(bytes)), null);
+                EntityIntersectingIterator.encodeTerms(bytes), EntityIntersectingIterator.COUNT, Boolean.toString(count)), null);
         it.seek(range, Set.of(), false);
         final List<String> out = new ArrayList<>();
         while (it.hasTop()) {
             final Key k = it.getTopKey();
-            out.add(k.getRow() + " " + k.getColumnQualifier() + " " + it.getTopValue());
+            out.add(count ? k.getRow() + " " + k.getColumnFamily() + " " + k.getColumnQualifier() + " " + it.getTopValue()
+                    : k.getRow() + " " + k.getColumnQualifier() + " " + it.getTopValue());
             it.next();
         }
         return out;

@@ -263,6 +263,11 @@ public final class RocksStore implements Store {
         }
 
         @Override
+        public long diskUsage(final String table) {
+            return database.exists(table) ? database.diskUsage(table) : -1;
+        }
+
+        @Override
         public int serverCount() {
             return 1;
         }

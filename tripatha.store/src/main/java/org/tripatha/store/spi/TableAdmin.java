@@ -66,6 +66,14 @@ public interface TableAdmin {
     }
 
     /**
+     * The bytes a table's files take, one copy, compressed as stored; -1 when the store can't tell.
+     * Data not yet flushed to files isn't counted.
+     */
+    default long diskUsage(final String table) {
+        return -1;
+    }
+
+    /**
      * Whether the servers holding a table can run a server-side iterator class (Accumulo), as
      * Tripatha's own iterators need their jar on every server. False for backends without such
      * iterators, or when the class can't be loaded.

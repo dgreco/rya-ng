@@ -668,6 +668,20 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
             }
         }
 
+        /** How many subjects every term has in these shards, and their rows, counted by the store. */
+        public org.tripatha.store.spi.IntersectionCount entityCount(final List<byte[]> shardRows, final List<byte[]> terms) {
+            if (!(ryaDAO.getQueryEngine() instanceof org.tripatha.store.query.RyaStoreQueryEngine engine)
+                    || !(conf instanceof StoreRdfConfiguration storeConf)) {
+                throw new QueryEvaluationException("The entity index needs Tripatha's store query engine");
+            }
+            storeLookups++;
+            try {
+                return engine.entityCount(shardRows, terms, storeConf);
+            } catch (final RyaDAOException e) {
+                throw new QueryEvaluationException(e);
+            }
+        }
+
         /** Counts one more store lookup: for merges, whose scans other threads open. */
         public void countLookup() {
             storeLookups++;

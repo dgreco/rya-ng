@@ -205,13 +205,48 @@ public final class AccumuloStore implements Store {
     @Override
     public CellScanner intersect(final String table, final List<byte[]> rows, final List<byte[]> families,
             final ScanSpec spec) {
+        return intersecting(table, rows, families, spec, false);
+    }
+
+    /**
+     * The same scan, the iterator counting each row's matches in its tablet server: one cell per
+     * row comes back. Servers with an older jar ignore the option and return the matches; they are
+     * added up here, so the count is right either way.
+     */
+    @Override
+    public org.tripatha.store.spi.IntersectionCount countIntersection(final String table, final List<byte[]> rows,
+            final List<byte[]> families, final ScanSpec spec) {
+        final byte[] countFamily = org.tripatha.store.index.EntityIndex.ACCUMULO_COUNT_FAMILY.getBytes(StandardCharsets.UTF_8);
+        org.tripatha.store.spi.IntersectionCount total = org.tripatha.store.spi.IntersectionCount.NONE;
+        try (CellScanner cells = intersecting(table, rows, families, spec, true)) {
+            while (cells.hasNext()) {
+                final Cell cell = cells.next();
+                if (Arrays.equals(cell.family(), countFamily)) {
+                    final String[] parts = new String(cell.value(), StandardCharsets.US_ASCII).split(",");
+                    total = total.plus(new org.tripatha.store.spi.IntersectionCount(Long.parseLong(parts[0]),
+                            Long.parseLong(parts[1])));
+                } else {
+                    total = total.plus(new org.tripatha.store.spi.IntersectionCount(1,
+                            org.tripatha.store.spi.IntersectionCount.parse(cell.value())));
+                }
+            }
+        }
+        return total;
+    }
+
+    private CellScanner intersecting(final String table, final List<byte[]> rows, final List<byte[]> families,
+            final ScanSpec spec, final boolean count) {
         final List<KeyRange> ranges = new ArrayList<>(rows.size());
         for (final byte[] row : rows) {
             ranges.add(KeyRange.row(row));
         }
+        final java.util.Map<String, String> options = new java.util.HashMap<>();
+        options.put("terms", org.tripatha.store.index.EntityIndex.encodeTerms(families));
+        if (count) {
+            options.put(org.tripatha.store.index.EntityIndex.ACCUMULO_COUNT_OPTION, "true");
+        }
         return batchScan(table, ranges, spec.toBuilder().iterator(new org.tripatha.store.spi.ServerIterator(50, "ei",
-                org.tripatha.store.index.EntityIndex.ACCUMULO_ITERATOR,
-                java.util.Map.of("terms", org.tripatha.store.index.EntityIndex.encodeTerms(families)))).build());
+                org.tripatha.store.index.EntityIndex.ACCUMULO_ITERATOR, options)).build());
     }
 
     @Override
@@ -567,6 +602,21 @@ public final class AccumuloStore implements Store {
                 client.tableOperations().addSplits(table, texts);
             } catch (final AccumuloException | AccumuloSecurityException | TableNotFoundException e) {
                 throw new RyaDAOException(e);
+            }
+        }
+
+        @Override
+        public long diskUsage(final String table) {
+            try {
+                long bytes = 0;
+                for (final org.apache.accumulo.core.client.admin.DiskUsage usage : client.tableOperations()
+                        .getDiskUsage(java.util.Set.of(table))) {
+                    bytes += usage.getUsage();
+                }
+                return bytes;
+            } catch (final AccumuloException | AccumuloSecurityException | TableNotFoundException e) {
+                log.debug("No disk usage for {}: {}", table, e.toString());
+                return -1;
             }
         }
 

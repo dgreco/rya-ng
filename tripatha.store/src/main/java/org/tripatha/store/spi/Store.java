@@ -88,6 +88,24 @@ public interface Store extends AutoCloseable {
         throw new UnsupportedOperationException(backend() + " does not intersect");
     }
 
+    /**
+     * How many subjects {@link #intersect} would return, and the sum of their values, without
+     * returning them. This default adds them up as they come; a store whose servers intersect
+     * counts there instead, so only a count per row comes back.
+     */
+    default IntersectionCount countIntersection(final String table, final List<byte[]> rows, final List<byte[]> families,
+            final ScanSpec spec) {
+        long subjects = 0;
+        long matches = 0;
+        try (CellScanner cells = intersect(table, rows, families, spec)) {
+            while (cells.hasNext()) {
+                subjects++;
+                matches = Math.addExact(matches, IntersectionCount.parse(cells.next().value()));
+            }
+        }
+        return new IntersectionCount(subjects, matches);
+    }
+
     /** Releases what the store opened itself. A client supplied by the caller stays open. */
     @Override
     void close();
