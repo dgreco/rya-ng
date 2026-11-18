@@ -784,7 +784,7 @@ The two-value counters (`sp`, `po`, `so`) are used because `query.usecompositeca
 
 More rules:
 - **Indexed patterns:** an `IndexedStatementPattern` ([section 15](#15-text-and-geo-search)) gets its plain estimate times 0.001 (`SELECTIVITY`), but at least 1.
-- **Value ranges:** a `ValueRangePattern` ([section 12.9](#129-comparisons-as-value-ranges)) in a join is estimated at the number of cells its ranges hold, counted up to `query.valueranges.count` (10,000). A range that reaches the cap gets the larger of the cap and its plain estimate. A pattern that isn't counted (on its own, or with the cap at 0) gets a tenth of its plain estimate. 1 when no value can match.
+- **Value ranges:** a `ValueRangePattern` ([section 12.9](#129-comparisons-as-value-ranges)) in a join is estimated at the number of cells its ranges hold, counted up to the estimate of the shortest other pattern of the join, and at most `query.valueranges.count` (1,000,000). A range that reaches the cap gets the larger of the cap and its plain estimate. A pattern that isn't counted (on its own, or with the cap at 0) gets a tenth of its plain estimate. 1 when no value can match.
 - **Filters:** a `Filter` node is estimated at a tenth of its argument.
 - **Joins:** a `Join` is estimated at the larger of its two sides.
 
@@ -1060,13 +1060,17 @@ The statistics count a triple term like any other object, and estimate a `Triple
 
 **The estimate** decides whether the range drives a star, so it is counted (SCALE-STUDY.md O25):
 - **When:** the pattern is in a join (looking up through filters and the left side of `OPTIONAL`s), and the statistics are the store's. A pattern on its own needs no estimate, so it isn't counted.
-- **How:** `RyaStoreQueryEngine.countValueRanges` counts the cells of the ranges without decoding them, through the same scan specification as the lookup (labels, TTL, server iterators), in every graph, up to `query.valueranges.count` (10,000). The types share the cap, and each range is one round trip. A count is made once per query, predicate and ranges, never kept across queries.
+- **How:** `RyaStoreQueryEngine.countValueRanges` counts the cells of the ranges without decoding them, through the same scan specification as the lookup (labels, TTL, server iterators), in every graph. The types share the cap, and each range is one round trip. A count is made once per query, predicate, ranges and cap, never kept across queries.
+- **The cap:** the estimate of the shortest other statement pattern of the join (through joins, filters and the left side of `OPTIONAL`s), and at most `query.valueranges.count` (1,000,000).
+  - Ranges holding that many cells are at least as long as that pattern, so they wouldn't drive the join, and counting further would only cost time.
+  - The ceiling bounds what a count reads: the cells cross to the client. Without the entity index, the merge plan reads lists at least that long anyway. With it, a star's lists don't reach the client, so a long count can cost more than the star.
+  - It was a fixed 10,000 until 2026-11-18. At 100M triples, `class-value-int`'s range of tens of thousands of cells reached it, was estimated as its whole predicate, and lost the plan: 510 ms against 224 with the relative cap (SCALE-STUDY.md 4.11).
 - **What it gives:**
   - a range shorter than the cap is estimated at its count, so a selective condition drives its star;
   - one that reaches the cap is estimated as if it weren't narrowed (at least the cap), so a condition most values pass leaves the star to its constant patterns.
-  - A range of 10,000 to about half its predicate would often still drive well, and gets the old plan instead: the cap's cost (SCALE-STUDY.md section 4.8).
+- **At 10^12** even the ceiling is too few for ranges of billions: an estimate the store makes (a count in the servers, or a sample) is needed there.
 - **Without a count** (`query.valueranges.count=0`), the estimate is a tenth of the predicate's count ([section 11.2](#112-how-a-patterns-cardinality-is-estimated)).
-- **In plans:** the pattern's signature shows the count, or "at least 10000 cells".
+- **In plans:** the pattern's signature shows the count, or "at least N cells", N being the cap.
 
 **Tests:**
 - `ValueRangeIT` compares every query with the setting on and off, with and without a label and with inference.

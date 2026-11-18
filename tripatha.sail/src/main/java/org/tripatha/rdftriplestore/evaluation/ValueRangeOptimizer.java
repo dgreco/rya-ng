@@ -74,10 +74,12 @@ import org.tripatha.api.domain.RyaValueRange;
  * regular expressions.
  *
  * <p><b>The estimate</b> (SCALE-STUDY.md O25): when the pattern is in a join, so that the join
- * order depends on it, its ranges are counted up to {@code query.valueranges.count} cells
- * (10,000), under the query's labels and in every graph. A shorter range is estimated at its
- * count; one that reaches the cap as if it weren't narrowed. A pattern on its own, or with the
- * count off, or without the store's statistics, isn't counted.
+ * order depends on it, its ranges are counted, under the query's labels and in every graph, up to
+ * the estimate of the shortest other pattern of the join, and at most
+ * {@code query.valueranges.count} cells (1,000,000). A shorter range is estimated at its count;
+ * one that reaches the cap as if it weren't narrowed: it is at least as long as another pattern,
+ * so it wouldn't drive. A pattern on its own, or with the count off, or without the store's
+ * statistics, isn't counted.
  *
  * <p>The filter stays and decides every row, so answers don't change. Runs after inference and
  * the index search, before join ordering, which then sees the narrowed estimate.
@@ -159,11 +161,12 @@ public final class ValueRangeOptimizer implements QueryOptimizer {
                 }
                 final List<RyaValueRange> ranges = e.getValue().ranges(types.get());
                 if (ranges != null) {
-                    final long cap = conf.getValueRangeCount();
-                    final Long count = cap > 0 && !ranges.isEmpty() && inJoin(sp)
-                            && statistics instanceof RdfCloudTripleStoreEvaluationStatistics<?>
-                                    ? counted.computeIfAbsent(List.of(predicate, ranges), k -> store.count(predicate, ranges, cap))
-                                    : null;
+                    final long ceiling = conf.getValueRangeCount();
+                    final Join join = ceiling > 0 && !ranges.isEmpty()
+                            && statistics instanceof RdfCloudTripleStoreEvaluationStatistics<?> ? joinOf(sp) : null;
+                    final long cap = join == null ? ceiling : countCap(join, sp, ceiling);
+                    final Long count = join == null ? null
+                            : counted.computeIfAbsent(List.of(predicate, ranges, cap), k -> store.count(predicate, ranges, cap));
                     sp.replaceWith(new ValueRangePattern(sp, ranges, String.join(", ", conditions.get(e.getKey())), count, cap));
                 }
             }
@@ -171,17 +174,56 @@ public final class ValueRangeOptimizer implements QueryOptimizer {
     }
 
     /**
-     * Whether the pattern is joined with something whose order relative to it is chosen, so that
-     * its estimate matters: a join above it, through filters and the left side of OPTIONALs.
+     * The join whose order relative to the pattern is chosen, so that its estimate matters: a join
+     * above it, through filters and the left side of OPTIONALs; null when there is none.
      */
-    private static boolean inJoin(final StatementPattern sp) {
+    private static Join joinOf(final StatementPattern sp) {
         QueryModelNode child = sp;
         QueryModelNode parent = sp.getParentNode();
         while (parent instanceof Filter || (parent instanceof LeftJoin left && left.getLeftArg() == child)) {
             child = parent;
             parent = parent.getParentNode();
         }
-        return parent instanceof Join;
+        return parent instanceof Join join ? join : null;
+    }
+
+    /**
+     * The most cells worth counting for a pattern in this join: the estimate of the shortest other
+     * pattern it is joined with, and never more than the ceiling ({@code query.valueranges.count}).
+     * Ranges that hold that many cells are at least as long as that pattern, so they wouldn't
+     * drive the join, and counting further would only cost time. A fixed cap misplanned at scale:
+     * at 100M triples a range of a few tens of thousands of cells reached 10,000 and was estimated
+     * as its whole predicate (SCALE-STUDY.md 4.11).
+     */
+    private long countCap(final Join join, final StatementPattern sp, final long ceiling) {
+        QueryModelNode top = join;
+        while (top.getParentNode() instanceof Join parent) {
+            top = parent;
+        }
+        final List<StatementPattern> others = new ArrayList<>();
+        joined((TupleExpr) top, sp, others);
+        double shortest = Double.POSITIVE_INFINITY;
+        for (final StatementPattern other : others) {
+            final double estimate = statistics.getCardinality(other);
+            if (estimate >= 0) {
+                shortest = Math.min(shortest, estimate);
+            }
+        }
+        return shortest >= ceiling ? ceiling : Math.max(1, (long) Math.ceil(shortest));
+    }
+
+    /** The statement patterns of a join other than {@code sp}: through joins, filters and the left side of OPTIONALs. */
+    private static void joined(final TupleExpr expr, final StatementPattern sp, final List<StatementPattern> out) {
+        if (expr instanceof Join join) {
+            joined(join.getLeftArg(), sp, out);
+            joined(join.getRightArg(), sp, out);
+        } else if (expr instanceof Filter filter) {
+            joined(filter.getArg(), sp, out);
+        } else if (expr instanceof LeftJoin left) {
+            joined(left.getLeftArg(), sp, out);
+        } else if (expr instanceof StatementPattern other && other != sp) {
+            out.add(other);
+        }
     }
 
     /** Adds the comparisons of a variable with a constant among the condition's conjuncts. */
