@@ -56,12 +56,15 @@ mvn -pl tripatha.sail verify -Dit.test=InferenceIT -Dtest=none -Dsurefire.failIf
 - **Speed:** MAC tests cost about 5 s each, mostly creating the six Tripatha tables; HBase tests about the same (table deletes run in the background).
 - **Join benchmark** (`JoinBench` in `tripatha.loader`'s test sources, SCALE-STUDY.md M8): `tripatha.loader/bench.sh [--build] [--backend rocksdb|accumulo|hbase] [--profile] [--baseline FILE.csv]`.
   - It loads a generated store of 10M triples once. On RocksDB the store is kept in `tripatha.loader/target/bench/rocksdb` and reused.
+    - The store records a finished load itself: the table `bench_loaded` holds the dataset's fingerprint, written after the load's compaction. Deleting the store's directory is all a fresh load needs.
+    - A store without that record, or with another dataset, is deleted and loaded again.
   - It runs a fixed query suite and writes a Markdown and a CSV report to `tripatha.loader/target/bench`:
     - latencies;
     - the query thread's CPU time and the JVM's (the rest of a query's time is waiting);
     - scans, cells and storage time from the trace.
   - `--profile` adds where the CPU time goes (CPU samples only).
   - `--entity-index` keeps the entity index (O23): loaded with it, or built on a kept RocksDB store; without it, a kept store's index is dropped. `BENCH_ROCKSDB_PATH` names another RocksDB directory, for a fresh load.
+  - Relative paths (`--out`, `--baseline`, `BENCH_ROCKSDB_PATH`) are read from the directory `bench.sh` is run in.
   - It prints the tables' sizes on disk after the load (`TableAdmin.diskUsage`; HBase doesn't report them yet).
   - `--variant NAME:k=v,…` (repeatable) runs each query under each setting, alternating, on the same store, and flags a variant that returns different rows. Runs on different days are too noisy to compare (±40 % on the Accumulo test cluster), so prefer variants.
   - Use `--build` after changing code. Report a query-path optimization as a before/after pair of reports, or as variants of one run when it has a switch.
