@@ -99,6 +99,10 @@ The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.ja
 | `tripatha.standalone` | The endpoint with the RocksDB backend only: an executable jar, and with `-Pnative` a native executable |
 | `tripatha.test` | Test-only harness: one shared cluster per backend per JVM, and the store-level integration tests |
 
+## Benchmarks
+
+[tripatha.loader/README.md](tripatha.loader/README.md) describes the two benchmarks and how to install what they need on macOS and Linux: the join benchmark, in-process on any backend, and the comparison of Tripatha's endpoint on RocksDB with QLever and Oxigraph on a standard benchmark, WatDiv.
+
 ## Storage backends
 
 `tripatha.backend` (endpoint) or `--backend` (loader) picks the store: `accumulo` (the default), `hbase` or `rocksdb`. They behave the same, labels included; the integration tests run on all three. One difference: asking for labels the account doesn't hold fails on Accumulo, but returns fewer rows on HBase. The endpoint checks its labels at startup on HBase; code that embeds the Sail must grant its account the labels it asks for. Data is not moved between them.
