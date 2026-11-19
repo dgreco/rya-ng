@@ -25,6 +25,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -76,8 +77,8 @@ import org.eclipse.rdf4j.model.Statement;
  *
  * <p>Such a group's cells also come, for each key, from that key's own range only, so its ranges
  * can be read by several threads (O16, {@code query.join.lookupthreads}): the group is cut into
- * chunks of at least {@code query.join.lookupthreadkeys} patterns (patterns with the same range,
- * whose objects differ only in type, in the same chunk), the query thread reads the first and
+ * chunks of at least {@code query.join.lookupthreadkeys} patterns (one per range, so no two chunks
+ * read the same range), the query thread reads the first and
  * pool threads the others, each one reading, decoding and matching its chunk into a map of its
  * own, under the query's trace. The query thread then waits for every chunk, whatever
  * happened to the others, so no scan outlives the call, and merges the maps: each key's list
@@ -121,7 +122,8 @@ public final class BatchLookup {
             final C conf, final Collection<LookupKey> keys, final long limit) {
         final RyaTripleContext tripleContext = RyaTripleContext.getInstance(conf);
         final Map<GroupId, Group> groups = new LinkedHashMap<>();
-        for (final LookupKey key : keys) {
+        // A key asked for twice is answered once: its statements would otherwise be given to it twice.
+        for (final LookupKey key : new LinkedHashSet<>(keys)) {
             final Target target = Target.of(key);
             if (target == null) {
                 continue; // not something a single lookup would be asked for, or a full scan
@@ -453,11 +455,15 @@ public final class BatchLookup {
         final TABLE_LAYOUT layout;
         final List<LookupKey> keys = new ArrayList<>();
         final List<RyaStatement> patterns = new ArrayList<>();
-        /** The target of each pattern, in the same order. */
-        private final List<Target> targets = new ArrayList<>();
         private Boolean disjoint;
-        /** Each pattern's bound parts, worked out once for both the check and the chunks; null until needed. */
-        private List<List<Object>> paths;
+        /**
+         * Each pattern's bound parts in the table's order: what its range holds, and so its
+         * identity. A group keeps one pattern per range, whatever else tells keys apart (an
+         * object's type, the default graph or any graph, the creation time a RyaStatement keeps),
+         * so no scan, and no two chunks, read a range twice.
+         */
+        private final List<List<Object>> paths = new ArrayList<>();
+        private final Set<List<Object>> distinctPaths = new HashSet<>();
 
         Group(final TABLE_LAYOUT layout) {
             this.layout = layout;
@@ -465,7 +471,6 @@ public final class BatchLookup {
         /** How many subjects {@link #subjectRanges()} read whole. */
         int collapsedSubjects;
         final Map<Shape, Map<Projection, List<LookupKey>>> index = new LinkedHashMap<>();
-        private final Set<RyaStatement> distinctPatterns = new HashSet<>();
 
         /**
          * Whether no key's range overlaps another's: no key's parts, in the table's order, are a
@@ -491,25 +496,14 @@ public final class BatchLookup {
             if (lengths.size() <= 1) {
                 return true;
             }
-            final Set<List<Object>> distinct = new HashSet<>(paths());
-            for (final List<Object> path : distinct) {
+            for (final List<Object> path : distinctPaths) {
                 for (int i = 1; i < path.size(); i++) {
-                    if (distinct.contains(path.subList(0, i))) {
+                    if (distinctPaths.contains(path.subList(0, i))) {
                         return false;
                     }
                 }
             }
             return true;
-        }
-
-        private List<List<Object>> paths() {
-            if (paths == null) {
-                paths = new ArrayList<>(targets.size());
-                for (final Target t : targets) {
-                    paths.add(path(t));
-                }
-            }
-            return paths;
         }
 
         /** How many parts a shape binds in the table's order before the first free one; -1 for a layout not looked at. */
@@ -551,23 +545,14 @@ public final class BatchLookup {
         }
 
         /**
-         * The patterns cut into at most {@code n} chunks, in order, none of them empty. Patterns with
-         * the same range (their objects differ only in type) go to the same chunk: one scan reads
-         * that range once, two would give its cells twice.
+         * The patterns cut into at most {@code n} chunks, in order, none of them empty. Each range
+         * has one pattern, so no range is read by two chunks.
          */
         List<List<RyaStatement>> chunks(final int n) {
             final List<List<RyaStatement>> out = new ArrayList<>(n);
-            for (int c = 0; c < n; c++) {
-                out.add(new ArrayList<>());
-            }
-            final boolean sameRanges = index.keySet().stream().anyMatch(Shape::object);
-            final List<List<Object>> all = sameRanges ? paths() : null;
-            final Map<List<Object>, Integer> chunkOf = sameRanges ? new HashMap<>(all.size() * 2) : null;
             final int size = patterns.size();
-            for (int i = 0; i < size; i++) {
-                final int c = i * n / size;
-                final int chunk = sameRanges ? chunkOf.computeIfAbsent(all.get(i), k -> c) : c;
-                out.get(chunk).add(patterns.get(i));
+            for (int c = 0; c < n; c++) {
+                out.add(patterns.subList(c * size / n, (c + 1) * size / n));
             }
             out.removeIf(List::isEmpty);
             return out;
@@ -575,11 +560,11 @@ public final class BatchLookup {
 
         void add(final LookupKey key, final Target target) {
             keys.add(key);
-            if (distinctPatterns.add(target.pattern)) {
+            final List<Object> path = path(target);
+            if (distinctPaths.add(path)) {
                 patterns.add(target.pattern);
-                targets.add(target);
+                paths.add(path);
                 disjoint = null;
-                paths = null;
             }
             index.computeIfAbsent(target.shape, s -> new HashMap<>())
                     .computeIfAbsent(target.projection, p -> new ArrayList<>()).add(key);

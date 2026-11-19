@@ -285,6 +285,42 @@ public class BatchLookupIT extends RyaSailITBase {
         assertMatchesSingleLookups(batch);
     }
 
+    /**
+     * Keys of one range under different graph conditions (any graph, the default graph), among
+     * others, read on threads: the range is read once. Two patterns for it could compare unequal
+     * (a RyaStatement keeps its creation time) and land in two chunks, giving its cells twice.
+     */
+    @Test
+    public void keysOfOneRangeUnderDifferentGraphConditionsAreReadOnce() {
+        for (int i = 0; i < 6; i++) {
+            dao.add(new RyaStatement(new RyaIRI("urn:u" + i), new RyaIRI("urn:p"), new RyaIRI("urn:o")));
+        }
+        conf.setJoinLookupThreads(2);
+        conf.setJoinLookupThreadKeys(1);
+        final LookupKey anyGraph = LookupKey.of(G, P, null);
+        final LookupKey defaultGraph = LookupKey.of(G, P, null, (Resource) null);
+        final List<LookupKey> keys = new ArrayList<>(List.of(anyGraph));
+        for (int i = 0; i < 6; i++) {
+            keys.add(LookupKey.of(VF.createIRI("urn:u" + i), P, null));
+        }
+        keys.add(defaultGraph);
+        final Map<LookupKey, List<Statement>> batch = BatchLookup.fetch(dao, conf, keys, 1000);
+        assertNotNull(batch);
+        assertEquals(2, batch.get(anyGraph).size(), "the default graph and urn:G1, once each");
+        assertEquals(1, batch.get(defaultGraph).size());
+        assertMatchesSingleLookups(batch);
+    }
+
+    /** A key asked for twice in one batch is answered as a single lookup would answer it. */
+    @Test
+    public void aKeyAskedForTwiceIsAnsweredOnce() {
+        final LookupKey key = LookupKey.of(S, P, null);
+        final Map<LookupKey, List<Statement>> batch = BatchLookup.fetch(dao, conf, List.of(key, key, LookupKey.of(V, P, null)), 1000);
+        assertNotNull(batch);
+        assertEquals(2, batch.get(key).size(), "urn:o and urn:o2");
+        assertMatchesSingleLookups(batch);
+    }
+
     /** A batch whose ranges may overlap stays one scan, on this thread, whatever the setting. */
     @Test
     public void aBatchWhoseRangesMayOverlapIsReadOnce() {

@@ -794,7 +794,7 @@ Measured on 2026-11-19 with `QueryProfile`: one query in-process on the JVM, thr
 
 **Batches of several shapes** (the same day). C2's batches mix `(s, p, ?)` and `(s, p, Country5)`, so until now they kept the cell check and a single scan.
 - A key's range is its bound parts in the table's order, each followed by a delimiter. So two ranges overlap only when one key's parts are a strict prefix of another's, such as `(s, p, ?)` and `(s, p, o)` with the same subject and predicate.
-- A group without such a pair is now disjoint, whatever its shapes. It skips the cell check, and its chunks can go to threads. Patterns with the same range, whose objects differ only in type, stay in one chunk, and an empty chunk is dropped. The forced-threads ITs found that last case: a chunk left empty made the batch query throw.
+- A group without such a pair is now disjoint, whatever its shapes. It skips the cell check, and its chunks can go to threads. A group keeps one pattern per range, and an empty chunk is dropped. The forced-threads ITs found both cases. A chunk left empty made the batch query throw. And the keys of one range under two graph conditions (any graph, the default graph) gave their cells twice, once from each of two chunks; the same could happen to one key's two patterns created a millisecond apart, since a `RyaStatement` keeps its creation time, so it failed only now and then (once, with every index on).
 - Only groups whose keys bind different numbers of parts are checked pattern by pattern.
 
 | | Before (O16) | After |
