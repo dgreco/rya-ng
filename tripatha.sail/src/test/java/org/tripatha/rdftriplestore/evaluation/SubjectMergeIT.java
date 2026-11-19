@@ -23,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -92,6 +93,23 @@ public class SubjectMergeIT extends RyaSailITBase {
             "SELECT ?x WHERE { ?x <urn:r> \"1\"^^<http://www.w3.org/2001/XMLSchema#int> ; <urn:p> <urn:A> }",
             "SELECT ?x WHERE { ?x <urn:p> <urn:A> ; <urn:p> <urn:A> }",
             "SELECT ?x WHERE { ?x <urn:p> <urn:nothing> ; <urn:q> \"x\" }");
+
+    /**
+     * Star patterns on their own (O7a), with how many lists each reads as a merge of one list on
+     * one slice: alone, counted, distinct, filtered, driving a lookup, left of an OPTIONAL, both
+     * arms of a UNION; on the right of a MINUS it is evaluated apart, and stays a pattern.
+     */
+    private static final Map<String, Integer> ALONE = new java.util.LinkedHashMap<>();
+    static {
+        ALONE.put("SELECT ?x WHERE { ?x <urn:p> <urn:A> }", 1);
+        ALONE.put("SELECT (COUNT(*) AS ?c) WHERE { ?x <urn:p> <urn:A> }", 1);
+        ALONE.put("SELECT DISTINCT ?x WHERE { ?x <urn:q> \"x\" }", 1);
+        ALONE.put("SELECT ?x WHERE { ?x a <urn:C> FILTER(?x != <urn:s1>) }", 1);
+        ALONE.put("SELECT ?x ?y WHERE { ?x <urn:p> <urn:A> ; <urn:link> ?y }", 1);
+        ALONE.put("SELECT ?x ?a WHERE { ?x <urn:p> <urn:A> OPTIONAL { ?x <urn:age> ?a } }", 1);
+        ALONE.put("SELECT ?x WHERE { { ?x <urn:p> <urn:A> } UNION { ?x <urn:q> \"x\" } }", 2);
+        ALONE.put("SELECT ?x ?n WHERE { ?x <urn:name> ?n MINUS { ?x <urn:p> <urn:A> } }", 0);
+    }
 
     private final List<SailRepository> repositories = new ArrayList<>();
     private final List<String> subjects = new ArrayList<>();
@@ -172,6 +190,42 @@ public class SubjectMergeIT extends RyaSailITBase {
                 assertEquals(rows(plain, query), rows(merged, query), query + (labelled ? " (label A)" : ""));
             }
         }
+    }
+
+    @Test
+    public void aStarPatternOnItsOwnIsReadAsAMergeOfOneList() {
+        assertEquals(10_000, new StoreRdfConfiguration().getJoinMergeSingle(), "the default length");
+        for (final boolean labelled : List.of(true, false)) {
+            final SailRepository plain = repository(labelled, 0);
+            for (final int slices : List.of(1, 8)) {
+                final SailRepository alone = repository(labelled, 1_000_000, false, slices, 1L);
+                for (final Map.Entry<String, Integer> query : ALONE.entrySet()) {
+                    final String what = query.getKey() + (labelled ? " (label A)" : "") + ", " + slices + " slices";
+                    // Graphs and labels repeat statements: each is a row, as in the pattern's scan.
+                    assertEquals(rows(plain, query.getKey()), rows(alone, query.getKey()), what);
+                    if (slices == 1) {
+                        final Read read = read(alone, query.getKey());
+                        assertEquals((int) query.getValue(), read.mergedLists(), what + "\n" + read.plan());
+                    }
+                }
+            }
+        }
+        final String driver = "SELECT ?x ?y WHERE { ?x <urn:p> <urn:A> ; <urn:link> ?y }";
+        // In subject order when lookups follow, however many slices.
+        assertEquals(rowsInOrder(repository(true, 1_000_000, false, 1, 1L), driver),
+                rowsInOrder(repository(true, 1_000_000, false, 8, 1L), driver));
+        // Not when the list is shorter than the setting, nor at 0, nor with merges off.
+        final String query = ALONE.keySet().iterator().next();
+        assertEquals(0, read(repository(true, 1_000_000, false, 1, 10_000L), query).mergedLists());
+        assertEquals(0, read(repository(true, 1_000_000, false, 1, 0L), query).mergedLists());
+        assertEquals(0, read(repository(true, 0, false, 1, 1L), query).mergedLists());
+        // Under a LIMIT shorter than the setting one scan answers sooner; a longer one is merged.
+        final SailRepository five = repository(true, 1_000_000, false, 1, 5L);
+        assertEquals(0, read(five, query + " LIMIT 3").mergedLists());
+        assertEquals(1, read(five, query + " LIMIT 6").mergedLists());
+        final List<String> some = rows(repository(true, 1_000_000, false, 8, 1L), query + " LIMIT 3");
+        assertEquals(3, some.size());
+        assertTrue(rows(repository(true, 0), query).containsAll(some), some.toString());
     }
 
     @Test
@@ -548,9 +602,18 @@ public class SubjectMergeIT extends RyaSailITBase {
     /** @param slices how many slices merges may use; null for one, the whole lists */
     private SailRepository repository(final boolean labelled, final double mergeRatio, final boolean inference,
             final Integer slices) {
+        return repository(labelled, mergeRatio, inference, slices, null);
+    }
+
+    /** @param single how long a star pattern on its own must be to be merged (O7a); null for the default */
+    private SailRepository repository(final boolean labelled, final double mergeRatio, final boolean inference,
+            final Integer slices, final Long single) {
         final StoreRdfConfiguration conf = newConf();
         conf.setJoinMergeRatio(mergeRatio);
         conf.setJoinMergeSlices(slices == null ? 1 : slices);
+        if (single != null) {
+            conf.setJoinMergeSingle(single);
+        }
         // The lists of po, whose scans these tests count, even when -Dtripatha.test.indexes keeps the entity index.
         conf.setUseIndex(false);
         if (labelled) {

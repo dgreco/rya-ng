@@ -186,8 +186,8 @@ final class SubjectMergeStep implements QueryEvaluationStep {
             final int wanted = Math.max(1, source.getConf().getJoinMergeSlices());
             final List<byte[]> bounds = wanted > 1 ? source.subjectBoundaries(wanted) : List.of();
             slices = new ArrayList<>(bounds.size() + 1);
-            try (StoreTrace.Reason why = StoreTrace.reason(() -> "merge join: the subjects of " + patterns.size()
-                    + " constant patterns on ?" + node.getSubjectName() + ", read in order and intersected"
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "merge join: the subjects of " + constantPatterns(patterns.size())
+                    + " on ?" + node.getSubjectName() + (patterns.size() == 1 ? ", read in order" : ", read in order and intersected")
                     + (bounds.isEmpty() ? "" : ", in " + (bounds.size() + 1) + " slices"))) {
                 for (int i = 0; i <= bounds.size(); i++) {
                     final byte[] from = i == 0 ? null : bounds.get(i - 1);
@@ -234,7 +234,7 @@ final class SubjectMergeStep implements QueryEvaluationStep {
             final int threads = Math.max(1, Math.min(source.getConf().getJoinMergeSlices(), shards.size()));
             final boolean byStore = source.entityIntersectsInServers();
             final Trace trace = StoreTrace.current();
-            final String reason = "merge join: the subjects of " + patterns.size() + " constant patterns on ?"
+            final String reason = "merge join: the subjects of " + constantPatterns(patterns.size()) + " on ?"
                     + node.getSubjectName() + (byStore ? ", intersected by the store" : ", intersected shard by shard")
                     + " in the entity index (" + shards.size() + " shards, " + threads + " threads)";
             slices = List.of();
@@ -361,6 +361,10 @@ final class SubjectMergeStep implements QueryEvaluationStep {
                 task.stop();
             }
         }
+    }
+
+    private static String constantPatterns(final int n) {
+        return n == 1 ? "1 constant pattern" : n + " constant patterns";
     }
 
     /** The entity index's terms of a star's constant patterns. */

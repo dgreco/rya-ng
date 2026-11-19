@@ -31,11 +31,19 @@ import org.eclipse.rdf4j.model.ValueFactory;
 import org.eclipse.rdf4j.query.impl.SimpleDataset;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
 import org.eclipse.rdf4j.query.algebra.Compare;
+import org.eclipse.rdf4j.query.algebra.Difference;
+import org.eclipse.rdf4j.query.algebra.Exists;
 import org.eclipse.rdf4j.query.algebra.Filter;
 import org.eclipse.rdf4j.query.algebra.Join;
+import org.eclipse.rdf4j.query.algebra.LeftJoin;
+import org.eclipse.rdf4j.query.algebra.Projection;
+import org.eclipse.rdf4j.query.algebra.ProjectionElem;
+import org.eclipse.rdf4j.query.algebra.ProjectionElemList;
 import org.eclipse.rdf4j.query.algebra.QueryRoot;
+import org.eclipse.rdf4j.query.algebra.Slice;
 import org.eclipse.rdf4j.query.algebra.StatementPattern;
 import org.eclipse.rdf4j.query.algebra.TupleExpr;
+import org.eclipse.rdf4j.query.algebra.Union;
 import org.eclipse.rdf4j.query.algebra.ValueConstant;
 import org.eclipse.rdf4j.query.algebra.Var;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.EvaluationStatistics;
@@ -140,6 +148,67 @@ public class SubjectMergeOptimizerTest {
     }
 
     @Test
+    public void aLongPatternOnItsOwnIsAMergeOfOneList() {
+        final StatementPattern c = star(C);
+        final QueryRoot root = new QueryRoot(projection(c));
+        optimize(root, 35, 1000);
+        final SubjectMergeJoin merge = assertInstanceOf(SubjectMergeJoin.class, ((Projection) root.getArg()).getArg());
+        assertEquals(List.of(c), merge.getPatterns());
+        assertSame(merge, c.getParentNode());
+        assertEquals("x", merge.getSubjectName());
+
+        // Shorter than the setting, the setting 0, or merges off: a pattern still.
+        for (final double[] settings : List.of(new double[] {35, 1001}, new double[] {35, 0}, new double[] {0, 1000})) {
+            final QueryRoot left = new QueryRoot(projection(star(C)));
+            optimize(left, settings[0], (long) settings[1]);
+            assertInstanceOf(StatementPattern.class, ((Projection) left.getArg()).getArg(), List.of(settings[0], settings[1]).toString());
+        }
+    }
+
+    @Test
+    public void aLongDriverIsMergedAloneAndItsLookupsFollowIt() {
+        final StatementPattern c = star(C);
+        final StatementPattern name = new StatementPattern(new Var("x"), new Var("c-name", VF.createIRI("urn:name")), new Var("n"));
+        final Join join = new Join(c, name);
+        final QueryRoot root = new QueryRoot(join);
+        optimize(root, 35, 1000);
+        assertInstanceOf(SubjectMergeJoin.class, join.getLeftArg());
+        assertSame(name, join.getRightArg());
+    }
+
+    @Test
+    public void onlyAPatternEvaluatedOncePerQueryIsMerged() {
+        final StatementPattern name = new StatementPattern(new Var("x"), new Var("c-name", VF.createIRI("urn:name")), new Var("n"));
+        // Both arms of a union, the left of an OPTIONAL and of a MINUS.
+        final Union union = new Union(star(C), star(C));
+        final LeftJoin optional = new LeftJoin(star(C), name.clone());
+        final Difference minus = new Difference(star(C), name.clone());
+        for (final TupleExpr once : List.of(union, optional, minus)) {
+            optimize(new QueryRoot(once), 35, 1000);
+            assertTrue(contains(once, SubjectMergeJoin.class), once.toString());
+        }
+        assertInstanceOf(SubjectMergeJoin.class, union.getLeftArg());
+        assertInstanceOf(SubjectMergeJoin.class, union.getRightArg());
+        // Evaluated per row: the right side of a join, of an OPTIONAL and of a MINUS, and inside EXISTS.
+        final List<TupleExpr> perRow = List.of(new Join(name.clone(), star(C)), new LeftJoin(name.clone(), star(C)),
+                new Difference(name.clone(), star(C)), new Filter(name.clone(), new Exists(star(C))));
+        for (final TupleExpr expr : perRow) {
+            optimize(new QueryRoot(expr), 35, 1000);
+            assertFalse(contains(expr, SubjectMergeJoin.class), expr.toString());
+        }
+    }
+
+    @Test
+    public void aLimitShorterThanTheSettingKeepsThePattern() {
+        final QueryRoot short_ = new QueryRoot(new Slice(projection(star(C)), 0, 999));
+        optimize(short_, 35, 1000);
+        assertFalse(contains(short_, SubjectMergeJoin.class), short_.toString());
+        final QueryRoot offset = new QueryRoot(new Slice(projection(star(C)), 500, 500));
+        optimize(offset, 35, 1000);
+        assertTrue(contains(offset, SubjectMergeJoin.class), "500 skipped, 500 more: " + offset);
+    }
+
+    @Test
     public void aCloneIsADeepCopy() {
         final SubjectMergeJoin merge = new SubjectMergeJoin("x", List.of(star(A), star(B)));
         final SubjectMergeJoin copy = merge.clone();
@@ -160,10 +229,21 @@ public class SubjectMergeOptimizerTest {
         new SubjectMergeOptimizer(statistics(), conf(ratio), true).optimize(root, null, null);
     }
 
+    /** @param single how long a pattern on its own must be to be merged */
+    private static void optimize(final TupleExpr root, final double ratio, final long single) {
+        final StoreRdfConfiguration conf = conf(ratio);
+        conf.setJoinMergeSingle(single);
+        new SubjectMergeOptimizer(statistics(), conf, true).optimize(root, null, null);
+    }
+
     private static StoreRdfConfiguration conf(final double ratio) {
         final StoreRdfConfiguration conf = new StoreRdfConfiguration();
         conf.setJoinMergeRatio(ratio);
         return conf;
+    }
+
+    private static Projection projection(final TupleExpr arg) {
+        return new Projection(arg, new ProjectionElemList(new ProjectionElem("x")));
     }
 
     private static boolean contains(final TupleExpr root, final Class<?> type) {

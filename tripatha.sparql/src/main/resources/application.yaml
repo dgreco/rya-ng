@@ -49,6 +49,9 @@ tripatha:
   # Merge joins read their lists in up to this many slices of the subject space, cut at the
   # store's split points and intersected on threads of their own; 1 reads them whole.
   # join-merge-slices: 4
+  # A star pattern on its own (?x a :C) at least this long is read as a merge of one list: its
+  # subjects only, in those slices. 0 leaves it to a plain scan.
+  # join-merge-single: 10000
   # Full-text index behind text:matches (string and language-tagged literals).
   text-index: false
   # Predicates whose literals are text-indexed. Empty: all of them.

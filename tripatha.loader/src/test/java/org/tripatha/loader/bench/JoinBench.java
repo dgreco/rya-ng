@@ -287,6 +287,11 @@ public final class JoinBench {
                 "SELECT ?g ?w WHERE { ?g geo:asWKT ?w FILTER(geof:sfWithin(?w, \"" + c.box + "\"^^geo:wktLiteral)) }"));
         q.add(new Query("count-class", "the size of a class, counted",
                 "SELECT (COUNT(*) AS ?n) WHERE { ?s a o:Sensor }"));
+        // O7a: a class on its own, a long list read as a merge of one list.
+        q.add(new Query("class-scan", "a whole class, its members returned",
+                "SELECT ?s WHERE { ?s a o:Sensor }"));
+        q.add(new Query("class-label", "a whole class with each member's label: one lookup per member",
+                "SELECT ?s ?l WHERE { ?s a o:Sensor ; rdfs:label ?l }"));
         // M10: "all entities matching X" (SCALE-STUDY.md D1), stars whose objects are constants.
         final String person = "?p o:worksFor <" + c.popularEmployer + "> ; o:nationality <" + c.topCountry + "> ";
         final String product = "?x a o:Product ; o:category <" + c.topCategory + "> ; o:inStock true ";

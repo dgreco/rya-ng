@@ -70,6 +70,13 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
      */
     public static final String CONF_JOIN_MERGE_SLICES = "query.join.mergeslices";
     /**
+     * A star pattern on its own ({@code ?x a :C}, the driver of a chain, a count without the entity
+     * index) is read as a merge of one list when its {@code po} counter is at least this long:
+     * subjects only, in slices on threads of their own (SCALE-STUDY.md O7a; default 10,000).
+     * 0 leaves such patterns to RDF4J.
+     */
+    public static final String CONF_JOIN_MERGE_SINGLE = "query.join.mergesingle";
+    /**
      * Narrow a pattern's scan to the values a comparison filter on its object allows, one range
      * per stored datatype, when the store's datatype markers say every type sorts like its values
      * (SCALE-STUDY.md O14; default true).
@@ -832,6 +839,15 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setJoinMergeSlices(final int slices) {
         setInt(CONF_JOIN_MERGE_SLICES, slices);
+    }
+
+    /** @return how long a star pattern on its own must be to be read as a merge of one list; 0 when never. */
+    public long getJoinMergeSingle() {
+        return getLong(CONF_JOIN_MERGE_SINGLE, 10_000);
+    }
+
+    public void setJoinMergeSingle(final long length) {
+        setLong(CONF_JOIN_MERGE_SINGLE, length);
     }
 
     /** Whether a {@code STRSTARTS} filter on a pattern's object narrows the pattern's scan to the prefix. */

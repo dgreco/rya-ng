@@ -44,7 +44,8 @@ public abstract class RyaSailITBase extends StoreITBase {
      *         {@code -Dtripatha.test.indexes=true} turns on the text, geo and entity indexes (each test then
      *         checks that the indexes match the stored statements), and
      *         {@code -Dtripatha.test.mergeRatio=1000000} merges every star of constant patterns
-     *         (O22), whatever their lengths.
+     *         (O22), whatever their lengths, and {@code -Dtripatha.test.mergeSingle=1} reads every
+     *         star pattern on its own as a merge of one list (O7a).
      */
     protected StoreRdfConfiguration newConf() {
         final StoreRdfConfiguration conf = new StoreRdfConfiguration();
@@ -56,6 +57,10 @@ public abstract class RyaSailITBase extends StoreITBase {
         final String mergeRatio = System.getProperty("tripatha.test.mergeRatio");
         if (mergeRatio != null && !mergeRatio.isBlank()) {
             conf.setJoinMergeRatio(Double.parseDouble(mergeRatio.trim()));
+        }
+        final String mergeSingle = System.getProperty("tripatha.test.mergeSingle");
+        if (mergeSingle != null && !mergeSingle.isBlank()) {
+            conf.setJoinMergeSingle(Long.parseLong(mergeSingle.trim()));
         }
         if (Boolean.getBoolean("tripatha.test.indexes")) {
             conf.setTextIndex(true);

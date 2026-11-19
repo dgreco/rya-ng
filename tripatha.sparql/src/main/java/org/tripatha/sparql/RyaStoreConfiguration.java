@@ -133,6 +133,9 @@ public class RyaStoreConfiguration {
         if (props.joinMergeSlices() != null) {
             conf.setJoinMergeSlices(props.joinMergeSlices());
         }
+        if (props.joinMergeSingle() != null) {
+            conf.setJoinMergeSingle(props.joinMergeSingle());
+        }
         conf.setTextIndex(props.textIndex());
         conf.setTextIndexPredicates(props.textIndexPredicates());
         conf.setGeoIndex(props.geoIndex());
