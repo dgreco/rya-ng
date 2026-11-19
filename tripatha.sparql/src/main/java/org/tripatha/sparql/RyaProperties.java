@@ -48,6 +48,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param joinMergeSlices into how many slices of the subject space a merge join may cut its
  *        lists, each intersected on a thread of its own; 1 reads them whole, unset takes the
  *        default.
+ * @param joinMergeSingle how long a star pattern on its own ({@code ?x a :C}) must be to be read
+ *        as a merge of one list, its subjects in slices; 0 never, unset takes the default (10,000).
  * @param textIndex whether to keep the full-text index that speeds up {@code text:matches}.
  * @param textIndexPredicates the predicates whose text literals are indexed; empty for all.
  * @param geoIndex whether to keep the geospatial index that speeds up GeoSPARQL filters
@@ -72,6 +74,7 @@ public record RyaProperties(
         @DefaultValue("true") boolean entityPrefetch,
         Double joinMergeRatio,
         Integer joinMergeSlices,
+        Long joinMergeSingle,
         @DefaultValue("false") boolean textIndex,
         @DefaultValue List<String> textIndexPredicates,
         @DefaultValue("false") boolean geoIndex,

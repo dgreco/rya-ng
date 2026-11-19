@@ -26,9 +26,23 @@ import org.eclipse.rdf4j.model.Literal;
 import org.eclipse.rdf4j.query.BindingSet;
 import org.eclipse.rdf4j.query.Dataset;
 import org.eclipse.rdf4j.query.algebra.AbstractQueryModelNode;
+import org.eclipse.rdf4j.query.algebra.Difference;
+import org.eclipse.rdf4j.query.algebra.Distinct;
+import org.eclipse.rdf4j.query.algebra.Extension;
+import org.eclipse.rdf4j.query.algebra.Filter;
+import org.eclipse.rdf4j.query.algebra.Group;
 import org.eclipse.rdf4j.query.algebra.Join;
+import org.eclipse.rdf4j.query.algebra.LeftJoin;
+import org.eclipse.rdf4j.query.algebra.MultiProjection;
+import org.eclipse.rdf4j.query.algebra.Order;
+import org.eclipse.rdf4j.query.algebra.Projection;
+import org.eclipse.rdf4j.query.algebra.QueryModelNode;
+import org.eclipse.rdf4j.query.algebra.QueryRoot;
+import org.eclipse.rdf4j.query.algebra.Reduced;
+import org.eclipse.rdf4j.query.algebra.Slice;
 import org.eclipse.rdf4j.query.algebra.StatementPattern;
 import org.eclipse.rdf4j.query.algebra.TupleExpr;
+import org.eclipse.rdf4j.query.algebra.Union;
 import org.eclipse.rdf4j.query.algebra.Var;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryOptimizer;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.EvaluationStatistics;
@@ -48,6 +62,16 @@ import org.tripatha.api.RdfCloudTripleStoreConfiguration;
  * that is, if reading it costs less than looking up the shortest list's subjects in it.
  * The merge node becomes the chain's first argument, and the other arguments follow in their
  * order: patterns left out (a whole class, say) are then looked up for the merge's rows only.
+ *
+ * <p><b>A pattern on its own</b> (SCALE-STUDY.md O7a): a star pattern that isn't merged with
+ * another, but is evaluated once per query, becomes a merge of one list when its {@code po} counter
+ * is at least {@code query.join.mergesingle}: {@code ?x a :C} alone, under a count, a filter or a
+ * {@code DISTINCT}, or as the driver of a chain whose other patterns are looked up. It is then read
+ * as subjects only, in slices on threads of their own, instead of as statements decoded on the
+ * query thread; its rows are the same, a subject with several statements giving several. Evaluated
+ * once means that only unary operators, unions and the left sides of joins, OPTIONALs and MINUS
+ * lie between it and the query's root: on a join's right side it would be evaluated per row. Not
+ * under a {@code LIMIT} shorter than that length, which one scan answers sooner.
  *
  * <p>Inner joins can be reordered freely, so the answers don't change. The chain is walked down
  * plain joins only: a filter, an OPTIONAL or a join with a scope of its own ends it. Nothing is
@@ -107,6 +131,58 @@ public final class SubjectMergeOptimizer implements QueryOptimizer {
         for (final Join top : tops) {
             rewrite(top, conf.getJoinMergeRatio());
         }
+        final long single = conf.getJoinMergeSingle();
+        if (single > 0) {
+            mergeAlone(tupleExpr, single);
+        }
+    }
+
+    /** Makes each long star pattern evaluated once per query a merge of one list. */
+    private void mergeAlone(final TupleExpr tupleExpr, final long single) {
+        final List<StatementPattern> alone = new ArrayList<>();
+        tupleExpr.visit(new AbstractQueryModelVisitor<RuntimeException>() {
+            @Override
+            public void meet(final StatementPattern node) {
+                // A pattern with a scope of its own (a UNION's arm, a group) passes it on to the merge.
+                if (isStarShape(node) && evaluatedOnce(node, single) && statistics.getCardinality(node) >= single) {
+                    alone.add(node);
+                }
+            }
+        });
+        for (final StatementPattern sp : alone) {
+            final QueryModelNode parent = sp.getParentNode();
+            final SubjectMergeJoin merge = new SubjectMergeJoin(sp.getSubjectVar().getName(), List.of(sp));
+            merge.setVariableScopeChange(sp.isVariableScopeChange());
+            parent.replaceChildNode(sp, merge);
+        }
+    }
+
+    /**
+     * Whether the pattern is evaluated once per evaluation of the query: only unary operators,
+     * unions and the left sides of joins, OPTIONALs and MINUS lead from it to the root, and no
+     * {@code LIMIT} shorter than {@code single} is among them.
+     */
+    private static boolean evaluatedOnce(final StatementPattern sp, final long single) {
+        QueryModelNode child = sp;
+        QueryModelNode parent = sp.getParentNode();
+        while (parent != null && !(parent instanceof QueryRoot)) {
+            final Class<?> type = parent.getClass();
+            if (parent instanceof Slice slice && slice.hasLimit() && Math.max(0, slice.getOffset()) + slice.getLimit() < single) {
+                return false;
+            }
+            final boolean once = type == Filter.class || type == Extension.class || type == Projection.class
+                    || type == MultiProjection.class || type == Distinct.class || type == Reduced.class
+                    || type == Slice.class || type == Order.class || type == Group.class || type == Union.class
+                    || type == Join.class && ((Join) parent).getLeftArg() == child && !((Join) parent).isMergeJoin()
+                    || type == LeftJoin.class && ((LeftJoin) parent).getLeftArg() == child
+                    || type == Difference.class && ((Difference) parent).getLeftArg() == child;
+            if (!once) {
+                return false;
+            }
+            child = parent;
+            parent = parent.getParentNode();
+        }
+        return true;
     }
 
     private void rewrite(final Join top, final double ratio) {
@@ -171,8 +247,13 @@ public final class SubjectMergeOptimizer implements QueryOptimizer {
      * a variable subject, a constant IRI predicate and a constant IRI or literal object.
      */
     static boolean isStarPattern(final StatementPattern sp) {
+        return isStarShape(sp) && !TupleExprs.isVariableScopeChange(sp);
+    }
+
+    /** A star pattern, maybe with a scope of its own. */
+    private static boolean isStarShape(final StatementPattern sp) {
         if (sp.getClass() != StatementPattern.class || sp.getScope() != StatementPattern.Scope.DEFAULT_CONTEXTS
-                || sp.getContextVar() != null || TupleExprs.isVariableScopeChange(sp)) {
+                || sp.getContextVar() != null) {
             return false;
         }
         final Var s = sp.getSubjectVar();

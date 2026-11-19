@@ -33,6 +33,9 @@ import org.eclipse.rdf4j.query.algebra.TupleExpr;
  * each pattern's subjects in order and intersecting them (SCALE-STUDY.md O22). Each pattern is
  * one range of {@code po}, whose rows for a predicate and object are sorted by subject.
  *
+ * <p>A merge of one list is a long pattern on its own (O7a): its subjects are read in slices,
+ * without decoding statements.
+ *
  * <p>Built by {@link SubjectMergeOptimizer} and evaluated by {@link SubjectMergeStep}. It binds
  * only the subject variable, and binds it on every row. Its rows are those of the join of its
  * patterns, in subject order instead of the order of a nested loop.
@@ -43,7 +46,7 @@ public final class SubjectMergeJoin extends AbstractQueryModelNode implements Tu
 
     /**
      * @param subject the patterns' subject variable
-     * @param patterns two or more patterns, each with that subject, a constant predicate and a
+     * @param patterns one or more patterns, each with that subject, a constant predicate and a
      *        constant object; they become this node's children
      */
     public SubjectMergeJoin(final String subject, final List<StatementPattern> patterns) {
@@ -102,7 +105,8 @@ public final class SubjectMergeJoin extends AbstractQueryModelNode implements Tu
 
     @Override
     public String getSignature() {
-        return super.getSignature() + " (?" + subject + ", " + patterns.size() + " lists read in subject order)";
+        return super.getSignature() + " (?" + subject + ", " + patterns.size() + (patterns.size() == 1 ? " list" : " lists")
+                + " read in subject order)";
     }
 
     @Override
