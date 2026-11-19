@@ -44,7 +44,8 @@
 # Oxigraph: a pinned release, downloaded to ~/.m2/repository/.cache/tripatha-compare (OXIGRAPH names
 # another binary). Boost for WatDiv: BOOST_HOME, else Homebrew's on macOS, else the system's.
 # Tripatha's native executable needs GraalVM for JDK 25 (JAVA_HOME) to build.
-# Memory: TRIPATHA_HEAP (6g) and QLEVER_MEMORY (6G). QLEVER_SERVER_ARGS adds options to qlever-server.
+# Memory: TRIPATHA_HEAP (6g) and QLEVER_MEMORY (6G). TRIPATHA_ARGS adds endpoint settings
+# (--tripatha.join-lookup-threads=1, say), QLEVER_SERVER_ARGS options to qlever-server.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -478,16 +479,18 @@ else
   cp -R --reflink=auto "$store" "$clone"
 fi
 heap="${TRIPATHA_HEAP:-6g}"
+textra=()
+read -r -a textra <<< "${TRIPATHA_ARGS:-}"
 "$native" "-Xmx$heap" --server.address=127.0.0.1 --server.port=$PORT_TRIPATHA --logging.level.root=warn \
   --tripatha.backend=rocksdb "--tripatha.rocksdb.path=$clone" "--tripatha.table-prefix=$prefix" --tripatha.entity-index=true \
-  "--tripatha.sparql.query-timeout=${timeout}s" > "$work/logs/tripatha.log" 2>&1 &
+  "--tripatha.sparql.query-timeout=${timeout}s" ${textra[@]+"${textra[@]}"} > "$work/logs/tripatha.log" 2>&1 &
 pid=$!
 measure tripatha "http://127.0.0.1:$PORT_TRIPATHA/sparql"
 rm -rf "$clone"
 reports+=(--result "$results/tripatha.tsv")
 info+=(--info "Tripatha $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "(no git)"): the native executable of \
 tripatha.standalone, $(if [ -n "$native_image" ]; then "$native_image" --version 2>/dev/null | head -1; else echo "native-image"; fi), \
--Xmx$heap, over a clone of its store with the entity index, loaded in $(cat "$dir/tripatha-load-seconds" 2>/dev/null || echo "?") s \
+-Xmx$heap${TRIPATHA_ARGS:+ $TRIPATHA_ARGS}, over a clone of its store with the entity index, loaded in $(cat "$dir/tripatha-load-seconds" 2>/dev/null || echo "?") s \
 ($(gigabytes "$store") on disk, counters and index included).")
 
 if has qlever; then

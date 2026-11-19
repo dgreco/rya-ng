@@ -1149,6 +1149,11 @@ The join then shows `algorithm: RyaBatchedJoin` in the plan. A chunk with a sing
 3. **No double counting.** Within a group, a stored cell counts once, identified by its statement, graph, qualifier, label and timestamp.
    - **Disjoint groups skip it** (SCALE-STUDY.md O17): when every key of a group has the same shape and leaves the object free, as an entity chain's links `(s, p, ?)` do, their ranges are prefixes ending at a `00` delimiter (`s 00 p 00`), and stored terms hold no `00`. So no two of them overlap, no cell comes twice, and the scan neither records the cells it has seen nor encodes their objects again.
    - Subject ranges (step 4) overlap the keys they stand for, so a group read that way keeps the check.
+   - **Such a group is also read on several threads** (SCALE-STUDY.md O16, `query.join.lookupthreads`; unset, `Capabilities.lookupThreads()`: 4 on RocksDB, 1 on Accumulo and HBase). Each key's cells come from its own range, so the patterns can be cut into chunks of at least `query.join.lookupthreadkeys` (256).
+     - The query thread reads the first chunk; pool threads read the others, each reading, decoding and matching into a map of its own, under the query's trace.
+     - The query thread waits for every chunk before it returns or throws, so no scan outlives the call. It then merges the maps: each key's list comes from one chunk, in a single scan's order.
+     - The size cap of step 5 counts every chunk's statements together.
+     - A thread that joins another's trace keeps its reasons to itself, since the trace's reason stack is the query thread's.
 4. **One range per subject, when switched on** (`query.join.subjectranges`, off by default). In `spo`, a subject asked for by two or more keys of a group (the links of an entity chain, for example) is read as its whole range, `s 00`, instead of one range per key.
    - **The idea:** the subject's statements are neighbouring rows, so one seek reads them all.
    - **Why the answers don't change:** the exact matching of step 2 keeps only what each key asks for.

@@ -206,7 +206,8 @@ public class BatchedJoinIT extends RyaSailITBase {
                     "SELECT * WHERE { ?a <urn:links> ?b . ?b <urn:label> ?l } LIMIT 10", 1000);
             assertEquals(1, limited.getPrefetchCount());
         }
-        assertEquals(List.of(64), ranges, "the first window's lookups only");
+        // One scan, or one per chunk when the batch is read on several threads (O16).
+        assertEquals(64, ranges.stream().mapToInt(Integer::intValue).sum(), "the first window's lookups only: " + ranges);
     }
 
     // ------------------------------------------------------------------ helpers

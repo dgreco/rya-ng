@@ -52,6 +52,9 @@ tripatha:
   # A star pattern on its own (?x a :C) at least this long is read as a merge of one list: its
   # subjects only, in those slices. 0 leaves it to a plain scan.
   # join-merge-single: 10000
+  # A batch of lookups whose ranges can't overlap (an entity chain's links) is read on this many
+  # threads. Unset, the store's default: 4 on RocksDB, 1 on Accumulo and HBase.
+  # join-lookup-threads: 4
   # Full-text index behind text:matches (string and language-tagged literals).
   text-index: false
   # Predicates whose literals are text-indexed. Empty: all of them.

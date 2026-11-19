@@ -77,6 +77,15 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
      */
     public static final String CONF_JOIN_MERGE_SINGLE = "query.join.mergesingle";
     /**
+     * A batch of lookups whose ranges can't overlap (an entity chain's links, {@code (s, p, ?)}) is
+     * read on up to this many threads, each reading, decoding and matching its share of the ranges
+     * (SCALE-STUDY.md O16). Unset, the store's {@code Capabilities.lookupThreads()} applies: 4 on
+     * RocksDB, 1 on Accumulo and HBase. 1 reads every batch on the query thread.
+     */
+    public static final String CONF_JOIN_LOOKUP_THREADS = "query.join.lookupthreads";
+    /** Each of those threads gets at least this many lookups (default 256): a smaller batch is read on fewer. */
+    public static final String CONF_JOIN_LOOKUP_THREAD_KEYS = "query.join.lookupthreadkeys";
+    /**
      * Narrow a pattern's scan to the values a comparison filter on its object allows, one range
      * per stored datatype, when the store's datatype markers say every type sorts like its values
      * (SCALE-STUDY.md O14; default true).
@@ -848,6 +857,23 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setJoinMergeSingle(final long length) {
         setLong(CONF_JOIN_MERGE_SINGLE, length);
+    }
+
+    /** See {@link #CONF_JOIN_LOOKUP_THREADS}; 1 when unset (the Sail's factory sets the store's default). */
+    public int getJoinLookupThreads() {
+        return Math.max(1, getInt(CONF_JOIN_LOOKUP_THREADS, 1));
+    }
+
+    public void setJoinLookupThreads(final int threads) {
+        setInt(CONF_JOIN_LOOKUP_THREADS, threads);
+    }
+
+    public int getJoinLookupThreadKeys() {
+        return Math.max(1, getInt(CONF_JOIN_LOOKUP_THREAD_KEYS, 256));
+    }
+
+    public void setJoinLookupThreadKeys(final int keys) {
+        setInt(CONF_JOIN_LOOKUP_THREAD_KEYS, keys);
     }
 
     /** Whether a {@code STRSTARTS} filter on a pattern's object narrows the pattern's scan to the prefix. */

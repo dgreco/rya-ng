@@ -30,7 +30,12 @@ package org.tripatha.store.spi;
  *        of a batch scan). Not a capability but a measured cost: the query planner's default
  *        for merge joins ({@code query.join.mergeratio}, SCALE-STUDY.md O22). A server round
  *        trip per batch makes it large; an embedded store, small.
+ * @param lookupThreads how many threads a batch of lookups is read on, by default
+ *        ({@code query.join.lookupthreads}, SCALE-STUDY.md O16). Not a capability but a measured
+ *        default: an embedded store's cells are decoded where they are read, so the client's CPU
+ *        is the limit (section 4.14); a cluster's servers are (section 4.6), so 1 there until
+ *        measured otherwise.
  */
 public record Capabilities(boolean labels, boolean serverCombine, boolean serverRegex, boolean scanIterators,
-        int maxRowBytes, double lookupCost) {
+        int maxRowBytes, double lookupCost, int lookupThreads) {
 }
