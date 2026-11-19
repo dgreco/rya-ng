@@ -59,6 +59,12 @@
             <artifactId>tripatha.sail</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <!-- JoinBench's export, for the engine comparison (compare.sh). -->
+            <groupId>org.eclipse.rdf4j</groupId>
+            <artifactId>rdf4j-rio-nquads</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

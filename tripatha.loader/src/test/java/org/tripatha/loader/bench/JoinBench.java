@@ -15,6 +15,7 @@
  */
 package org.tripatha.loader.bench;
 
+import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
@@ -23,6 +24,7 @@ import java.lang.management.ThreadMXBean;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -37,11 +39,17 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
+import java.util.zip.GZIPOutputStream;
 
+import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.query.TupleQuery;
 import org.eclipse.rdf4j.query.TupleQueryResult;
 import org.eclipse.rdf4j.repository.RepositoryConnection;
+import org.eclipse.rdf4j.repository.RepositoryResult;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
+import org.eclipse.rdf4j.rio.RDFFormat;
+import org.eclipse.rdf4j.rio.RDFWriter;
+import org.eclipse.rdf4j.rio.Rio;
 import org.tripatha.api.domain.RyaStatement;
 import org.tripatha.api.layout.TableLayoutStrategy;
 import org.tripatha.loader.Loader;
@@ -84,7 +92,9 @@ import jdk.jfr.consumer.RecordingFile;
  * {@code --profile} it also records where the CPU time went (CPU samples only). {@code --variant}
  * runs every query under several settings, alternating, on the same store. The report goes to the
  * console and to {@code --out} as Markdown and CSV; {@code --baseline FILE.csv} adds the change
- * against an earlier report. Run it with {@code tripatha.loader/bench.sh}.
+ * against an earlier report. With {@code --export FILE} it writes the loaded store's statements as
+ * N-Quads instead of running the suite, for the engine comparison ({@link CompareBench}). Run it
+ * with {@code tripatha.loader/bench.sh}.
  */
 public final class JoinBench {
     private static final String PREFIX = "bench_";
@@ -136,6 +146,10 @@ public final class JoinBench {
             ensureLoaded(backend, store, dataset);
             tableSizes = tableSizes(store, dataset.rdfConf());
             out.println("Tables on disk: " + tableSizes + ".");
+            if (settings.export != null) {
+                export(store, dataset);
+                return;
+            }
             final List<Query> suite = suite(new EntityGenerator(gen));
             final Map<Variant, SailRepository> repos = new LinkedHashMap<>();
             try {
@@ -159,6 +173,38 @@ public final class JoinBench {
                 repos.values().forEach(SailRepository::shutDown);
             }
         }
+    }
+
+    /**
+     * Writes every statement of the store as N-Quads (gzipped if the file name ends with
+     * {@code .gz}), as the Sail returns them: the statements of the default graph without a graph.
+     * The file appears only once it is complete.
+     */
+    private void export(final Store store, final LoaderOptions dataset) throws IOException {
+        final StoreRdfConfiguration conf = dataset.rdfConf();
+        conf.setInfer(false);
+        final SailRepository repo = RyaSailFactory.createRepository(store, conf);
+        repo.init();
+        final Path file = settings.export;
+        final Path partial = file.resolveSibling(file.getFileName() + ".part");
+        final long t0 = System.nanoTime();
+        long n = 0;
+        try (OutputStream raw = new BufferedOutputStream(Files.newOutputStream(partial), 1 << 20);
+                OutputStream sink = file.getFileName().toString().endsWith(".gz") ? new GZIPOutputStream(raw, 1 << 16) : raw;
+                RepositoryConnection c = repo.getConnection();
+                RepositoryResult<Statement> all = c.getStatements(null, null, null, false)) {
+            final RDFWriter writer = Rio.createWriter(RDFFormat.NQUADS, sink);
+            writer.startRDF();
+            for (final Statement st : all) {
+                writer.handleStatement(st);
+                n++;
+            }
+            writer.endRDF();
+        } finally {
+            repo.shutDown();
+        }
+        Files.move(partial, file, StandardCopyOption.REPLACE_EXISTING);
+        out.printf(Locale.ROOT, "Exported %,d statements to %s in %.0f s.%n", n, file, (System.nanoTime() - t0) / 1e9);
     }
 
     /** The tables' sizes on disk, as the store reports them after the load's compaction; for the report. */
@@ -285,8 +331,11 @@ public final class JoinBench {
     record Query(String name, String purpose, String sparql) {
     }
 
-    /** The suite, with constants picked from the generated data so that every query finds something. */
-    private static List<Query> suite(final EntityGenerator generator) {
+    /**
+     * The suite, with constants picked from the generated data so that every query finds something.
+     * {@link CompareBench} sends the same queries to other engines.
+     */
+    static List<Query> suite(final EntityGenerator generator) {
         final Constants c = Constants.pick(generator, 200_000);
         final List<Query> q = new ArrayList<>();
         q.add(new Query("lookup", "one subject, every statement: one range",
@@ -799,7 +848,7 @@ public final class JoinBench {
     // ---- settings ----
 
     record Settings(String triples, int warmup, int runs, int timeoutSeconds, int loadThreads, boolean profile, Path out,
-            Path baseline, List<String> only, Map<String, String> conf, List<Variant> variants, boolean entityIndex) {
+            Path baseline, List<String> only, Map<String, String> conf, List<Variant> variants, boolean entityIndex, Path export) {
         static final String USAGE = """
                 Usage: bench.sh [--backend rocksdb|accumulo|hbase] [options]
                   --triples 10M        dataset size (the loader's generator, both indexes on)
@@ -815,6 +864,7 @@ public final class JoinBench {
                   --out DIR            where reports go (default tripatha.loader/target/bench); bench.sh reads
                                        this, --baseline and BENCH_ROCKSDB_PATH from the directory it is run in
                   --load-threads 8     writer threads for the one-time load
+                  --export FILE.nq.gz  write the loaded store's statements as N-Quads instead of running the suite
                 """;
 
         static Settings parse(final String[] args) {
@@ -827,6 +877,7 @@ public final class JoinBench {
             boolean entityIndex = false;
             Path out = Path.of("target", "bench");
             Path baseline = null;
+            Path export = null;
             List<String> only = List.of();
             final Map<String, String> conf = new LinkedHashMap<>();
             final List<Variant> variants = new ArrayList<>();
@@ -852,6 +903,7 @@ public final class JoinBench {
                     case "--load-threads" -> loadThreads = Integer.parseInt(v);
                     case "--out" -> out = Path.of(v);
                     case "--baseline" -> baseline = Path.of(v);
+                    case "--export" -> export = Path.of(v);
                     case "--only" -> only = List.of(v.split(","));
                     case "--conf" -> {
                         final int eq = v.indexOf('=');
@@ -868,7 +920,7 @@ public final class JoinBench {
                 variants.add(new Variant("default", Map.of()));
             }
             return new Settings(triples, warmup, runs, timeout, loadThreads, profile, out, baseline, only, conf, List.copyOf(variants),
-                    entityIndex);
+                    entityIndex, export);
         }
 
         private static Variant variant(final String v) {
