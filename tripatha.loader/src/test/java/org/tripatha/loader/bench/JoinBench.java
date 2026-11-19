@@ -126,16 +126,23 @@ public final class JoinBench {
     }
 
     private void run() throws Exception {
-        Files.createDirectories(settings.out);
-        final TestBackend backend = TestBackends.current();
         final LoaderOptions dataset = LoaderOptions.parse(datasetArgs("load"), Map.of());
         final GenConfig gen = dataset.genConfig();
+        if (settings.writeQueries != null) {
+            writeQueries(suite(new EntityGenerator(gen)), settings.writeQueries);
+            return;
+        }
+        Files.createDirectories(settings.out);
+        final TestBackend backend = TestBackends.current();
         out.printf(Locale.ROOT, "Join benchmark on %s: %,d entities (about %s triples), %d processors, %s.%n", backend.id(),
                 gen.entities(), settings.triples, Runtime.getRuntime().availableProcessors(), Runtime.version());
         try (Store store = backend.openStore()) {
             ensureLoaded(backend, store, dataset);
             tableSizes = tableSizes(store, dataset.rdfConf());
             out.println("Tables on disk: " + tableSizes + ".");
+            if (settings.loadOnly) {
+                return;
+            }
             final List<Query> suite = suite(new EntityGenerator(gen));
             final Map<Variant, SailRepository> repos = new LinkedHashMap<>();
             try {
@@ -159,6 +166,22 @@ public final class JoinBench {
                 repos.values().forEach(SailRepository::shutDown);
             }
         }
+    }
+
+    /**
+     * Writes each query of the suite to {@code dir/NAME.rq}, the form CompareBench reads, without
+     * opening a store: for driving an endpoint over this benchmark's store (loaded with
+     * {@code --load-only} and the same {@code --triples}), such as the training run of the native
+     * executable's profile-guided build.
+     */
+    private void writeQueries(final List<Query> suite, final Path dir) throws IOException {
+        Files.createDirectories(dir);
+        for (final Query q : suite) {
+            if (settings.only.isEmpty() || settings.only.contains(q.name)) {
+                Files.writeString(dir.resolve(q.name + ".rq"), q.sparql + "\n", StandardCharsets.UTF_8);
+            }
+        }
+        out.printf(Locale.ROOT, "Wrote %d queries to %s.%n", settings.only.isEmpty() ? suite.size() : settings.only.size(), dir);
     }
 
     /** The tables' sizes on disk, as the store reports them after the load's compaction; for the report. */
@@ -799,7 +822,8 @@ public final class JoinBench {
     // ---- settings ----
 
     record Settings(String triples, int warmup, int runs, int timeoutSeconds, int loadThreads, boolean profile, Path out,
-            Path baseline, List<String> only, Map<String, String> conf, List<Variant> variants, boolean entityIndex) {
+            Path baseline, List<String> only, Map<String, String> conf, List<Variant> variants, boolean entityIndex,
+            Path writeQueries, boolean loadOnly) {
         static final String USAGE = """
                 Usage: bench.sh [--backend rocksdb|accumulo|hbase] [options]
                   --triples 10M        dataset size (the loader's generator, both indexes on)
@@ -815,6 +839,8 @@ public final class JoinBench {
                   --out DIR            where reports go (default tripatha.loader/target/bench); bench.sh reads
                                        this, --baseline and BENCH_ROCKSDB_PATH from the directory it is run in
                   --load-threads 8     writer threads for the one-time load
+                  --write-queries DIR  write the suite's queries to DIR/NAME.rq and stop: no store, no runs
+                  --load-only          load the store (or keep a loaded one) and stop: no runs
                 """;
 
         static Settings parse(final String[] args) {
@@ -825,8 +851,10 @@ public final class JoinBench {
             int loadThreads = 8;
             boolean profile = false;
             boolean entityIndex = false;
+            boolean loadOnly = false;
             Path out = Path.of("target", "bench");
             Path baseline = null;
+            Path writeQueries = null;
             List<String> only = List.of();
             final Map<String, String> conf = new LinkedHashMap<>();
             final List<Variant> variants = new ArrayList<>();
@@ -838,6 +866,10 @@ public final class JoinBench {
                 }
                 if (a.equals("--entity-index")) {
                     entityIndex = true;
+                    continue;
+                }
+                if (a.equals("--load-only")) {
+                    loadOnly = true;
                     continue;
                 }
                 if (i + 1 >= args.length) {
@@ -852,6 +884,7 @@ public final class JoinBench {
                     case "--load-threads" -> loadThreads = Integer.parseInt(v);
                     case "--out" -> out = Path.of(v);
                     case "--baseline" -> baseline = Path.of(v);
+                    case "--write-queries" -> writeQueries = Path.of(v);
                     case "--only" -> only = List.of(v.split(","));
                     case "--conf" -> {
                         final int eq = v.indexOf('=');
@@ -868,7 +901,7 @@ public final class JoinBench {
                 variants.add(new Variant("default", Map.of()));
             }
             return new Settings(triples, warmup, runs, timeout, loadThreads, profile, out, baseline, only, conf, List.copyOf(variants),
-                    entityIndex);
+                    entityIndex, writeQueries, loadOnly);
         }
 
         private static Variant variant(final String v) {

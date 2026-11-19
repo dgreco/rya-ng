@@ -24,7 +24,10 @@ It needs about 3 GB of disk, plus Maven's downloads on a first build, and 8 GB o
 
 ## Installing what they need
 
-Both platforms need **GraalVM for JDK 25** ([Oracle GraalVM or GraalVM Community](https://www.graalvm.org/downloads/)) with `JAVA_HOME` pointing at it. It is the JDK of the build, and its `native-image` builds Tripatha's native executable. They also need Maven, bash, curl and git, as for the rest of the build. The join benchmark needs nothing else. Oxigraph needs nothing either: `compare.sh` downloads a pinned release from GitHub, checks its SHA-256 and keeps it in `~/.m2/repository/.cache/tripatha-compare`.
+Both platforms need **GraalVM for JDK 25** ([Oracle GraalVM or GraalVM Community](https://www.graalvm.org/downloads/)) with `JAVA_HOME` pointing at it. It is the JDK of the build, and its `native-image` builds Tripatha's native executable.
+- **With Oracle GraalVM,** `compare.sh` builds the profile-guided executable (`tripatha.standalone/build-optimized.sh`, about 5 minutes). It trains on the join benchmark's queries over a small store of its own, never on WatDiv.
+- **With GraalVM Community,** which has no profile-guided optimization, it builds the default one.
+- The report says which it measured. Oracle GraalVM is free to use and to redistribute at no charge under the [GraalVM Free Terms and Conditions](https://www.oracle.com/downloads/licenses/graal-free-license.html), but it isn't open source. They also need Maven, bash, curl and git, as for the rest of the build. The join benchmark needs nothing else. Oxigraph needs nothing either: `compare.sh` downloads a pinned release from GitHub, checks its SHA-256 and keeps it in `~/.m2/repository/.cache/tripatha-compare`.
 
 ### macOS
 
@@ -103,6 +106,9 @@ Everything goes under `tripatha.loader/target/compare` (`COMPARE_DIR` names anot
 | Environment variable | |
 |---|---|
 | `TRIPATHA_HEAP` | the heap of Tripatha's native executable (`-Xmx`, `6g`) |
+| `TRIPATHA_MIN_HEAP` | its minimum heap (`-Xms`), the heap by default: its collector sizes the young generation from it. Set it empty to leave `-Xms` out |
+| `TRIPATHA_PGO` | `false` builds the default executable even with Oracle GraalVM |
+| `TRIPATHA_NATIVE` | another executable to serve instead of the one built here, never built itself: for comparing builds |
 | `TRIPATHA_ARGS` | more endpoint settings for Tripatha, for example `--tripatha.join-lookup-threads=1` |
 | `QLEVER_MEMORY` | QLever's memory for queries (`6G`) |
 | `QLEVER_SERVER_ARGS` | more options for `qlever-server`, for example `--enable-prefilter-on-index-scans false` |

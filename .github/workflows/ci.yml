@@ -52,7 +52,8 @@ jobs:
 
       - name: Check the shell scripts
         run: |
-          bash -n tripatha.loader/run.sh tripatha.loader/configure.sh tripatha.sparql/configure.sh
+          bash -n tripatha.loader/run.sh tripatha.loader/configure.sh tripatha.sparql/configure.sh \
+            tripatha.loader/bench.sh tripatha.loader/compare.sh tripatha.standalone/build-optimized.sh tripatha.standalone/smoke-test.sh
           tripatha.sparql/configure.sh --defaults --output "$RUNNER_TEMP/tripatha-sparql.sh"
           bash -n "$RUNNER_TEMP/tripatha-sparql.sh"
           TRIPATHA_ACCUMULO_PASSWORD='p\ä ss' tripatha.loader/configure.sh --defaults --output "$RUNNER_TEMP/accumulo-client.properties"

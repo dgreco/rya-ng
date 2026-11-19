@@ -152,6 +152,12 @@ tripatha.standalone/target/tripatha --tripatha.backend=rocksdb --tripatha.rocksd
 
 - The native executable takes the same settings as the jar, as arguments or as `TRIPATHA_*` environment variables. It starts in well under a second and uses far less memory than the JVM.
 - It is built for the machine it is compiled on (Linux x64 and arm64, macOS). It unpacks RocksDB's native library into the temporary directory when it starts, so that directory must be writable.
+- **Give a server a minimum heap** as well as a maximum, for example `-Xms4g -Xmx4g` before the other arguments. The executable's collector sizes its young generation from the minimum heap. Without one it stays small and collects every few tens of milliseconds on large queries.
+  - On WatDiv's complex queries, `-Xms6g` made it about 21 % faster, and C3 about 38 %.
+  - The cost: its memory then peaks at 1.7 GB instead of 0.4 GB.
+- **A faster build:** `tripatha.standalone/build-optimized.sh` builds it with profile-guided optimization. On WatDiv it was 11–16 % faster overall, and 10–19 % on the complex queries.
+  - It needs [Oracle GraalVM](https://www.graalvm.org/downloads/) for JDK 25, which is free to use and to redistribute at no charge under the [GraalVM Free Terms and Conditions](https://www.oracle.com/downloads/licenses/graal-free-license.html), but isn't open source. GraalVM Community, used by CI and the Docker image, has no profile-guided optimization.
+  - It trains an instrumented build on the join benchmark's queries over a small generated store, then builds from that profile. That takes about 5 minutes after the modules are built.
 - `tripatha.standalone/smoke-test.sh http://localhost:8080` runs a started endpoint through its result formats, updates, searches, triple terms, tracing and the query page's files. It empties the store first.
 - The loader is not part of it: load through SPARQL updates, or with the loader jar while the endpoint is stopped.
 
