@@ -83,10 +83,10 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
    - What scales as designed: selective queries don't depend on the store's size, and ranges, index searches and the entity index's stars grow with what they read or less.
    - Lookups that miss the page cache cost about 4 times more (19 against 4.8 µs on local NVMe). At 10^12 most do, so queries bound by lookups should be planned with that figure.
    - Two defects, fixed: O25's fixed cap of 10,000 misplanned value stars (now relative to the star, `class-value-int` 510 → 224 ms), and O24's slices stopped running in parallel when no lookups followed (now one shared queue, 3.7 times faster than one slice).
-7. **Against QLever and Oxigraph, on one machine (M11, section 4.13).**
-   - On the join benchmark's suite Tripatha and QLever are about even, and Oxigraph is about 3 times slower: geometric means 12.0, 13.8 and 37.1 ms over 23 queries, with QLever's prefilter off to work around a bug in it. On WatDiv, which nobody here tuned for, Oxigraph is the fastest: 4.8 ms, Tripatha 6.2, QLever 10.4.
-   - Small queries: Tripatha is 1 to 2 ms behind Oxigraph, about what its endpoint adds over in-process (where the parse, the optimizers and the evaluation are already counted). Its core is at Oxigraph's level; the endpoint layer is the gap.
-   - Large results and analytical queries: QLever is 2.5 to 13 times faster than Tripatha (WatDiv C3 352 against 2,030 ms, `class-value-mid` 16 against 220). It reads IDs from a dictionary and merges whole sorted lists, which is where O11 and O22 to O24 point.
+7. **Against QLever and Oxigraph on a standard benchmark, WatDiv (M11, section 4.13).**
+   - Over its 100 queries at about 10M triples, Oxigraph is the fastest (geometric mean 4.8 ms), then Tripatha (6.2), then QLever (10.4).
+   - Small queries: Tripatha is 1 to 2 ms behind Oxigraph. The endpoint layer is the first suspect, to be profiled.
+   - Large intermediate results: QLever is 3 to 6 times faster than Tripatha (C3 352 against 2,030 ms, C2 38 against 111). It reads IDs from a dictionary and merges whole sorted lists, which is where O11 and O22 to O24 point.
 8. **IRI prefix codes: measured (M9), and deferred.**
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
@@ -183,7 +183,7 @@ All on a real cluster with NVMe disks, unless the row says otherwise.
 | M8 | **A local join benchmark,** no cluster needed: a fixed query suite over a generated store of about 10M triples, on RocksDB and the Accumulo test cluster. Star and chain joins, entity prefetch, OPTIONAL, `LIMIT`, value and prefix filters, text and geo. Reports p50 and p99, a profile of where the time goes, and scans and cells per query from the trace. Checked in, so each optimization reports before and after | O13 to O17 | Done: `tripatha.loader/bench.sh` (`JoinBench`); baseline in section 4.6. Follow-ups: report CPU samples apart from threads blocked in native code, and compare settings back to back in one run (`--conf` variants) |
 | M9 | **IRI prefix codes, measured offline:** the generator's `spo`, `po` and `osp` rows written to RFiles as today and with prefix codes. Compares bytes sent, compressed size, and scan and decode time (section 6.9) | D11, O18 | Done 2026-11-16: results in section 6.9 |
 | M10 | **Class-star queries in the join benchmark:** entities of a large class selected by two to four constant properties, with and without a value filter and with attributes fetched. For example, people of one nationality working for one company, and observations of one property above a value. They measure O14, O22 and O23 | O14, O22, O23 | Done: seven `class-*` queries; baseline in section 4.7 |
-| M11 | **Against other engines:** the join benchmark's suite and WatDiv's 20 basic templates, about 10M triples each, on Tripatha's endpoint over RocksDB, QLever and Oxigraph, over HTTP, with the same data and checked rows (`compare.sh`, tripatha.loader/README.md) | The endpoint's cost per query, O11, O22 to O24 | Done: section 4.13 |
+| M11 | **Against other engines, on a standard benchmark:** WatDiv's 20 basic templates at about 10M triples, on Tripatha's endpoint over RocksDB, QLever and Oxigraph, over HTTP, with the same data and checked rows (`compare.sh`, tripatha.loader/README.md) | The endpoint's cost per query, O11, O22 to O24 | Done: section 4.13 |
 
 ### 2.3 Milestones
 
@@ -644,86 +644,79 @@ The reports are `rocksdb-20261119-072427` (10M, the whole suite), `bench-100m/ro
   - An earlier version of this note said the counters were doubled. They weren't: the old tables were deleted before the load, as the run's log says.
   - The record of a finished load is now in the store itself (table `bench_loaded`), and `bench.sh` reads relative paths from the directory it is run in.
 
-## 4.13 Against QLever and Oxigraph (M11)
+## 4.13 Against QLever and Oxigraph, on WatDiv (M11)
 
-Measured on 2026-11-19, `main` at `9bbd86a`, with `tripatha.loader/compare.sh` (its README has the setup). Three engines on one machine (12 cores, 24 GB, macOS, NVMe):
+Measured on 2026-11-19, `main` at `9bbd86a`, with `tripatha.loader/compare.sh` (its README has the setup). The comparison uses a standard benchmark only, WatDiv, which none of these engines was tuned for. The join benchmark (M8) measures Tripatha's own optimizations and isn't used against other engines.
+
+**The engines,** on one machine (12 cores, 24 GB, macOS, NVMe):
 - Tripatha's endpoint (`tripatha.standalone` on the JVM, `-Xmx6g`) over RocksDB, with the entity index;
 - QLever 0.6.0 (Homebrew, `-m 6G`), a single-machine engine built for large analytical queries;
-- Oxigraph 0.5.13, an embedded store on RocksDB, read-only with `--union-default-graph`.
+- Oxigraph 0.5.13, an embedded store on RocksDB, read-only.
 
 Every query is a SPARQL protocol POST whose whole TSV result is read, over the loopback. There are 3 warm-up and 10 timed runs per query and engine, the engines taking turns, with a warm cache. QLever's result cache is emptied before each of its runs; checked by hand, C3's compute time drops from 33 to 2 ms when cached and comes back after a clear.
 
-**Two suites of about 10M triples:**
-- **The join benchmark's 25 queries** on its data, exported from the benchmark store as N-Quads: 10,000,083 statements in 8 named graphs and the default graph.
-- **WatDiv v0.6** (G. Aluç, O. Hartig, M. T. Özsu and K. Daudjee, *Diversified stress testing of RDF data management systems*, ISWC 2014) at scale factor 100: 10,867,277 distinct statements, and 5 queries from each of its 20 basic templates (linear L1–L5, star S1–S7, snowflake F1–F5, complex C1–C3).
-  - WatDiv publishes no license, so it isn't in this repository: the script downloads it from its publisher, checks it and builds it.
-  - It seeds from the clock, so these figures hold for this generated dataset.
+**The benchmark:** WatDiv v0.6 (G. Aluç, O. Hartig, M. T. Özsu and K. Daudjee, *Diversified stress testing of RDF data management systems*, ISWC 2014) at scale factor 100: 10,867,277 distinct statements, and 5 queries from each of its 20 basic templates (linear L1–L5, star S1–S7, snowflake F1–F5, complex C1–C3).
+- WatDiv publishes no license, so it isn't in this repository: the script downloads it from its publisher, checks it and builds it.
+- It seeds from the clock, so these figures hold for this generated dataset.
+- All three engines held the same statements, and all 100 queries returned the same rows on all three.
+- S3, S5 and S7 return no rows on any engine (all 15 queries). Their constants exist but don't occur together: ProductCategory7 has 1,620 members and none in Language0; User45120 likes nothing. They weigh on the small-query means as fast empty answers.
 
-**Checks before any latency:**
-- Every engine held the same statements, overall and per graph.
-- Every WatDiv query returned the same rows on all three.
-- On the join suite, 20 of 25 did:
-  - `text` uses Tripatha's own function;
-  - QLever rejects this form of `geof:sfWithin` (Oxigraph agrees with Tripatha);
-  - QLever 0.6.0 returns no rows for `?v > 40` and `?v > 60` on `xsd:double` (`range-double`, `class-value`, `class-value-mid`).
-- That last one is a bug in QLever's prefilter on index scans: `?v > 33` is still right, `MAX(?v)` is 84.41, and with `--enable-prefilter-on-index-scans false` it returns the right rows. So the join suite was run twice: QLever as shipped (20 queries comparable), and with its prefilter off (23).
-- Three WatDiv templates return no rows on any engine (S3, S5, S7, all 15 queries). Their constants exist but don't occur together: ProductCategory7 has 1,620 members and none in Language0; User45120 likes nothing. They weigh on the small-query means as fast empty answers.
+**Geometric mean of the p50s** (ms):
 
-**Geometric mean of the p50s** (ms; queries all three answered alike):
-
-| Suite | Queries | Tripatha | QLever | Oxigraph |
+| Queries | Count | Tripatha | QLever | Oxigraph |
 |---|---|---|---|---|
-| Join benchmark, QLever's prefilter off | 23 | **12.0** | 13.8 | 37.1 |
-| Join benchmark, QLever as shipped | 20 | **9.8** | 11.8 | 26.0 |
-| WatDiv, all | 100 | 6.2 | 10.4 | **4.8** |
-| WatDiv linear | 25 | 3.9 | 4.2 | **2.0** |
-| WatDiv star | 35 | 3.0 | 6.6 | **2.6** |
-| WatDiv snowflake | 25 | 3.3 | 15.6 | **2.0** |
-| WatDiv complex | 15 | 201.8 | **67.4** | 420.0 |
+| All | 100 | 6.2 | 10.4 | **4.8** |
+| Linear | 25 | 3.9 | 4.2 | **2.0** |
+| Star | 35 | 3.0 | 6.6 | **2.6** |
+| Snowflake | 25 | 3.3 | 15.6 | **2.0** |
+| Complex | 15 | 201.8 | **67.4** | 420.0 |
 
-**Selected queries** (p50, ms; WatDiv per template, the median of its 5 queries):
+**Per template** (the median of its 5 queries' p50s, ms):
 
-| Query | Rows | Tripatha in-process | Tripatha | QLever | Oxigraph |
-|---|---|---|---|---|---|
-| `lookup` | 8 | 0.7 | 2.2 | 2.7 | **0.6** |
-| `chain-limit` | 10 | 0.6 | 2.3 | 20.3 | **0.7** |
-| `prefix` | 521 | 0.6 | **2.2** | 24.3 | 28.5 |
-| `count-class` | 1 | 7.4 | 8.3 | **1.5** | 8.2 |
-| `class-label` | 53,431 | 233.3 | 252.6 | **96.9** | 390.7 |
-| `class-large` | 14,379 | 11.7 | **12.9** | 18.2 | 187.5 |
-| `prefix`, QLever's prefilter off | 521 | 0.7 | **2.4** | 97.9 | 28.1 |
-| `class-value`, the same | 218 | 6.5 | 10.8 | **8.8** | 516.8 |
-| `class-value-mid`, the same | 5,233 | 196.0 | 220.2 | **16.2** | 542.2 |
-| `class-value-wide`, the same | 51,116 | 298.7 | 637.9 | **82.9** | 966.2 |
-| WatDiv S1 (a star with a constant) | 0–9 | | 3.7 | 70.5 | **1.8** |
-| WatDiv F4 | 0–60 | | 6.6 | 42.2 | **3.1** |
-| WatDiv C2 | 6 | | 111.2 | **37.6** | 290.6 |
-| WatDiv C3 | 444,070 | | 2,029.5 | **351.8** | 16,607.7 |
-
-The last four rows come from the second run, with QLever's prefilter off: it costs QLever elsewhere (`prefix` 24 → 98 ms, `range-date` 1.6 → 6.8). The two runs also show how much a busy moment of the machine moves the absolute figures: `class-label` took Tripatha 253 and 755 ms, and Oxigraph 391 and 652. Ratios within a run, where the engines take turns, hold better.
+| Template | Rows | Tripatha | QLever | Oxigraph |
+|---|---|---|---|---|
+| L1 | 0–3 | 2.7 | 5.1 | **0.8** |
+| L2 | 12–212 | 18.8 | **5.3** | 14.0 |
+| L3 | 9–26 | 1.7 | 2.5 | **0.5** |
+| L4 | 46–66 | 3.1 | 3.1 | **2.0** |
+| L5 | 49–275 | 8.8 | **6.6** | 7.4 |
+| S1 | 0–9 | 3.7 | 70.5 | **1.8** |
+| S2 | 16–128 | 3.1 | 3.8 | **2.0** |
+| S3 | 0 | 12.1 | 6.1 | **5.6** |
+| S4 | 0–5 | 6.8 | **3.5** | 42.2 |
+| S5 | 0 | **1.4** | 5.5 | 3.9 |
+| S6 | 0–16 | 3.7 | 3.3 | **1.9** |
+| S7 | 0 | 0.9 | 4.8 | **0.3** |
+| F1 | 0–10 | **4.3** | 9.4 | 9.0 |
+| F2 | 1–7 | 2.7 | 21.3 | **1.5** |
+| F3 | 1–2 | 1.8 | 10.4 | **0.6** |
+| F4 | 0–60 | 6.6 | 42.2 | **3.1** |
+| F5 | 13–51 | 2.7 | 10.5 | **1.8** |
+| C1 | 26 | 35.3 | 22.6 | **14.8** |
+| C2 | 6 | 111.2 | **37.6** | 290.6 |
+| C3 | 444,070 | 2,029.5 | **351.8** | 16,607.7 |
 
 **Loading** (each engine's own loader, from the same file):
 
-| | Join suite: load, on disk | WatDiv: load, on disk |
+| | Load | On disk |
 |---|---|---|
-| Tripatha | 146 s, 3.03 GB | 99 s, 1.01 GB |
-| QLever | 11 s, 0.45 GB | 11 s, 0.28 GB |
-| Oxigraph | 14 s, 2.97 GB | 11 s, 1.22 GB |
+| Tripatha | 99 s | 1.01 GB |
+| QLever | 11 s | 0.28 GB |
+| Oxigraph | 11 s | 1.22 GB |
 
-Tripatha's figures include its statistics counters and its indexes: text, geo and entity on the join suite, entity on WatDiv. It writes through the DAO, as a live store does, with 8 threads (the loader, and `RdfFileLoad` for WatDiv). QLever and Oxigraph build from a file offline.
+Tripatha's figures include its statistics counters and the entity index. It writes through the DAO, as a live store does, with 8 threads (`RdfFileLoad`). QLever and Oxigraph build from a file offline.
 
 **What it says:**
-- **Small, selective queries:** Oxigraph wins 13 of WatDiv's 20 templates, most under 2 ms, and Tripatha is usually second, 1 to 2 ms behind.
-  - On the join suite, Tripatha's endpoint adds about 1.5 ms per query over in-process (`lookup` 0.7 → 2.2, `chain-limit` 0.6 → 2.3), while Oxigraph answers in 0.6 over HTTP.
-  - The in-process figure already counts the parse, the optimizers and the evaluation; only the results' writing is left out, and these results are a few rows. So Tripatha's core is at Oxigraph's level, and the gap is the endpoint layer: HTTP, Spring and the endpoint's handling of a request. It is worth profiling before anything else on this side.
-- **Large results and analytical queries:** QLever wins, 2.5 to 13 times faster than Tripatha: WatDiv C3 and C2, counts, `class-label`, and the value stars.
-  - It works on IDs from a dictionary and merges whole sorted lists. That is the direction of O11 (a dictionary) and O22 to O24 (merges), and it is what Tripatha's merges do on constant patterns already.
-  - `class-value-mid` is the largest gap, 220 against 16 ms (Tripatha 196 ms in-process): a star whose value condition one result in eleven passes. Its plan is worth a look.
-- **QLever's floor is higher:** a selective star or a `LIMIT` costs it 20 to 70 ms (WatDiv S1 70 ms, `chain-limit` 20, `type-limit` 33), against 2 to 4 for Tripatha, since it scans each pattern's whole predicate.
-- **Tripatha's own optimizations hold up against both:** prefix ranges (`prefix` 2.2 against 24 and 29 ms), stars of constant patterns (`class-large`), and `LIMIT` stopping early.
-- **Oxigraph** is fast on point lookups and short joins, and slow on anything that reads long lists: `class-value` 500 ms, WatDiv C3 16.6 s.
+- **Small, selective queries:** Oxigraph wins 13 of the 20 templates, most under 2 ms, and Tripatha is usually second, 1 to 2 ms behind.
+  - WatDiv doesn't say where those milliseconds go. On the join benchmark's small queries, Tripatha's endpoint takes about 1.5 ms more than `JoinBench` in-process, which already counts the parse, the optimizers and the evaluation.
+  - So the endpoint layer (HTTP, Spring, the handling of a request) is the first suspect, and worth profiling before anything else on this side.
+- **Large intermediate results:** QLever wins, 3 to 6 times faster than Tripatha (C3, C2, L2).
+  - It works on IDs from a dictionary and merges whole sorted lists. That is the direction of O11 (a dictionary) and O22 to O24 (merges).
+  - Tripatha is second on the complex queries, 2.6 and 8 times faster than Oxigraph on C2 and C3.
+- **QLever's floor is higher:** a selective star or snowflake costs it 20 to 70 ms (S1 70, F4 42, F2 21), against 2 to 7 for the others, since it scans each pattern's whole predicate.
+- **Oxigraph** is fast on point lookups and short joins, and slow on what reads long lists: S4 42 ms, C3 16.6 s.
 - **At 10^12:** QLever and Oxigraph are single-machine stores, so this compares per-query engines at 10M, not designs at scale. The two gaps it shows carry over, though. A fixed cost per query is paid by every lookup of a server-side join, and the analytical gap is O11's and O12's question (section 5).
-- **Reports:** in `tripatha.loader/target/compare`, `compare-20261119-141437` (join suite), `-144633` (join suite, QLever's prefilter off) and `-143642` (WatDiv).
+- **Report:** `tripatha.loader/target/compare/compare-20261119-143642`.
 
 ---
 
