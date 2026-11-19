@@ -1147,6 +1147,8 @@ The join then shows `algorithm: RyaBatchedJoin` in the plan. A chunk with a sing
 
    A key's answer is exactly what a single lookup would have returned.
 3. **No double counting.** Within a group, a stored cell counts once, identified by its statement, graph, qualifier, label and timestamp.
+   - **Disjoint groups skip it** (SCALE-STUDY.md O17): when every key of a group has the same shape and leaves the object free, as an entity chain's links `(s, p, ?)` do, their ranges are prefixes ending at a `00` delimiter (`s 00 p 00`), and stored terms hold no `00`. So no two of them overlap, no cell comes twice, and the scan neither records the cells it has seen nor encodes their objects again.
+   - Subject ranges (step 4) overlap the keys they stand for, so a group read that way keeps the check.
 4. **One range per subject, when switched on** (`query.join.subjectranges`, off by default). In `spo`, a subject asked for by two or more keys of a group (the links of an entity chain, for example) is read as its whole range, `s 00`, instead of one range per key.
    - **The idea:** the subject's statements are neighbouring rows, so one seek reads them all.
    - **Why the answers don't change:** the exact matching of step 2 keeps only what each key asks for.

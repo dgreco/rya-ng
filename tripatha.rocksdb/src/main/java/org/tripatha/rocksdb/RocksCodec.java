@@ -157,17 +157,32 @@ final class RocksCodec {
      */
     static Cell cell(final byte[] key, final byte[] stored, final boolean counter) {
         // The row ends at 00 01; before that, a 00 and the byte after it (FF) stand for one 00.
+        // The first four 00s are remembered (a statement row has two), so the row is copied
+        // run by run without a second pass over the key.
         int end = 0;
         int zeros = 0;
+        int z0 = 0;
+        int z1 = 0;
+        int z2 = 0;
+        int z3 = 0;
         while (key[end] != 0 || key[end + 1] != 1) {
             if (key[end] == 0) {
+                switch (zeros) {
+                    case 0 -> z0 = end;
+                    case 1 -> z1 = end;
+                    case 2 -> z2 = end;
+                    case 3 -> z3 = end;
+                    default -> {
+                    }
+                }
                 zeros++;
                 end += 2;
             } else {
                 end++;
             }
         }
-        final byte[] row = zeros == 0 ? Arrays.copyOf(key, end) : unescape(key, end, zeros);
+        final byte[] row = zeros == 0 ? Arrays.copyOf(key, end)
+                : zeros <= 4 ? unescape(key, end, zeros, z0, z1, z2, z3) : unescape(key, end, zeros);
         final int i = end + 2;
         final int familyEnd = indexOfZero(key, i);
         final int qualifierEnd = indexOfZero(key, familyEnd + 1);
@@ -195,6 +210,21 @@ final class RocksCodec {
         }
         end = Math.min(end, key.length);
         return zeros == 0 ? Arrays.copyOf(key, end) : unescape(key, end, zeros);
+    }
+
+    /** The row in {@code key[0, end)}, whose escaped {@code 00} bytes, at most four, are at {@code z0} to {@code z3}. */
+    private static byte[] unescape(final byte[] key, final int end, final int zeros, final int z0, final int z1, final int z2,
+            final int z3) {
+        final byte[] row = new byte[end - zeros];
+        int pos = 0;
+        int from = 0;
+        for (int k = 0; k < zeros; k++) {
+            final int z = k == 0 ? z0 : k == 1 ? z1 : k == 2 ? z2 : z3;
+            pos = copy(key, from, z + 1, row, pos);
+            from = z + 2; // past the escape byte
+        }
+        copy(key, from, end, row, pos);
+        return row;
     }
 
     /** The row in {@code key[0, end)}, which holds {@code zeros} escaped {@code 00} bytes, copied run by run. */
