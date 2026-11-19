@@ -221,6 +221,106 @@ public class BatchLookupIT extends RyaSailITBase {
         assertEquals(null, BatchLookup.fetch(dao, conf, keys, 10), "21 statements, over 10 in all though under 10 per chunk");
     }
 
+    /**
+     * Keys of different shapes whose ranges don't overlap, (s, p, ?) beside (s, q, o): the group is
+     * disjoint, and still answers as single lookups.
+     */
+    @Test
+    public void keysOfDifferentShapesThatDontOverlapAnswerAsSingleLookups() {
+        dao.add(new RyaStatement(new RyaIRI("urn:s"), new RyaIRI("urn:q"), new RyaType("x")));
+        dao.add(new RyaStatement(new RyaIRI("urn:s"), new RyaIRI("urn:q"), new RyaType("xy")));
+        final IRI q = VF.createIRI("urn:q");
+        final List<LookupKey> keys = List.of(LookupKey.of(S, P, null), LookupKey.of(S, q, VF.createLiteral("x")),
+                LookupKey.of(V, P, VF.createIRI("urn:o")), LookupKey.of(G, P, VF.createIRI("urn:o")));
+        final Map<LookupKey, List<Statement>> batch = BatchLookup.fetch(dao, conf, keys, 1000);
+        assertNotNull(batch);
+        assertEquals(2, batch.get(keys.get(0)).size());
+        assertEquals(1, batch.get(keys.get(1)).size(), "\"x\", not \"xy\"");
+        assertEquals(2, batch.get(keys.get(2)).size(), "under the labels A and B");
+        assertEquals(2, batch.get(keys.get(3)).size(), "the default graph and urn:G1");
+        assertMatchesSingleLookups(batch);
+    }
+
+    /**
+     * Read on threads, keys whose objects differ only in type share one range: they go to the same
+     * chunk, so that range's cells are read once.
+     */
+    @Test
+    public void keysWithTheSameRangeStayInOneChunk() {
+        for (int i = 3; i < 9; i++) {
+            dao.add(new RyaStatement(new RyaIRI("urn:s" + i), new RyaIRI("urn:val"), new RyaType("" + i)));
+        }
+        final List<LookupKey> keys = new ArrayList<>();
+        keys.add(LookupKey.of(null, VAL, VF.createLiteral("2")));
+        for (int i = 3; i < 9; i++) {
+            keys.add(LookupKey.of(null, VAL, VF.createLiteral("" + i)));
+        }
+        keys.add(LookupKey.of(null, VAL, VF.createLiteral("2", VF.createIRI("urn:dt"))));
+        conf.setJoinLookupThreads(2);
+        conf.setJoinLookupThreadKeys(1);
+        final List<Integer> ranges = new ArrayList<>();
+        final Map<LookupKey, List<Statement>> batch = traced(ranges, new ArrayList<>(), () -> BatchLookup.fetch(dao, conf, keys, 1000));
+        assertEquals(2, ranges.size(), "two chunks: " + ranges);
+        assertEquals(0, batch.get(keys.get(0)).size());
+        assertEquals(1, batch.get(keys.get(keys.size() - 1)).size(), "the custom-typed 2, once");
+        for (int i = 1; i < keys.size() - 1; i++) {
+            assertEquals(1, batch.get(keys.get(i)).size(), keys.get(i).toString());
+        }
+        assertMatchesSingleLookups(batch);
+    }
+
+    /** Two keys of one range, cut for two threads: the second chunk would be empty, and is dropped. */
+    @Test
+    public void aChunkLeftEmptyIsDropped() {
+        conf.setJoinLookupThreads(2);
+        conf.setJoinLookupThreadKeys(1);
+        final LookupKey plain = LookupKey.of(null, VAL, VF.createLiteral("2"));
+        final LookupKey typed = LookupKey.of(null, VAL, VF.createLiteral("2", VF.createIRI("urn:dt")));
+        final List<Integer> ranges = new ArrayList<>();
+        final Map<LookupKey, List<Statement>> batch = traced(ranges, new ArrayList<>(),
+                () -> BatchLookup.fetch(dao, conf, List.of(plain, typed), 1000));
+        assertEquals(List.of(1), ranges, "one chunk, one range");
+        assertEquals(0, batch.get(plain).size());
+        assertEquals(1, batch.get(typed).size());
+        assertMatchesSingleLookups(batch);
+    }
+
+    /**
+     * Keys of one range under different graph conditions (any graph, the default graph), among
+     * others, read on threads: the range is read once. Two patterns for it could compare unequal
+     * (a RyaStatement keeps its creation time) and land in two chunks, giving its cells twice.
+     */
+    @Test
+    public void keysOfOneRangeUnderDifferentGraphConditionsAreReadOnce() {
+        for (int i = 0; i < 6; i++) {
+            dao.add(new RyaStatement(new RyaIRI("urn:u" + i), new RyaIRI("urn:p"), new RyaIRI("urn:o")));
+        }
+        conf.setJoinLookupThreads(2);
+        conf.setJoinLookupThreadKeys(1);
+        final LookupKey anyGraph = LookupKey.of(G, P, null);
+        final LookupKey defaultGraph = LookupKey.of(G, P, null, (Resource) null);
+        final List<LookupKey> keys = new ArrayList<>(List.of(anyGraph));
+        for (int i = 0; i < 6; i++) {
+            keys.add(LookupKey.of(VF.createIRI("urn:u" + i), P, null));
+        }
+        keys.add(defaultGraph);
+        final Map<LookupKey, List<Statement>> batch = BatchLookup.fetch(dao, conf, keys, 1000);
+        assertNotNull(batch);
+        assertEquals(2, batch.get(anyGraph).size(), "the default graph and urn:G1, once each");
+        assertEquals(1, batch.get(defaultGraph).size());
+        assertMatchesSingleLookups(batch);
+    }
+
+    /** A key asked for twice in one batch is answered as a single lookup would answer it. */
+    @Test
+    public void aKeyAskedForTwiceIsAnsweredOnce() {
+        final LookupKey key = LookupKey.of(S, P, null);
+        final Map<LookupKey, List<Statement>> batch = BatchLookup.fetch(dao, conf, List.of(key, key, LookupKey.of(V, P, null)), 1000);
+        assertNotNull(batch);
+        assertEquals(2, batch.get(key).size(), "urn:o and urn:o2");
+        assertMatchesSingleLookups(batch);
+    }
+
     /** A batch whose ranges may overlap stays one scan, on this thread, whatever the setting. */
     @Test
     public void aBatchWhoseRangesMayOverlapIsReadOnce() {

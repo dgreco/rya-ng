@@ -25,6 +25,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -64,17 +65,22 @@ import org.eclipse.rdf4j.model.Statement;
  * keeps the answer for a key identical to a single lookup of that key.
  *
  * <p>Within a group each stored cell is counted once (cells differ by qualifier, visibility and
- * timestamp as well as by statement, as in a single lookup). When every key of a group has the
- * same shape and leaves the object free (an entity chain's links, {@code (s, p, ?)}), their
- * ranges are prefixes ending at a delimiter, and stored terms hold no {@code 00} byte, so no two
- * of them overlap: no cell can come twice, and the scan neither keeps track of the cells it has
- * seen nor encodes their objects again (SCALE-STUDY.md O17).
+ * timestamp as well as by statement, as in a single lookup). But a key's range is its bound
+ * parts in the table's order, each followed by a delimiter (on {@code spo}, {@code s 00 p 00} for
+ * {@code (s, p, ?)}, {@code s 00 p 00 o 01} for {@code (s, p, o)}), and stored terms hold no
+ * delimiter byte. So two ranges overlap only when one key's parts are a strict prefix of
+ * another's, such as {@code (s, p, ?)} and {@code (s, p, o)}; equal parts give the same range,
+ * which a scan reads once. A group with no such pair is disjoint: no cell can come twice, and the
+ * scan doesn't keep track of the cells it has seen, nor encode their objects for that when no key
+ * binds one (SCALE-STUDY.md O17). Only groups whose keys bind different numbers of parts are
+ * checked for prefixes.
  *
  * <p>Such a group's cells also come, for each key, from that key's own range only, so its ranges
  * can be read by several threads (O16, {@code query.join.lookupthreads}): the group is cut into
- * chunks of at least {@code query.join.lookupthreadkeys} patterns, the query thread reads the
- * first and pool threads the others, each one reading, decoding and matching its chunk into a
- * map of its own, under the query's trace. The query thread then waits for every chunk, whatever
+ * chunks of at least {@code query.join.lookupthreadkeys} patterns (one per range, so no two chunks
+ * read the same range), the query thread reads the first and
+ * pool threads the others, each one reading, decoding and matching its chunk into a map of its
+ * own, under the query's trace. The query thread then waits for every chunk, whatever
  * happened to the others, so no scan outlives the call, and merges the maps: each key's list
  * comes from one chunk, in the order a single scan would give it. The limit counts the whole
  * group's statements across the threads.
@@ -116,7 +122,8 @@ public final class BatchLookup {
             final C conf, final Collection<LookupKey> keys, final long limit) {
         final RyaTripleContext tripleContext = RyaTripleContext.getInstance(conf);
         final Map<GroupId, Group> groups = new LinkedHashMap<>();
-        for (final LookupKey key : keys) {
+        // A key asked for twice is answered once: its statements would otherwise be given to it twice.
+        for (final LookupKey key : new LinkedHashSet<>(keys)) {
             final Target target = Target.of(key);
             if (target == null) {
                 continue; // not something a single lookup would be asked for, or a full scan
@@ -125,7 +132,7 @@ public final class BatchLookup {
             if (layout == null) {
                 continue;
             }
-            groups.computeIfAbsent(new GroupId(layout, target.namedGraph), g -> new Group()).add(key, target);
+            groups.computeIfAbsent(new GroupId(layout, target.namedGraph), g -> new Group(g.layout())).add(key, target);
         }
 
         final Map<LookupKey, List<Statement>> results = new HashMap<>();
@@ -220,7 +227,10 @@ public final class BatchLookup {
      * @return the statements given to keys, or {@link #OVER_LIMIT} if more than {@code limit}
      */
     private static <C extends RdfCloudTripleStoreConfiguration> long scanInChunks(final RyaDAO<C> dao, final C conf,
-            final Group group, final int chunks, final Map<LookupKey, List<Statement>> results, final long limit) {
+            final Group group, final int requested, final Map<LookupKey, List<Statement>> results, final long limit) {
+        // Patterns sharing a range stay together, so fewer chunks than asked may have patterns.
+        final List<List<RyaStatement>> cut = group.chunks(requested);
+        final int chunks = cut.size();
         final List<Map<LookupKey, List<Statement>>> parts = new ArrayList<>(chunks);
         final AtomicLong held = new AtomicLong();
         final AtomicBoolean stop = new AtomicBoolean();
@@ -229,12 +239,11 @@ public final class BatchLookup {
         final Trace trace = StoreTrace.current();
         // The chunks' scans say what this thread is doing (an entity prefetch's window, say), and which part they read.
         final String why = trace == null ? "" : trace.reason();
-        final int size = group.patterns.size();
         for (int c = 0; c < chunks; c++) {
             parts.add(new HashMap<>());
         }
         for (int c = 1; c < chunks; c++) {
-            final List<RyaStatement> chunk = group.patterns.subList(c * size / chunks, (c + 1) * size / chunks);
+            final List<RyaStatement> chunk = cut.get(c);
             final Map<LookupKey, List<Statement>> part = parts.get(c);
             final String reason = (why.isEmpty() ? "" : why + " › ") + "part " + (c + 1) + " of " + chunks + ", on a thread of its own";
             try {
@@ -256,7 +265,7 @@ public final class BatchLookup {
             }
         }
         try {
-            scanPart(dao, conf, group, group.patterns.subList(0, size / chunks), parts.get(0), held, limit, stop);
+            scanPart(dao, conf, group, cut.get(0), parts.get(0), held, limit, stop);
         } catch (final RuntimeException | Error e) {
             failure.compareAndSet(null, e);
             stop.set(true);
@@ -292,24 +301,33 @@ public final class BatchLookup {
     private static <C extends RdfCloudTripleStoreConfiguration> void scanPart(final RyaDAO<C> dao, final C conf, final Group group,
             final List<RyaStatement> patterns, final Map<LookupKey, List<Statement>> part, final AtomicLong held, final long limit,
             final AtomicBoolean stop) {
-        final Map.Entry<Shape, Map<Projection, List<LookupKey>>> only = group.index.entrySet().iterator().next();
-        final Shape shape = only.getKey();
+        final boolean objects = group.index.keySet().stream().anyMatch(Shape::object);
         try (CloseableIteration<RyaStatement> found = dao.getQueryEngine().batchQuery(patterns, conf)) {
             while (!stop.get() && found.hasNext()) {
                 final RyaStatement stored = found.next();
-                if (shape.defaultGraphOnly && stored.getContext() != null) {
+                final ByteBuffer object = objects ? encode(stored.getObject()) : null;
+                if (objects && object == null) {
                     continue;
                 }
-                final List<LookupKey> matching = only.getValue().get(Projection.of(shape, stored, null));
-                if (matching == null) {
-                    continue;
-                }
-                final Statement converted = RyaToRdfConversions.convertStatement(stored);
-                for (final LookupKey key : matching) {
-                    part.computeIfAbsent(key, k -> new ArrayList<>()).add(converted);
-                    if (held.incrementAndGet() > limit) {
-                        stop.set(true);
-                        return;
+                Statement converted = null;
+                for (final Map.Entry<Shape, Map<Projection, List<LookupKey>>> byShape : group.index.entrySet()) {
+                    final Shape shape = byShape.getKey();
+                    if (shape.defaultGraphOnly && stored.getContext() != null) {
+                        continue;
+                    }
+                    final List<LookupKey> matching = byShape.getValue().get(Projection.of(shape, stored, object));
+                    if (matching == null) {
+                        continue;
+                    }
+                    if (converted == null) {
+                        converted = RyaToRdfConversions.convertStatement(stored);
+                    }
+                    for (final LookupKey key : matching) {
+                        part.computeIfAbsent(key, k -> new ArrayList<>()).add(converted);
+                        if (held.incrementAndGet() > limit) {
+                            stop.set(true);
+                            return;
+                        }
                     }
                 }
             }
@@ -348,22 +366,31 @@ public final class BatchLookup {
     }
 
     private static ByteBuffer encode(final RyaType value) {
+        final byte[][] parts = serialized(value);
+        return parts == null ? null : joined(parts);
+    }
+
+    /** A value's data and type, as the rows hold them; null if it has none or can't be encoded. */
+    private static byte[][] serialized(final RyaType value) {
         if (value == null) {
             return null;
         }
         try {
-            final byte[][] parts = TYPES.serializeType(value);
-            final byte[] bytes = new byte[parts[0].length + parts[1].length];
-            System.arraycopy(parts[0], 0, bytes, 0, parts[0].length);
-            System.arraycopy(parts[1], 0, bytes, parts[0].length, parts[1].length);
-            return ByteBuffer.wrap(bytes);
+            return TYPES.serializeType(value);
         } catch (final Exception e) {
             return null;
         }
     }
 
-    /** A key translated to what Tripatha would query. */
-    private record Target(RyaStatement pattern, Shape shape, Projection projection, String namedGraph) {
+    private static ByteBuffer joined(final byte[][] parts) {
+        final byte[] bytes = new byte[parts[0].length + parts[1].length];
+        System.arraycopy(parts[0], 0, bytes, 0, parts[0].length);
+        System.arraycopy(parts[1], 0, bytes, parts[0].length, parts[1].length);
+        return ByteBuffer.wrap(bytes);
+    }
+
+    /** A key translated to what Tripatha would query; {@code objectData} is its object's data, without the type, as its range holds it. */
+    private record Target(RyaStatement pattern, Shape shape, Projection projection, String namedGraph, ByteBuffer objectData) {
         static Target of(final LookupKey key) {
             if (key.contexts().size() > 1) {
                 return null;
@@ -384,14 +411,15 @@ public final class BatchLookup {
             if (s == null && p == null && o == null) {
                 return null; // a full scan; nothing to gain from batching
             }
-            final ByteBuffer encodedObject = o == null ? null : encode(o);
-            if (o != null && encodedObject == null) {
+            final byte[][] parts = serialized(o);
+            if (o != null && parts == null) {
                 return null;
             }
             final Shape shape = new Shape(s != null, p != null, o != null, defaultGraphOnly);
             final Projection projection = new Projection(s == null ? null : s.getData(), p == null ? null : p.getData(),
-                    encodedObject);
-            return new Target(new RyaStatement(s, p, o, c), shape, projection, c == null ? null : c.getData());
+                    parts == null ? null : joined(parts));
+            return new Target(new RyaStatement(s, p, o, c), shape, projection, c == null ? null : c.getData(),
+                    parts == null ? null : ByteBuffer.wrap(parts[0]));
         }
     }
 
@@ -424,25 +452,119 @@ public final class BatchLookup {
     }
 
     private static final class Group {
+        final TABLE_LAYOUT layout;
         final List<LookupKey> keys = new ArrayList<>();
         final List<RyaStatement> patterns = new ArrayList<>();
+        private Boolean disjoint;
+        /**
+         * Each pattern's bound parts in the table's order: what its range holds, and so its
+         * identity. A group keeps one pattern per range, whatever else tells keys apart (an
+         * object's type, the default graph or any graph, the creation time a RyaStatement keeps),
+         * so no scan, and no two chunks, read a range twice.
+         */
+        private final List<List<Object>> paths = new ArrayList<>();
+        private final Set<List<Object>> distinctPaths = new HashSet<>();
+
+        Group(final TABLE_LAYOUT layout) {
+            this.layout = layout;
+        }
         /** How many subjects {@link #subjectRanges()} read whole. */
         int collapsedSubjects;
         final Map<Shape, Map<Projection, List<LookupKey>>> index = new LinkedHashMap<>();
-        private final Set<RyaStatement> distinctPatterns = new HashSet<>();
 
         /**
-         * Whether every key has the same shape and leaves the object free: then the group's ranges
-         * are prefixes ending at a delimiter, and none overlaps another.
+         * Whether no key's range overlaps another's: no key's parts, in the table's order, are a
+         * strict prefix of another key's. Keys binding as many parts can't be, so only a group with
+         * keys of different lengths is looked at pattern by pattern.
          */
         boolean disjoint() {
-            return index.size() == 1 && !index.keySet().iterator().next().object();
+            if (disjoint == null) {
+                disjoint = computeDisjoint();
+            }
+            return disjoint;
+        }
+
+        private boolean computeDisjoint() {
+            final Set<Integer> lengths = new HashSet<>();
+            for (final Shape shape : index.keySet()) {
+                final int length = length(shape);
+                if (length < 0) {
+                    return false;
+                }
+                lengths.add(length);
+            }
+            if (lengths.size() <= 1) {
+                return true;
+            }
+            for (final List<Object> path : distinctPaths) {
+                for (int i = 1; i < path.size(); i++) {
+                    if (distinctPaths.contains(path.subList(0, i))) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        /** How many parts a shape binds in the table's order before the first free one; -1 for a layout not looked at. */
+        private int length(final Shape shape) {
+            final boolean[] order = switch (layout) {
+                case SPO -> new boolean[] {shape.subject(), shape.predicate(), shape.object()};
+                case PO -> new boolean[] {shape.predicate(), shape.object(), shape.subject()};
+                case OSP -> new boolean[] {shape.object(), shape.subject(), shape.predicate()};
+                default -> null;
+            };
+            if (order == null) {
+                return -1;
+            }
+            int n = 0;
+            while (n < order.length && order[n]) {
+                n++;
+            }
+            return n;
+        }
+
+        /** A pattern's bound parts in the table's order, up to the first free one: what its range holds. */
+        private List<Object> path(final Target t) {
+            final Object s = t.projection().subject();
+            final Object p = t.projection().predicate();
+            final Object o = t.objectData();
+            final Object[] order = switch (layout) {
+                case SPO -> new Object[] {s, p, o};
+                case PO -> new Object[] {p, o, s};
+                default -> new Object[] {o, s, p};
+            };
+            final List<Object> path = new ArrayList<>(3);
+            for (final Object part : order) {
+                if (part == null) {
+                    break;
+                }
+                path.add(part);
+            }
+            return path;
+        }
+
+        /**
+         * The patterns cut into at most {@code n} chunks, in order, none of them empty. Each range
+         * has one pattern, so no range is read by two chunks.
+         */
+        List<List<RyaStatement>> chunks(final int n) {
+            final List<List<RyaStatement>> out = new ArrayList<>(n);
+            final int size = patterns.size();
+            for (int c = 0; c < n; c++) {
+                out.add(patterns.subList(c * size / n, (c + 1) * size / n));
+            }
+            out.removeIf(List::isEmpty);
+            return out;
         }
 
         void add(final LookupKey key, final Target target) {
             keys.add(key);
-            if (distinctPatterns.add(target.pattern)) {
+            final List<Object> path = path(target);
+            if (distinctPaths.add(path)) {
                 patterns.add(target.pattern);
+                paths.add(path);
+                disjoint = null;
             }
             index.computeIfAbsent(target.shape, s -> new HashMap<>())
                     .computeIfAbsent(target.projection, p -> new ArrayList<>()).add(key);
