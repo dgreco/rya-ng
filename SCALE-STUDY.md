@@ -156,8 +156,8 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O13 | **`STRSTARTS` as a prefix range:** a filter `STRSTARTS(?o, "abc")` on a pattern's object narrows its scan to the objects whose data starts with `abc`, with no type check; the filter stays. Not `STRSTARTS(STR(?o), …)`: numbers, dates and booleans aren't stored as their text (section 6.7, ARCH.md 12.8) | R2 | measured (M8): `prefix` 92 → 0.7 ms on RocksDB and 72 → 2.2 ms on Accumulo, 133,579 → 522 cells. `query.prefixranges` turns it off | M8 | 1 | Done (PR #15) |
 | O14 | **Comparisons as value ranges:** `<`, `<=`, `>`, `>=` on a pattern's numeric or date object narrow its scan to the value range, one range per stored type; the filter stays. Needs a record of the datatypes each predicate's objects use (section 6.7) | R2 | the same, for numbers and dates | M8 | 1 | Done: datatype markers, storage version 1.1.0 with a write check, `ValueRangeOptimizer`; on by default (`query.valueranges`). Range queries 5 to 36 times faster on Accumulo, `class-value` 26 times; a condition most values pass is 4 to 8 times slower in a star (section 4.8, O25) |
 | O15 | **Adaptive batch windows in batched joins:** the first window is 64 left rows, doubling up to `query.join.batchsize`, as entity prefetch does (section 6.8) | R2 | measured (M8, section 4.6): `chain-limit` 114 → 19 ms on Accumulo and 6.9 → 0.7 ms on RocksDB (1,003 → 67 ranges); `type-limit` 164 → 40 ms and 22.6 → 1.6 ms (2,004 → 260 ranges). No cost on large joins: `chain` −7 % with 16 batch scans instead of 13 | M8 | 1 | Done (PR #15) |
-| O16 | **More lookups in flight:** batched joins and entity prefetch keep the next window's fetch running while the current one is joined, and more than one when the store has several servers (section 6.8) | R2 | the tablet server is the limit on the test cluster (4.6), so overlapping with client work gains nothing. More server parallelism (more tablets, concurrent batch scans) is the open question, for a cluster (M3) | M8 | 1 | Not started |
-| O17 | **Less work per looked-up row:** `BatchLookup` matches on the row's encoded object instead of encoding every result again, and allocates less per row (section 6.8) | R2 | dropped for joins: on Accumulo the query thread's CPU is 2 to 3 % of a join's wall time (4.6). It could matter for range scans, which are client-bound | M8 | 1 | Not started |
+| O16 | **More lookups in flight:** batched joins and entity prefetch keep the next window's fetch running while the current one is joined, and more than one when the store has several servers (section 6.8) | R2 | the tablet server is the limit on the test cluster (4.6), so overlapping with client work gains nothing. More server parallelism (more tablets, concurrent batch scans) is the open question, for a cluster (M3) | M8 | 1 | Not started. On RocksDB the client is the limit (section 4.14: C3's query thread is busy 95 % of its wall time), so decoding windows on more threads is the open question there |
+| O17 | **Less work per looked-up row:** `BatchLookup` matches on the row's encoded object instead of encoding every result again, and allocates less per row (section 6.8) | R2 | dropped for joins: on Accumulo the query thread's CPU is 2 to 3 % of a join's wall time (4.6). It could matter for range scans, which are client-bound | M8 | 1 | Not started. Measured on RocksDB (section 4.14): matching cells to lookups, building lookup keys and decoding RocksDB keys take about half of the CPU of WatDiv's C2 and C3, so it matters for joins there |
 | O18 | **IRI prefix codes**, only if M9 says go (section 6.9) | R1 | measured (M9): −4 to −5 % on disk, −25 to −35 % in the block cache, −44 to −57 % of the key bytes a writer sends, no clear change in scan and decode time | M9, D11 | 2 | Deferred (2026-11-16: below the bar on disk; revisit after M3, see 6.9) |
 | O19 | **RocksDB key decoding:** `RocksCodec` encodes and decodes keys by copying the runs between escapes in bulk, instead of a byte at a time through a synchronized `ByteArrayOutputStream` | — | measured with O20 on RocksDB (M8, against `rocksdb-20261116-204243`): `count-class` 71 → 25 ms, range scans −23 to −31 %, joins −13 to −19 % | — | 1 | Done (PR #15) |
 | O20 | **The object-type check as a row suffix:** `ScanSpec.rowSuffix`, set by the query engine when the type is the only row condition. RocksDB compares bytes. Accumulo and HBase filter with the equivalent linear `[\s\S]*` and the quoted suffix, instead of three open groups. It also fixes datatype IRIs being pasted into the expression unquoted, which let a `.` in a custom datatype IRI match any character | R2 | measured with O19, above. On Accumulo it means less tablet-server CPU per type-checked cell, not measured separately | — | 1 | Done (PR #15) |
@@ -184,6 +184,7 @@ All on a real cluster with NVMe disks, unless the row says otherwise.
 | M9 | **IRI prefix codes, measured offline:** the generator's `spo`, `po` and `osp` rows written to RFiles as today and with prefix codes. Compares bytes sent, compressed size, and scan and decode time (section 6.9) | D11, O18 | Done 2026-11-16: results in section 6.9 |
 | M10 | **Class-star queries in the join benchmark:** entities of a large class selected by two to four constant properties, with and without a value filter and with attributes fetched. For example, people of one nationality working for one company, and observations of one property above a value. They measure O14, O22 and O23 | O14, O22, O23 | Done: seven `class-*` queries; baseline in section 4.7 |
 | M11 | **Against other engines, on a standard benchmark:** WatDiv's 20 basic templates at about 10M triples, on Tripatha's endpoint over RocksDB, QLever and Oxigraph, over HTTP, with the same data and checked rows (`compare.sh`, tripatha.loader/README.md) | The endpoint's cost per query, O11, O22 to O24 | Done: section 4.13 |
+| M12 | **Where a query's time goes, in-process:** `QueryProfile` (tripatha.loader test sources) runs one query on a RocksDB store and splits its time between reading the rows and writing them, the store's scans by reason, and JFR CPU samples. Applied to WatDiv's complex queries | O16, O17, O11 | Done: section 4.14 |
 
 ### 2.3 Milestones
 
@@ -716,6 +717,40 @@ Tripatha's figures include its statistics counters and the entity index. It writ
 - **Oxigraph** is fast on point lookups and short joins, and slow on what reads long lists: S4 48 ms, C3 16.5 s.
 - **At 10^12:** QLever and Oxigraph are single-machine stores, so this compares per-query engines at 10M, not designs at scale. The gap that matters carries over, though: large answers, where the cost per row decides. That is O11's and O12's question (section 5).
 - **Report:** `tripatha.loader/target/compare/compare-20261119-154501`, and each engine's results in `runs/20261119-151920`.
+
+
+## 4.14 Where Tripatha's time goes on WatDiv's complex queries (M12)
+
+Measured on 2026-11-19 with `QueryProfile`: one query in-process on the JVM, through the Sail as the endpoint runs it, on a copy of section 4.13's WatDiv store. It times reading every row, and reading them and writing them as TSV; it groups the store's scans by the reason the trace gives them; and it samples the CPU with JFR. C3 and C2 are the two templates where QLever is furthest ahead (4.13).
+
+| | C3-01 | C2-01 |
+|---|---|---|
+| Rows | 444,070 | 6 |
+| Reading every row (p50) | 2,042 ms | 115 ms |
+| The query thread's CPU | 1,949 ms | 114 ms |
+| Reading and writing TSV | 2,010 ms | 111 ms |
+| Garbage collection | 22 ms | 1 ms |
+| Lookups (ranges) and cells read | 200,505 and 1.9M | 29,653 and 30,567 |
+| RocksDB itself, of the CPU | 1 % | 0 % |
+
+- **The plans:**
+  - C3 is a star of six patterns with variable objects. The entity prefetch drives from `dc:Location` (40,101 subjects) and looks up the other five for each one, in batches of 1,000 rows.
+  - C2 is a chain of ten patterns, run as batched joins and entity prefetches.
+- **Where the CPU goes, C3:**
+  - matching cells to lookups (`BatchLookup.scan`, its hash maps growing, `CellId` hashing): about 30 %;
+  - turning RocksDB keys back into rows (`RocksCodec.unescape`, `cell`, `escape`): about 22 %;
+  - decoding statements: 11 to 13 %, plus 4 to 5 % in `checkNoReservedBytes`, a check that matters only when writing;
+  - RDF4J's binding sets: about 6 %.
+- **C2:** building the lookups' keys (escaping them for RocksDB, grouping them, hashing ranges) takes about 30 %, and RDF4J 25 %.
+- **What it isn't:** RocksDB, writing the results (21 MB of TSV cost nothing measurable), or garbage collection.
+- **It all runs on one thread:** the query thread's CPU is 95 to 99 % of the wall time.
+- **One range per subject (O21)** doubles C3, to 4.1 s: WatDiv's users have more than 64 statements each, so most subjects are read twice. O21 stays off.
+
+**What it means:**
+- The gap to QLever on these queries is client work per lookup and per cell, on one thread. That is O17 (less work per looked-up row) and O16 (decoding on more threads), both dropped earlier because Accumulo's servers were the limit (4.6). On RocksDB the client is the limit.
+- A dictionary (O11) would shorten the keys but keep the 200,505 lookups, and the 444,070 rows built one binding set at a time. QLever's advantage is merging whole subject-sorted lists of IDs: it keeps a predicate-subject order, which Tripatha doesn't have, so stars of variable-object patterns can't be merged here.
+- **So the cheaper steps come first:** the lookup path's constant factors (O17, no format change), then decoding windows on more threads (O16), each measured with `QueryProfile` and the join benchmark. The dictionary stays M5's decision.
+- **Reports:** the profiles in the scratch run of 2026-11-19, reproducible with `QueryProfile --rocksdb-path <copy of watdiv-sf100/tripatha> --query watdiv-sf100/queries/C3-01.rq`.
 
 ---
 
