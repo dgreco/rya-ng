@@ -506,10 +506,29 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
          *         fetch, or when the batch was too large to hold ({@link Prefetch#isOverflow()}).
          */
         public Prefetch prefetch(final Collection<LookupKey> keys, final Supplier<String> reason) {
-            final Map<LookupKey, List<Statement>> fetched;
+            return hold(fetch(keys, reason));
+        }
+
+        /**
+         * Fetches the statements for many lookups, without holding them: any thread may call it,
+         * as an entity prefetch does for its next window (SCALE-STUDY.md O16). The query thread
+         * then holds the result with {@link #hold}.
+         *
+         * @return the statements per lookup, or {@code null} if the batch was too large to hold
+         */
+        public Map<LookupKey, List<Statement>> fetch(final Collection<LookupKey> keys, final Supplier<String> reason) {
             try (StoreTrace.Reason why = StoreTrace.reason(reason)) {
-                fetched = BatchLookup.fetch(ryaDAO, conf, keys, conf.getJoinPrefetchLimit());
+                return BatchLookup.fetch(ryaDAO, conf, keys, conf.getJoinPrefetchLimit());
             }
+        }
+
+        /**
+         * Serves a fetched batch from memory until the returned handle is closed; on the query
+         * thread only, since the batches held are its own.
+         *
+         * @param fetched what {@link #fetch} returned: {@code null} for a batch too large to hold
+         */
+        public Prefetch hold(final Map<LookupKey, List<Statement>> fetched) {
             if (fetched == null) {
                 overflows++;
                 return new Prefetch(null, true);

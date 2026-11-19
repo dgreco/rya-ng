@@ -50,6 +50,8 @@ import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.tripatha.store.trace.TraceEvent;
+import org.tripatha.store.trace.StoreTrace;
 
 /**
  * Entity prefetch must give exactly the results, in the same order, of the plan without it,
@@ -117,6 +119,45 @@ public class EntityPrefetchIT extends RyaSailITBase {
             assertEquals(counts(expected), counts(run(smallWindows, query)), query);
             assertEquals(counts(expected), counts(run(tinyLimit, query)), query);
         }
+    }
+
+    /** Fetching the next window ahead (O16) gives the same rows, in the same order. */
+    @Test
+    public void fetchingAheadGivesTheSameRows() {
+        final SailRepository plain = repository(3, c -> c.setJoinPrefetchAhead(false));
+        final SailRepository ahead = repository(3, c -> c.setJoinPrefetchAhead(true));
+        for (final String query : QUERIES) {
+            assertEquals(run(plain, query), run(ahead, query), "same rows in the same order: " + query);
+        }
+    }
+
+    /**
+     * Windows of four: from the third on, each is fetched on another thread while the one before
+     * is joined, and still serves every lookup from memory.
+     */
+    @Test
+    public void theNextWindowIsFetchedAhead() {
+        final List<String> reasons = new ArrayList<>();
+        final StoreTripleSource<StoreRdfConfiguration> ahead;
+        try (StoreTrace.Scope scope = StoreTrace.start(event -> {
+            if (event instanceof TraceEvent.ScanStart scan) {
+                synchronized (reasons) {
+                    reasons.add(String.valueOf(scan.reason()));
+                }
+            }
+        })) {
+            ahead = evaluate(STAR, c -> {
+                c.setJoinBatchSize(4);
+                c.setJoinPrefetchAhead(true);
+            });
+        }
+        assertEquals(PEOPLE / 4, ahead.getPrefetchCount(), "a window of four people at a time");
+        assertEquals(1, ahead.getStoreLookupCount(), "only the driver's scan goes to the store");
+        final long fetchedAhead;
+        synchronized (reasons) {
+            fetchedAhead = reasons.stream().filter(r -> r.contains("the next window, fetched on a thread of its own")).count();
+        }
+        assertEquals(PEOPLE / 4 - 2, fetchedAhead, "every window after the second: " + reasons);
     }
 
     @Test

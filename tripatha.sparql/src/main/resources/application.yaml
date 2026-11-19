@@ -55,6 +55,9 @@ tripatha:
   # A batch of lookups whose ranges can't overlap (an entity chain's links) is read on this many
   # threads. Unset, the store's default: 4 on RocksDB, 1 on Accumulo and HBase.
   # join-lookup-threads: 4
+  # An entity prefetch fetches its next window while the current one is joined. Unset, the
+  # store's default: on for RocksDB, off for Accumulo and HBase.
+  # join-prefetch-ahead: true
   # Full-text index behind text:matches (string and language-tagged literals).
   text-index: false
   # Predicates whose literals are text-indexed. Empty: all of them.

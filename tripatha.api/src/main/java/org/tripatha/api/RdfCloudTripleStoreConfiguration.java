@@ -86,6 +86,13 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
     /** Each of those threads gets at least this many lookups (default 256): a smaller batch is read on fewer. */
     public static final String CONF_JOIN_LOOKUP_THREAD_KEYS = "query.join.lookupthreadkeys";
     /**
+     * An entity prefetch fetches its next window on another thread while the current one is
+     * joined, from its second window on (SCALE-STUDY.md O16). Unset, it is on where lookups are
+     * read on several threads ({@code Capabilities.lookupThreads()} over 1: RocksDB), off on
+     * Accumulo and HBase until measured.
+     */
+    public static final String CONF_JOIN_PREFETCH_AHEAD = "query.join.prefetchahead";
+    /**
      * Narrow a pattern's scan to the values a comparison filter on its object allows, one range
      * per stored datatype, when the store's datatype markers say every type sorts like its values
      * (SCALE-STUDY.md O14; default true).
@@ -866,6 +873,14 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setJoinLookupThreads(final int threads) {
         setInt(CONF_JOIN_LOOKUP_THREADS, threads);
+    }
+
+    public boolean isJoinPrefetchAhead() {
+        return getBoolean(CONF_JOIN_PREFETCH_AHEAD, false);
+    }
+
+    public void setJoinPrefetchAhead(final boolean ahead) {
+        setBoolean(CONF_JOIN_PREFETCH_AHEAD, ahead);
     }
 
     public int getJoinLookupThreadKeys() {

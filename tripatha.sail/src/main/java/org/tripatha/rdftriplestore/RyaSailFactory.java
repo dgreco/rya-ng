@@ -61,6 +61,9 @@ public final class RyaSailFactory {
         if (conf.get(RdfCloudTripleStoreConfiguration.CONF_JOIN_LOOKUP_THREADS) == null) {
             conf.setJoinLookupThreads(store.capabilities().lookupThreads());
         }
+        if (conf.get(RdfCloudTripleStoreConfiguration.CONF_JOIN_PREFETCH_AHEAD) == null) {
+            conf.setJoinPrefetchAhead(store.capabilities().lookupThreads() > 1);
+        }
         if (conf.get(RdfCloudTripleStoreConfiguration.CONF_JOIN_MERGE_RATIO) == null) {
             conf.setJoinMergeRatio(store.capabilities().lookupCost());
         }

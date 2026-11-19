@@ -1193,6 +1193,13 @@ LeftJoin                    OPTIONAL { ?s ex:email ?e }     link
 4. **The links** are RDF4J's own nested loops over those rows: `JoinIterator` for joins, `LeftJoinQueryEvaluationStep` for `OPTIONAL`s. Their pattern steps call `getStatements`, which finds the answers in memory. Results, and their order, are those of the plan without the prefetch.
 5. **Release.** The loops ask for the next driver row only after the current row's lookups are done, so a window's statements are released when the next window is read. A lookup that misses goes to the store: it costs time, never a wrong answer.
 6. **Window sizes.** The first window is 64 rows, so `LIMIT` and `ASK` queries fetch little; each next one doubles, up to `query.join.batchsize`. A window that would hold more than `query.join.prefetchlimit` statements is halved and fetched again; a single row still over it is left to the store.
+7. **The next window, fetched ahead** (SCALE-STUDY.md O16, `query.join.prefetchahead`; on by default where lookups are read on several threads, that is RocksDB). From the second window on:
+   - the next window's rows are read from the driver as soon as the current window is handed on;
+   - their keys are built and their lookups fetched on another thread, under the query's trace, while the current window is joined.
+   - **Only the query thread holds a batch,** so `StoreTripleSource`'s batches stay its own: it takes the next window's statements when the current one is used up (`StoreTripleSource.fetch`, then `hold`). A fetch too large to hold falls back to the halving of step 6.
+   - **Memory:** at most two windows are in memory.
+   - **Early stops:** a query that stops in its first window fetches no more than before.
+   - **Closing:** closing the step waits for a fetch still running, so none outlives the query.
 
 It is on by default: `query.join.entityprefetch`, or `tripatha.entity-prefetch` on the endpoint. Joins in a chain show `algorithm: RyaEntityPrefetch` in the plan, and the trace reason is `entity prefetch: N lookups for M rows fetched together`.
 

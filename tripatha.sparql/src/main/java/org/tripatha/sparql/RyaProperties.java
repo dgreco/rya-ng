@@ -53,6 +53,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param joinLookupThreads how many threads a batch of lookups whose ranges can't overlap (an
  *        entity chain's links) is read on; unset takes the store's default (4 on RocksDB, 1 on
  *        Accumulo and HBase), 1 reads every batch on the request's thread.
+ * @param joinPrefetchAhead whether an entity prefetch fetches its next window while the current
+ *        one is joined; unset takes the store's default (on for RocksDB, off for Accumulo and HBase).
  * @param textIndex whether to keep the full-text index that speeds up {@code text:matches}.
  * @param textIndexPredicates the predicates whose text literals are indexed; empty for all.
  * @param geoIndex whether to keep the geospatial index that speeds up GeoSPARQL filters
@@ -79,6 +81,7 @@ public record RyaProperties(
         Integer joinMergeSlices,
         Long joinMergeSingle,
         Integer joinLookupThreads,
+        Boolean joinPrefetchAhead,
         @DefaultValue("false") boolean textIndex,
         @DefaultValue List<String> textIndexPredicates,
         @DefaultValue("false") boolean geoIndex,
