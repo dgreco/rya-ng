@@ -74,7 +74,8 @@ public final class LoaderOptions {
             "default-graph-fraction", "labels", "labelled-fraction", "geo-scale", "polygon-fraction", "text-scale",
             "link-skew", "word-skew", "class-weights", "rdf12-fraction", "base-iri", "part", "parts", "threads", "block-size",
             "commit-interval", "batch-memory-mb", "writer-threads", "max-latency", "writer-timeout", "durability",
-            "max-rate", "report-interval", "progress-file", "splits", "print", "link-mbps", "sample", "auths", "confirm");
+            "max-rate", "report-interval", "progress-file", "splits", "tablet-size", "compression", "print", "link-mbps",
+            "counter-sample", "sample", "auths", "confirm");
     /** Options that change the generated data: repeated in the commands printed by prepare. */
     private static final List<String> GENERATION = List.of("seed", "timestamp", "graphs", "default-graph-fraction", "labels",
             "labelled-fraction", "geo-scale", "polygon-fraction", "text-scale", "link-skew", "word-skew", "class-weights",
@@ -591,10 +592,40 @@ public final class LoaderOptions {
         return flag("resume");
     }
 
-    /** Splits per table for prepare: -1 for automatic (4 per tablet server, minus one). */
+    /**
+     * Splits per table for prepare: -1 for automatic, each table's estimated size on disk over
+     * {@link #tabletSize()}, and at least 4 per tablet server, minus one.
+     */
     public int splits() {
         final String s = values.getOrDefault("splits", "auto");
         return s.equals("auto") ? -1 : Integer.parseInt(s);
+    }
+
+    /**
+     * The size on disk a tablet or region should have, in bytes ({@code --tablet-size}, 10G by
+     * default; K, M, G and T are powers of 1024, as Accumulo and HBase read them). prepare plans
+     * the splits for it and makes it the tables' split threshold.
+     */
+    public long tabletSize() {
+        return bytes("tablet-size", 10L << 30);
+    }
+
+    /**
+     * How many times smaller than the keys it writes a table is on disk ({@code --compression},
+     * 7 by default: what the statement tables measured, SCALE-STUDY.md 5.1), for prepare's size
+     * estimates.
+     */
+    public double compression() {
+        final double c = doubleValue("compression", 7);
+        if (c < 1) {
+            throw new IllegalArgumentException("--compression is a ratio of at least 1 (got " + c + ")");
+        }
+        return c;
+    }
+
+    /** Entities whose counters dry-run sums in full, to report what is stored (0: none). */
+    public long counterSample() {
+        return values.containsKey("counter-sample") ? size("counter-sample") : 20_000;
     }
 
     public boolean grantAuths() {
@@ -677,20 +708,47 @@ public final class LoaderOptions {
         }
     }
 
-    /** A count with an optional K, M or B (thousand, million, billion) suffix. */
+    /** A count with an optional K, M, B or T (thousand, million, billion, trillion) suffix. */
     long size(final String name) {
         final String v = values.get(name).trim().toUpperCase(Locale.ROOT).replace("_", "");
         final long unit = switch (v.isEmpty() ? ' ' : v.charAt(v.length() - 1)) {
             case 'K' -> 1_000L;
             case 'M' -> 1_000_000L;
             case 'B', 'G' -> 1_000_000_000L;
+            case 'T' -> 1_000_000_000_000L;
             default -> 1L;
         };
         final String number = unit == 1 ? v : v.substring(0, v.length() - 1);
         try {
             return Math.round(Double.parseDouble(number) * unit);
         } catch (final NumberFormatException e) {
-            throw new IllegalArgumentException("--" + name + " takes a count like 5000000, 5M or 1.5B (got '" + values.get(name) + "')");
+            throw new IllegalArgumentException("--" + name + " takes a count like 5000000, 5M, 1.5B or 1T (got '" + values.get(name) + "')");
+        }
+    }
+
+    /** A size in bytes with an optional K, M, G or T suffix, powers of 1024. */
+    private long bytes(final String name, final long dflt) {
+        final String raw = values.get(name);
+        if (raw == null) {
+            return dflt;
+        }
+        final String v = raw.trim().toUpperCase(Locale.ROOT).replace("_", "").replaceAll("I?B$", "");
+        final int shift = switch (v.isEmpty() ? ' ' : v.charAt(v.length() - 1)) {
+            case 'K' -> 10;
+            case 'M' -> 20;
+            case 'G' -> 30;
+            case 'T' -> 40;
+            default -> 0;
+        };
+        final String number = shift == 0 ? v : v.substring(0, v.length() - 1);
+        try {
+            final long n = Math.round(Double.parseDouble(number) * (1L << shift));
+            if (n < 1 << 20) {
+                throw new IllegalArgumentException("--" + name + " must be at least 1M (got '" + raw + "')");
+            }
+            return n;
+        } catch (final NumberFormatException e) {
+            throw new IllegalArgumentException("--" + name + " takes a size like 10G or 512M (got '" + raw + "')");
         }
     }
 
@@ -752,7 +810,7 @@ public final class LoaderOptions {
 
                 Dataset (repeat on every command; prepare prints the exact arguments):
                   --table-prefix P          required; tables P<spo|po|osp|ns|eval|graphs|text|geo|entity>
-                  --triples N | --entities N  size, with K/M/B suffixes (about 7.5 triples per entity)
+                  --triples N | --entities N  size, with K/M/B/T suffixes (about 7.5 triples per entity)
                   --text-index --geo-index  maintain the search indexes (must match the endpoint's settings)
                   --entity-index            maintain the entity index, for stars intersected shard by shard
                   --entity-shards N|auto    its shard count (default auto: one per 200M triples, 16 at least)
@@ -773,8 +831,11 @@ public final class LoaderOptions {
                   --max-latency 5s  --writer-timeout 15m  --durability default|sync|flush|log|none  --max-rate N
                   --report-interval 10s  --progress-file F  --resume
 
-                Prepare: --splits auto|N  --grant-auths (give the account the --labels; on HBase as the labels command)
-                Dry run: --print N (print the first statements)  --link-mbps 940
+                Prepare: --splits auto|N  (auto: each table's estimated size over --tablet-size, at least
+                           4 per server)  --tablet-size 10G (also the tables' split threshold)  --compression 7
+                           --grant-auths (give the account the --labels; on HBase as the labels command)
+                Dry run: --print N (print the first statements)  --link-mbps 940  --counter-sample 20K
+                         (entities whose counters are summed in full, to report what is stored; 0: none)
                 Verify:  --sample 1000  --auths A,B
                 Drop:    --confirm <prefix>
 

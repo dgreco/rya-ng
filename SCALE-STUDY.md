@@ -92,7 +92,7 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
 9. **Whole-table operations and planning at scale (O4 to O6, O8, O9).**
-10. **Next (2026-11-19): the load work,** no longer deferred, since it blocks 1T outright: the loader at 1T (O2), the bulk spikes (M6), then the bulk builds of Accumulo and RocksDB (O3) and of HBase (O10).
+10. **Next (2026-11-19): the load work,** no longer deferred, since it blocks 1T outright: the loader at 1T (O2, done: section 4.16), the bulk spikes (M6), then the bulk builds of Accumulo and RocksDB (O3) and of HBase (O10).
 11. **Then queries in the servers, on every backend:** HBase's coprocessor endpoint (D14 (a)), then patterns whose object is never used, counted in the servers (O26). Every optimization must hold on Accumulo, HBase and RocksDB at 10^12. Whole-table operations and planning at scale follow (item 9), then the fixed cost per query (M14). Dictionary encoding (O11) and an analytics engine (O12) stay conditional.
 
 **Dictionary encoding comes late on purpose (R1, section 5.1).**
@@ -143,7 +143,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | # | Optimization | Closes | Gain | Depends on | Phase | Status |
 |---|---|---|---|---|---|---|
 | O1 | **Loader: don't write per-subject counters of 1** (`s`, `sp`, `so`), summed per block. Includes reading a missing counter as 1 in the inference sum, in `verify` and in `LoaderIT` (section 6.1) | R5 | measured (`dry-run` at 1T, both indexes): cells sent per triple 11.6 → 8.2 (−29 %), bytes 1,065 → 871 (−18 %), `eval` 348 → 154 B. *est.* −20 % on disk (about 100 TB less at 1T with 3 replicas) | — | 0 | Done (PR #15) |
-| O2 | **Loader at 1T:**<br>• `--triples 1T`<br>• `prepare --tablet-size`, planning splits by size instead of 4 per server<br>• `dry-run` reports stored counter cells and their share of 1s | R8, R9 | tablets near the target size from the start, instead of about 50 GB tablets splitting online | — | 3 | Next: phase 3, item 1 (2026-11-19: the load work is no longer deferred) |
+| O2 | **Loader at 1T:**<br>• `--triples 1T`<br>• `prepare --tablet-size`, planning splits by size instead of 4 per server<br>• `dry-run` reports stored counter cells and their share of 1s | R8, R9 | tablets near the target size from the start, instead of about 50 GB tablets splitting online | — | 3 | Done (2026-11-20, section 4.16): `--triples 1T`; `prepare` plans each table's splits by its estimated size on disk over `--tablet-size` (10G), at least 4 per server, and makes that size the backend's split threshold (`TableAdmin.setTargetSize`); HBase splits in rounds; the progress file is a watermark plus the blocks above it; `dry-run` reports the stored counters per family |
 | O3 | **Bulk build on Accumulo and RocksDB:**<br>• sorted files per tablet, then an import<br>• every counter of 1 left out except `p`<br>• the DAO's guards in the writer<br>• input from the generator or from N-Triples/N-Quads files<br>(section 6.2) | R4, R5, R11 | no write-ahead log, memory tables or compactions. *est.* counters about 5.4 → 0.5 stored cells per triple, 160 → about 115 B per triple on disk | O1, M6 | 3 | Planned: phase 3, after M6 |
 | O4 | **Graph drops in time proportional to the graph** (D8) | R6 | a drop reads the graph, not the 5 cells per triple of every table (about 5T cells at 1T) | D8 | 5 | Not started |
 | O5 | **Index rebuilds through the bulk build; purge by recreating tables** when the caller sees everything | R6 | a rebuild becomes a batch job; such a purge becomes constant time | O3 | 5 | Not started |
@@ -890,6 +890,44 @@ WatDiv, native executable alone, the same build, settings in turn (p50, ms; geom
 - **Oxigraph's 7 templates** are small queries it answers 0.02 to 1.9 ms sooner.
 - **Noise:** this machine was slower in the evening than in the afternoon. The default build without `-Xms` took C3 893 ms at 21:10 (section 4.14) and 1,001 to 1,109 ms an hour later. Only rows of one series compare.
 
+## 4.16 The loader at 1T (O2)
+
+**Before:**
+- `--triples 1T` was refused: sizes knew K, M and B.
+- `prepare` planned 4 tablets per server, so at 1T with 100 servers about 50 GB each, which Accumulo then split online at its 1 GB default into some 160,000.
+- The progress file held one bit per block and was rewritten whole at every commit: 133.6 million blocks, 17 MB.
+- HBase added split points one at a time, waiting for each.
+
+**Now, on every backend:**
+- **Sizes:** `--triples 1T` and `--entities` take a `T`.
+- **Splits by size:** `prepare` plans each table's split points for tablets or regions of `--tablet-size` (10G) on disk. The estimate is the cell bytes a 5,000-entity sample writes, scaled to the dataset, over `--compression` (7, what the statement tables measured in 5.1). There are at least 4 per server, so a small load still spreads; `--splits N` still asks for N.
+- **The backend's own threshold:** `TableAdmin.setTargetSize` makes the same size the backend's split threshold. That is Accumulo's `table.split.threshold` and HBase's `MAX_FILESIZE`; RocksDB doesn't split. So tables don't split smaller as they grow.
+- **HBase splits in rounds:** each round splits every region holding planned points at its middle one, all at once, so n points take about log2(n) waits. 40 points took 9 s on the test cluster.
+  - A region just split from one holding data can't split again before a compaction, so a round where none split compacts the table and retries. Tables are empty before a load, so that doesn't happen there.
+- **The progress file:** blocks are claimed in increasing order, so it holds a watermark and the few blocks done above it: a few bytes at any size, and no limit of 2^31 blocks per process.
+  - Files of the earlier form are read and rewritten in the new one.
+  - The new form uses another key (`load`), so an older loader refuses it instead of loading everything again and adding the counters twice.
+- **`dry-run`** also sums the counters of the first `--counter-sample` entities (20K) in full, per family, and reports what a load stores and what a bulk build (O3) would. At 3M triples with a 400K sample it gives section 4.2's table exactly: 5.36 cells per triple, 89.5 % holding 1, 1.97 stored by the loader, 0.56 by a bulk build.
+
+**The plan at 1T** (both indexes, 50 servers, `prepare`'s own estimate):
+
+| Table | On disk, one copy | Splits |
+|---|---|---|
+| `spo`, `po`, `osp` | 19 TB each (20.4 B per triple) | 1,898 each |
+| `eval` | 49 TB (an upper bound: counters of values that repeat are counted once per sampled entity) | 4,911 |
+| `text` | 33 TB | 3,293 |
+| `geo` | 1 TB | 101 |
+
+That is about section 4.4's 2,100 tablets per statement table. At 1B and 10B every table gets the floor, 199 splits; only `geo` gets half that.
+
+`dry-run --triples 1T` with both indexes: 870.6 B and 8.23 cells sent per triple, as O1 measured, and a 940 Mbit/s link carries about 135,000 triples/s. That is still 85 days for 1T through one link, which is R4's problem and phase 3's next items.
+
+**Tests:**
+- `TableAdminIT` on Accumulo, HBase and RocksDB: 40 points at once on an empty table, splitting a table that holds data, and the target size.
+- `ProgressTest`: blocks finishing early, a file that stays small, more than 2^31 blocks, and the earlier form.
+- `SplitPlannerTest`: splits by size, and 1T's plan against section 4.4.
+- `LoaderOptionsTest`, and `LoaderIT` on all three backends.
+
 ---
 
 ## 5. Requirements at 1T, and where Tripatha stands
@@ -903,8 +941,8 @@ WatDiv, native executable alone, the same build, settings in turn (p50, ms; geom
 | R5 | Statistics for join ordering, at a size that scales | Present, oversized | O1, O3 |
 | R6 | Maintenance in time proportional to what it changes | Missing | O4, O5 |
 | R7 | Search planning that tells common terms from rare ones | Partial | O6 |
-| R8 | Tablets and regions sized for 1T | Partial | O2 |
-| R9 | A loader that runs at 1T | Partial | O2 |
+| R8 | Tablets and regions sized for 1T | Present (O2) | O2 |
+| R9 | A loader that runs at 1T | Present (O2); its rate is R4's | O2 |
 | R10 | Labels in HBase bulk files | Missing | O10 |
 | R11 | Bulk writes checked like online writes | Missing | O3 |
 | R12 | Counts without reading the data | Partial (graph sizes only) | O8 |
@@ -1487,7 +1525,7 @@ Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, no
 
 ### Phase 3: the load at 1T
 
-1. **O2**, the loader at 1T: `--triples 1T`, split points by target tablet or region size, a progress file that isn't rewritten whole at every commit, and `dry-run` reporting stored counter cells.
+1. **O2**, the loader at 1T: `--triples 1T`, split points by target tablet or region size, a progress file that isn't rewritten whole at every commit, and `dry-run` reporting stored counter cells. Done (section 4.16).
 2. **M6**, the bulk spikes, all local: labelled Accumulo RFiles with counters into a live table, RocksDB SST files with merge entries, HBase HFiles with visibility tags and a counter file imported twice, and Spark on JDK 25 (D5).
 3. **O3**, the bulk build on Accumulo and RocksDB: sorted files per tablet, every counter of 1 but `p` left out, the DAO's guards in the writer, checked cell by cell against the online path.
 4. **O10**, the bulk build on HBase: label ordinals in the files, unique counter timestamps per import.

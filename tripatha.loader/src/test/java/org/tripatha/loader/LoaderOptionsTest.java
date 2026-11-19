@@ -81,6 +81,25 @@ class LoaderOptionsTest {
     }
 
     @Test
+    void aTrillionAndTabletSizes() {
+        assertEquals(1_000_000_000_000L, parse("dry-run", "--entities", "1T").genConfig().entities());
+        final LoaderOptions dflt = parse("prepare", "--table-prefix", "t_", "--triples", "1T");
+        assertTrue(dflt.genConfig().entities() > 100_000_000_000L, "about 7.5 triples per entity");
+        assertEquals(10L << 30, dflt.tabletSize());
+        assertEquals(7, dflt.compression());
+        assertEquals(-1, dflt.splits());
+        assertEquals(20_000, dflt.counterSample());
+        final LoaderOptions set = parse("prepare", "--table-prefix", "t_", "--triples", "1M", "--tablet-size", "512M",
+                "--compression", "5", "--counter-sample", "0");
+        assertEquals(512L << 20, set.tabletSize());
+        assertEquals(5, set.compression());
+        assertEquals(0, set.counterSample());
+        assertEquals(20L << 30, parse("prepare", "--table-prefix", "t_", "--triples", "1M", "--tablet-size", "20GB").tabletSize());
+        assertThrows(IllegalArgumentException.class, () -> parse("prepare", "--table-prefix", "t_", "--triples", "1M", "--tablet-size", "10K").tabletSize());
+        assertThrows(IllegalArgumentException.class, () -> parse("prepare", "--table-prefix", "t_", "--triples", "1M", "--compression", "0.5").compression());
+    }
+
+    @Test
     void triplesMapToAStableEntityCount() {
         final LoaderOptions a = parse("dry-run", "--triples", "3M");
         final LoaderOptions b = parse("dry-run", "--triples", "3M");

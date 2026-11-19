@@ -54,6 +54,20 @@ public interface TableAdmin {
     int splitCount(String table);
 
     /**
+     * Makes {@code bytes} the size on disk at which the backend splits a table's tablets or regions
+     * on its own: Accumulo's {@code table.split.threshold}, HBase's maximum region file size. A
+     * no-op where the backend doesn't split (RocksDB). A table is split ahead of a load for that
+     * size (the loader's prepare); this keeps the backend from splitting it smaller as it grows.
+     */
+    default void setTargetSize(final String table, final long bytes) {
+    }
+
+    /** The size at which the backend splits a table on its own; -1 when it doesn't split or uses its default. */
+    default long targetSize(final String table) {
+        return -1;
+    }
+
+    /**
      * Rows that divide a table into parts of similar size, sorted: its split points, or what the
      * backend knows instead. For reading one range in slices on several threads (SCALE-STUDY.md
      * O24). A hint only: any rows are correct, they only balance the slices better or worse.

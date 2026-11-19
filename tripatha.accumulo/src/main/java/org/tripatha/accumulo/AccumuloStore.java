@@ -85,6 +85,9 @@ import org.tripatha.store.trace.TracedScans;
  * by a {@link SummingCombiner} attached to the counter table.
  */
 public final class AccumuloStore implements Store {
+    /** The tablet size at which Accumulo splits a table on its own. */
+    static final String SPLIT_THRESHOLD = "table.split.threshold";
+
     private static final Logger log = LoggerFactory.getLogger(AccumuloStore.class);
 
     /** Name of the combiner attached to the counter table. */
@@ -625,6 +628,25 @@ public final class AccumuloStore implements Store {
             try {
                 return client.tableOperations().listSplits(table).size();
             } catch (final AccumuloException | AccumuloSecurityException | TableNotFoundException e) {
+                throw new RyaDAOException(e);
+            }
+        }
+
+        @Override
+        public void setTargetSize(final String table, final long bytes) {
+            try {
+                client.tableOperations().setProperty(table, SPLIT_THRESHOLD, Long.toString(bytes));
+            } catch (final AccumuloException | AccumuloSecurityException e) {
+                throw new RyaDAOException(e);
+            }
+        }
+
+        @Override
+        public long targetSize(final String table) {
+            try {
+                final String v = client.tableOperations().getConfiguration(table).get(SPLIT_THRESHOLD);
+                return v == null ? -1 : org.apache.accumulo.core.conf.ConfigurationTypeHelper.getFixedMemoryAsBytes(v);
+            } catch (final AccumuloException | TableNotFoundException e) {
                 throw new RyaDAOException(e);
             }
         }

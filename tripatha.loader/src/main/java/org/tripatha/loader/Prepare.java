@@ -61,18 +61,25 @@ public final class Prepare {
             }
 
             final int servers = Math.max(1, store.tables().serverCount());
-            final int splits = o.splits() < 0 ? 4 * servers - 1 : o.splits();
             if (store instanceof RocksStore) {
                 out.println("No splits: a RocksDB store is one local database.");
-            } else if (splits > 0) {
-                out.println("Planning " + splits + " splits per table (" + servers + " servers)…");
-                final Map<String, SortedSet<Text>> plan = SplitPlanner.plan(generator, conf, splits, o.statsOnes());
-                SplitPlanner.apply(store, plan);
+            } else {
+                final Map<String, Integer> splits = plannedSplits(store, o, generator, conf, servers, out);
+                if (splits.values().stream().anyMatch(n -> n > 0)) {
+                    final Map<String, SortedSet<Text>> plan = SplitPlanner.plan(generator, conf, splits, o.statsOnes());
+                    SplitPlanner.apply(store, plan);
+                }
+                // So the backend doesn't split them smaller as they grow (Accumulo's default is 1 GB).
+                for (final String table : splits.keySet()) {
+                    if (store.tables().exists(table)) {
+                        store.tables().setTargetSize(table, o.tabletSize());
+                    }
+                }
                 final String entity = conf.getTableLayoutStrategy().getEntity();
                 final List<byte[]> rows = conf.isEntityIndex() ? dao.getIndexCatalog().entityIndex().shardRows() : List.of();
-                // A shard is one row: split at every shard but the first, so shards spread over the servers.
-                // Once: HBase refuses a split at a region's own start, as a second prepare would ask.
-                if (rows.size() > 1 && store.tables().splitCount(entity) < rows.size() - 1) {
+                // A shard is one row: split at every shard but the first, so shards spread over the servers
+                // (unless --splits 0). Once is enough, and a second prepare asks for none.
+                if (o.splits() != 0 && rows.size() > 1 && store.tables().splitCount(entity) < rows.size() - 1) {
                     final java.util.SortedSet<byte[]> shards = new java.util.TreeSet<>(java.util.Arrays::compareUnsigned);
                     shards.addAll(rows.subList(1, rows.size()));
                     out.println("Splitting the entity index at its " + rows.size() + " shards…");
@@ -100,6 +107,45 @@ public final class Prepare {
             dao.destroy();
         }
         printNextSteps(store, o, out);
+    }
+
+    /**
+     * The splits per table: {@code --splits N} for every table ({@code geo} half), or each table's
+     * estimated size on disk over {@code --tablet-size}, with at least 4 per server.
+     */
+    private static Map<String, Integer> plannedSplits(final Store store, final LoaderOptions o, final EntityGenerator generator,
+            final StoreRdfConfiguration conf, final int servers, final PrintStream out) {
+        final org.tripatha.api.layout.TableLayoutStrategy tables = conf.getTableLayoutStrategy();
+        final List<String> names = List.of(tables.getSpo(), tables.getPo(), tables.getOsp(), tables.getEval(), tables.getText(),
+                tables.getGeo());
+        final Map<String, Integer> splits = new java.util.LinkedHashMap<>();
+        if (o.splits() >= 0) {
+            for (final String t : names) {
+                splits.put(t, t.equals(tables.getGeo()) ? o.splits() / 2 : o.splits());
+            }
+            out.println("Planning " + o.splits() + " splits per table (" + servers + " servers)…");
+            return splits;
+        }
+        final long entities = o.genConfig().entities();
+        final SplitPlanner.Sample estimate = SplitPlanner.sample(generator, conf, o.statsOnes(), 5_000);
+        splits.putAll(SplitPlanner.splitsBySize(estimate, entities, o.compression(), o.tabletSize(), 4 * servers - 1,
+                tables.getGeo()));
+        out.printf(java.util.Locale.ROOT, "Planning splits for %s tablets (an estimate: the keys a sample writes, over a "
+                + "compression of %.1f), and at least %d per table (%d servers):%n", gib(o.tabletSize()), o.compression(),
+                4 * servers - 1, servers);
+        for (final String t : names) {
+            final double disk = estimate.diskBytes(t, entities, o.compression());
+            if (disk > 0) {
+                out.printf(java.util.Locale.ROOT, "  %-10s about %10s on disk: %,d splits%n", t.substring(o.tablePrefix().length()),
+                        gib((long) disk), splits.get(t));
+            }
+        }
+        return splits;
+    }
+
+    private static String gib(final long bytes) {
+        return bytes >= 1L << 30 ? String.format(java.util.Locale.ROOT, "%.1f GB", bytes / (double) (1L << 30))
+                : String.format(java.util.Locale.ROOT, "%.0f MB", bytes / (double) (1L << 20));
     }
 
     private static void printNextSteps(final Store store, final LoaderOptions o, final PrintStream out) {
