@@ -496,7 +496,7 @@ C="--accumulo-properties $HOME/.tripatha/accumulo-client.properties"   # HBase: 
                                                                      # RocksDB: C="--rocksdb-path $HOME/.tripatha/rocksdb"
 
 $R check $C                                                # connection, servers, the account's rights
-$R dry-run --triples 1B --text-index --geo-index           # no cluster: speed, bytes per triple, network ceiling
+$R dry-run --triples 1B --text-index --geo-index           # no cluster: speed, bytes per triple, network ceiling, stored counters
 $R prepare $C --table-prefix big_ --triples 1B --text-index --geo-index
 $R load    $C <the dataset options prepare printed> --threads 8
 $R load    $C <same options> --resume                       # after Ctrl-C or a failure
@@ -511,13 +511,21 @@ $R drop    $C --table-prefix big_ --confirm big_
     - Every loader and endpoint of a store must use the same counter mode. If the coprocessor isn't on the region servers' classpath, give `prepare` its hdfs path with `--hbase-counters-jar` (the wizard asks for it).
     - Register the dataset's labels first, as an HBase superuser: `labels --labels A,B --grant-to ACCOUNT`, with `--hbase-user=SUPERUSER` (or `--hbase-user=` for the process user). The loading account itself must not be a superuser: the loader refuses one.
 - **`prepare` first, once per dataset:**
-  - creates the tables with the indexes ready and splits each table into 4 tablets per tablet server, at split points sampled from the data;
+  - creates the tables with the indexes ready and splits them at split points sampled from the data:
+    - each table into tablets or regions of about `--tablet-size` (10G) on disk, from its estimated size;
+    - into at least 4 per server;
+    - `--splits N` asks for N per table instead.
+
+    The estimate is the keys a sample of entities writes, over a compression of `--compression` (7, what the statement tables measured). At 1T that is about 2,000 splits each for `spo`, `po` and `osp`. On HBase the points are split in rounds, all regions at once, so thousands take a few minutes, not hours;
+  - makes `--tablet-size` the size at which Accumulo or HBase splits the tables on their own (Accumulo's default is 1 GB, which at 1T would make about 160,000 tablets);
   - writes the ontology, 200 countries and a description of the dataset;
   - prints the `load` commands and the endpoint flags that match.
   `load` refuses a store prepared for another dataset or with other index settings.
 - **Parallelism:** `--threads` writers per process. `--part K --parts N` divides the entities between processes, on one or more machines.
 - **Resuming:** progress is saved after each flush (every `--commit-interval`), and `--resume` continues from there. After a crash with `--durability` below `sync`, run `verify`.
-- **Statistics:** a load doesn't write a subject's counters whose total is 1. The planner reads a missing counter as 1, so join orders are unchanged.
+  - The progress file holds a watermark and the few blocks done above it, so it stays a few bytes at any size; 1T in one process is about 134 million blocks.
+  - A file written by an earlier loader is read and rewritten in this form, which earlier loaders refuse rather than starting over (that would add the done blocks' counters twice).
+- **Statistics:** a load doesn't write a subject's counters whose total is 1. The planner reads a missing counter as 1, so join orders are unchanged. `dry-run` reports the counter cells a load leaves once they are summed, per family, over the first `--counter-sample` entities (20K).
   - This leaves out about half of the counter cells: 8.2 cells per triple are sent instead of 11.6.
   - It is exact because a block holds whole entities, and no subject appears in two entities.
   - `--stats-ones keep` writes every counter. It is a dataset option, so repeat it on every command, as `prepare` prints.

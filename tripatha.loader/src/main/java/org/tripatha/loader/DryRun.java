@@ -136,6 +136,72 @@ public final class DryRun {
         final double raw = totalBytes * datasetTriples;
         out.printf(Locale.ROOT, "Key data for the whole dataset: %.1f GB before compression (the size on disk is smaller: "
                 + "measure it with a small load; storage that keeps 3 replicas uses 3 times that).%n", raw / 1e9);
+        storedCounters(generator, o, out);
+    }
+
+    /**
+     * The counters the store keeps once every delta is summed, per family, over the first
+     * entities of the range: what a load leaves in {@code eval} after its compactions, and what a
+     * bulk build would leave (SCALE-STUDY.md 4.2). The per-subject families ({@code s},
+     * {@code sp}, {@code so}) are final within an entity, so their figures hold at any size;
+     * {@code o} and {@code po} fall as values repeat, so for a larger dataset theirs are upper bounds.
+     */
+    static void storedCounters(final EntityGenerator generator, final LoaderOptions o, final PrintStream out) {
+        final long[] range = o.partRange();
+        final long entities = Math.min(o.counterSample(), range[1] - range[0]);
+        if (entities <= 0 || !o.stats()) {
+            return;
+        }
+        final EvalStatsMutations.CounterBatch all = new EvalStatsMutations.CounterBatch();
+        long triples = 0;
+        for (long e = range[0]; e < range[0] + entities; e++) {
+            for (final RyaStatement st : generator.generate(e)) {
+                all.add(st, 1);
+                triples++;
+            }
+        }
+        final Map<String, long[]> byFamily = new LinkedHashMap<>();
+        for (final String family : EvalStatsMutations.COUNTER_FAMILIES) {
+            byFamily.put(family, new long[2]);
+        }
+        final EvalStatsMutations.CounterPolicy policy = o.statsOnes();
+        final long[] kept = new long[2];
+        all.forEachSum((key, sum) -> {
+            if (sum == 0) {
+                return;
+            }
+            final long[] f = byFamily.get(key.family());
+            f[0]++;
+            if (sum == 1) {
+                f[1]++;
+            }
+            if (!policy.skips(key, sum)) {
+                kept[0]++;
+            }
+            if (sum != 1 || key.family().equals(org.tripatha.api.RdfCloudTripleStoreConstants.PRED_CF)) {
+                kept[1]++;
+            }
+        });
+        out.println();
+        out.printf(Locale.ROOT, "Counters stored once fully summed, over the first %,d entities (%,d triples; o and po fall "
+                + "as values repeat, so for a larger dataset theirs are upper bounds):%n", entities, triples);
+        out.printf(Locale.ROOT, "%-8s %14s %14s%n", "family", "cells/triple", "total of 1");
+        long cells = 0;
+        long ones = 0;
+        for (final Map.Entry<String, long[]> e : byFamily.entrySet()) {
+            final long[] f = e.getValue();
+            cells += f[0];
+            ones += f[1];
+            out.printf(Locale.ROOT, "%-8s %14.3f %13.1f %%%n", e.getKey(), (double) f[0] / triples, percent(f[1], f[0]));
+        }
+        out.printf(Locale.ROOT, "%-8s %14.3f %13.1f %%%n", "total", (double) cells / triples, percent(ones, cells));
+        out.printf(Locale.ROOT, "This load stores %.2f counter cells per triple (--stats-ones %s); a bulk build leaving out "
+                + "every total of 1 but p's (O3) would store %.2f.%n", (double) kept[0] / triples,
+                policy == EvalStatsMutations.CounterPolicy.SKIP_SUBJECT_ONES ? "skip" : "keep", (double) kept[1] / triples);
+    }
+
+    private static double percent(final long part, final long whole) {
+        return whole == 0 ? 0 : 100.0 * part / whole;
     }
 
     private static void measure(final EntityGenerator generator, final StoreRdfConfiguration conf,

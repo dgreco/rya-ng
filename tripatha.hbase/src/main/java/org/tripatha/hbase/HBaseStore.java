@@ -715,21 +715,97 @@ public final class HBaseStore implements Store {
             }
         }
 
+        /**
+         * In rounds: each round splits every region that holds planned points at the middle one,
+         * all at once, then waits for those splits. So n points take about log2(n) waits instead of
+         * one each: 2,100 points, a 1T table at 10 GB regions, take 12 rounds. Points that are
+         * already region boundaries are skipped.
+         * <p>
+         * A region just split from one that held data refers to its parent's files, and HBase won't
+         * split it again until a compaction has rewritten them (an empty table, as before a load,
+         * has none). A round in which no region could split compacts the table and tries again,
+         * for up to 10 minutes.
+         */
         @Override
         public void addSplits(final String table, final SortedSet<byte[]> splits) {
             try (Admin admin = connection.getAdmin()) {
                 final TableName name = name(table);
+                final java.util.TreeSet<byte[]> pending = new java.util.TreeSet<>(Bytes.BYTES_COMPARATOR);
                 for (final byte[] point : splits) {
-                    final int before = admin.getRegions(name).size();
-                    admin.split(name, HBaseCodec.row(point));
-                    final long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(2);
-                    while (admin.getRegions(name).size() <= before && System.nanoTime() < deadline) {
-                        Thread.sleep(100);
+                    pending.add(HBaseCodec.row(point));
+                }
+                final long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(10);
+                while (!pending.isEmpty()) {
+                    final List<org.apache.hadoop.hbase.client.RegionInfo> regions = admin.getRegions(name);
+                    final List<java.util.concurrent.Future<Void>> round = new ArrayList<>();
+                    for (final org.apache.hadoop.hbase.client.RegionInfo region : regions) {
+                        pending.remove(region.getStartKey());
+                        final byte[] start = region.getStartKey();
+                        final byte[] end = region.getEndKey();
+                        final java.util.NavigableSet<byte[]> inside = end.length == 0 ? pending.tailSet(start, false)
+                                : pending.subSet(start, false, end, false);
+                        if (inside.isEmpty()) {
+                            continue;
+                        }
+                        final byte[] middle = new ArrayList<>(inside).get(inside.size() / 2);
+                        try {
+                            round.add(admin.splitRegionAsync(region.getRegionName(), middle));
+                        } catch (final IOException refused) {
+                            log.debug("{}: region not split this round: {}", table, refused.toString());
+                        }
+                    }
+                    if (pending.isEmpty()) {
+                        break;
+                    }
+                    int split = 0;
+                    Exception last = null;
+                    for (final java.util.concurrent.Future<Void> f : round) {
+                        try {
+                            f.get(2, TimeUnit.MINUTES);
+                            split++;
+                        } catch (final java.util.concurrent.ExecutionException refused) {
+                            last = refused;
+                        }
+                    }
+                    if (split == 0) {
+                        if (System.nanoTime() > deadline) {
+                            throw new RyaDAOException("could not split " + table + " at " + pending.size()
+                                    + " more points", last);
+                        }
+                        // The regions still refer to their parents' files: rewrite them, then try again.
+                        admin.majorCompact(name);
+                        Thread.sleep(500);
+                        while (admin.getCompactionState(name) != org.apache.hadoop.hbase.client.CompactionState.NONE
+                                && System.nanoTime() < deadline) {
+                            Thread.sleep(250);
+                        }
                     }
                 }
             } catch (final InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new RyaDAOException(e);
+            } catch (final IOException | java.util.concurrent.TimeoutException e) {
+                throw new RyaDAOException(e);
+            }
+        }
+
+        @Override
+        public void setTargetSize(final String table, final long bytes) {
+            try (Admin admin = connection.getAdmin()) {
+                final TableName name = name(table);
+                final org.apache.hadoop.hbase.client.TableDescriptor current = admin.getDescriptor(name);
+                if (current.getMaxFileSize() != bytes) {
+                    admin.modifyTable(TableDescriptorBuilder.newBuilder(current).setMaxFileSize(bytes).build());
+                }
+            } catch (final IOException e) {
+                throw new RyaDAOException(e);
+            }
+        }
+
+        @Override
+        public long targetSize(final String table) {
+            try (Admin admin = connection.getAdmin()) {
+                return admin.getDescriptor(name(table)).getMaxFileSize();
             } catch (final IOException e) {
                 throw new RyaDAOException(e);
             }

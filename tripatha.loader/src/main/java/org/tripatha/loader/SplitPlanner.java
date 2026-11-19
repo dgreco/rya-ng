@@ -59,23 +59,68 @@ public final class SplitPlanner {
     }
 
     /**
-     * Split points per table name. Tables that get none are left out.
+     * Split points per table name, the same number for every table but {@code geo}, which gets
+     * half. Tables that get none are left out.
      *
      * @param counters the counters the load will write, so {@code eval}'s split points follow its rows
      */
     public static Map<String, SortedSet<Text>> plan(final EntityGenerator generator, final StoreRdfConfiguration conf,
             final int splits, final EvalStatsMutations.CounterPolicy counters) {
         final TableLayoutStrategy tables = conf.getTableLayoutStrategy();
+        final Map<String, Integer> each = new LinkedHashMap<>();
+        for (final String t : dataTables(tables)) {
+            each.put(t, t.equals(tables.getGeo()) ? splits / 2 : splits);
+        }
+        return plan(generator, conf, each, counters);
+    }
+
+    /**
+     * Split points per table name, as many for each table as {@code splits} asks. Tables that get
+     * none are left out.
+     */
+    public static Map<String, SortedSet<Text>> plan(final EntityGenerator generator, final StoreRdfConfiguration conf,
+            final Map<String, Integer> splits, final EvalStatsMutations.CounterPolicy counters) {
+        final int most = splits.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+        final long n = generator.config().entities();
+        final int entities = (int) Math.min(n, Math.max(5_000, Math.min(50_000, 300L * (most + 1))));
+        final Sample sample = sample(generator, conf, counters, entities);
+        final Map<String, SortedSet<Text>> plan = new LinkedHashMap<>();
+        for (final Map.Entry<String, List<byte[]>> e : sample.rows().entrySet()) {
+            final SortedSet<Text> points = quantiles(e.getValue(), splits.getOrDefault(e.getKey(), 0));
+            if (!points.isEmpty()) {
+                plan.put(e.getKey(), points);
+            }
+        }
+        return plan;
+    }
+
+    /**
+     * The rows a sample of entities writes to each table, and the bytes of their cells (row,
+     * column, label, timestamp and value, uncompressed).
+     *
+     * @param entities sampled entities: every one when the dataset has no more, otherwise drawn at random
+     */
+    public record Sample(Map<String, List<byte[]>> rows, Map<String, Long> bytes, long entities) {
+        /** A table's estimated size on disk for the whole dataset: its sampled bytes, scaled, over the compression ratio. */
+        public double diskBytes(final String table, final long datasetEntities, final double compression) {
+            return bytes.getOrDefault(table, 0L) / (double) entities * datasetEntities / compression;
+        }
+    }
+
+    public static Sample sample(final EntityGenerator generator, final StoreRdfConfiguration conf,
+            final EvalStatsMutations.CounterPolicy counters, final int entities) {
+        final TableLayoutStrategy tables = conf.getTableLayoutStrategy();
         final RyaTableMutationsFactory factory = new RyaTableMutationsFactory(RyaTripleContext.getInstance(conf));
         final SecondaryIndex text = conf.isTextIndex() ? new TextIndex(conf.getTextIndexPredicates()) : null;
         final SecondaryIndex geo = conf.isGeoIndex() ? new GeoIndex() : null;
         final Map<String, List<byte[]>> rows = new LinkedHashMap<>();
-        for (final String t : List.of(tables.getSpo(), tables.getPo(), tables.getOsp(), tables.getEval(), tables.getText(),
-                tables.getGeo())) {
+        final Map<String, long[]> bytes = new LinkedHashMap<>();
+        for (final String t : dataTables(tables)) {
             rows.put(t, new ArrayList<>());
+            bytes.put(t, new long[1]);
         }
         final long n = generator.config().entities();
-        final int sample = (int) Math.min(n, Math.max(5_000, Math.min(50_000, 300L * (splits + 1))));
+        final int sample = (int) Math.min(n, entities);
         final long seed = generator.config().seed() ^ SPLIT_SALT;
         try {
             for (int k = 0; k < sample; k++) {
@@ -85,34 +130,68 @@ public final class SplitPlanner {
                 final EvalStatsMutations.CounterBatch counts = new EvalStatsMutations.CounterBatch();
                 for (final RyaStatement st : statements) {
                     final Map<TABLE_LAYOUT, RowMutation> m = factory.serialize(st);
-                    addRows(rows.get(tables.getSpo()), List.of(m.get(TABLE_LAYOUT.SPO)));
-                    addRows(rows.get(tables.getPo()), List.of(m.get(TABLE_LAYOUT.PO)));
-                    addRows(rows.get(tables.getOsp()), List.of(m.get(TABLE_LAYOUT.OSP)));
+                    add(rows, bytes, tables.getSpo(), List.of(m.get(TABLE_LAYOUT.SPO)));
+                    add(rows, bytes, tables.getPo(), List.of(m.get(TABLE_LAYOUT.PO)));
+                    add(rows, bytes, tables.getOsp(), List.of(m.get(TABLE_LAYOUT.OSP)));
                     if (text != null) {
-                        addRows(rows.get(tables.getText()), text.puts(st));
+                        add(rows, bytes, tables.getText(), text.puts(st));
                     }
                     if (geo != null) {
-                        addRows(rows.get(tables.getGeo()), geo.puts(st));
+                        add(rows, bytes, tables.getGeo(), geo.puts(st));
                     }
                     counts.add(st, 1);
                 }
                 if (conf.isMaintainStats()) {
-                    // Per entity, like a load's blocks: the entity's subject counters are final.
-                    addRows(rows.get(tables.getEval()), counts.drain(counters));
+                    // Per entity, like a load's blocks: the entity's subject counters are final. Counters of
+                    // values that repeat across entities are counted once per entity, so eval's size is an
+                    // upper bound.
+                    add(rows, bytes, tables.getEval(), counts.drain(counters));
                 }
             }
         } catch (final Exception e) {
             throw new IllegalStateException("could not compute split points", e);
         }
-        final Map<String, SortedSet<Text>> plan = new LinkedHashMap<>();
-        for (final Map.Entry<String, List<byte[]>> e : rows.entrySet()) {
-            final int wanted = e.getKey().equals(tables.getGeo()) ? splits / 2 : splits;
-            final SortedSet<Text> points = quantiles(e.getValue(), wanted);
-            if (!points.isEmpty()) {
-                plan.put(e.getKey(), points);
+        final Map<String, Long> totals = new LinkedHashMap<>();
+        bytes.forEach((t, b) -> totals.put(t, b[0]));
+        return new Sample(rows, totals, sample);
+    }
+
+    /**
+     * Splits per table for tablets or regions of {@code tabletSize} bytes on disk, at least
+     * {@code minimum} ({@code geo} half that): each table's estimated size over the target size,
+     * minus one.
+     */
+    public static Map<String, Integer> splitsBySize(final Sample sample, final long datasetEntities, final double compression,
+            final long tabletSize, final int minimum, final String geoTable) {
+        final Map<String, Integer> splits = new LinkedHashMap<>();
+        for (final String t : sample.rows().keySet()) {
+            final double disk = sample.diskBytes(t, datasetEntities, compression);
+            final long bySize = Math.max(0, (long) Math.ceil(disk / tabletSize) - 1);
+            final int floor = t.equals(geoTable) ? minimum / 2 : minimum;
+            splits.put(t, (int) Math.min(Integer.MAX_VALUE, Math.max(floor, bySize)));
+        }
+        return splits;
+    }
+
+    private static List<String> dataTables(final TableLayoutStrategy tables) {
+        return List.of(tables.getSpo(), tables.getPo(), tables.getOsp(), tables.getEval(), tables.getText(), tables.getGeo());
+    }
+
+    private static void add(final Map<String, List<byte[]>> rows, final Map<String, long[]> bytes, final String table,
+            final Collection<RowMutation> mutations) {
+        addRows(rows.get(table), mutations);
+        long b = 0;
+        for (final RowMutation m : mutations) {
+            for (final RowMutation.Update u : m.updates()) {
+                b += m.row().length + length(u.family()) + length(u.qualifier()) + length(u.visibility()) + Long.BYTES
+                        + (u.value() == null ? Long.BYTES : u.value().length);
             }
         }
-        return plan;
+        bytes.get(table)[0] += b;
+    }
+
+    private static int length(final byte[] b) {
+        return b == null ? 0 : b.length;
     }
 
     private static void addRows(final List<byte[]> out, final Collection<RowMutation> mutations) {

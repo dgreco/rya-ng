@@ -48,6 +48,38 @@ class SplitPlannerTest {
     }
 
     @Test
+    void aTableIsSplitForItsSizeOnDiskWithAFloorPerServer() {
+        final Map<String, List<byte[]>> rows = new java.util.LinkedHashMap<>();
+        rows.put("t_spo", List.of());
+        rows.put("t_geo", List.of());
+        rows.put("t_text", List.of());
+        // 1,000 sampled entities wrote 70 MB to spo: 70 KB each, 10 KB on disk at a compression of 7.
+        final SplitPlanner.Sample sample = new SplitPlanner.Sample(rows,
+                Map.of("t_spo", 70_000_000L, "t_geo", 0L, "t_text", 7_000L), 1_000);
+        final long gib = 1L << 30;
+        // 10M entities: about 100 GB of spo, so 10 tablets of 10 GB.
+        final Map<String, Integer> splits = SplitPlanner.splitsBySize(sample, 10_000_000, 7, 10 * gib, 3, "t_geo");
+        assertEquals(9, splits.get("t_spo"));
+        assertEquals(3, splits.get("t_text"), "a small table gets the floor");
+        assertEquals(1, splits.get("t_geo"), "geo gets half the floor, as before");
+        assertEquals(1, SplitPlanner.splitsBySize(sample, 10_000_000, 7, 100 * gib, 1, "t_geo").get("t_spo"));
+    }
+
+    @Test
+    void aTrillionTriplesPlanAboutTheTabletsOfTheSizingModel() {
+        final LoaderOptions o = LoaderOptions.parse(new String[] {"prepare", "--table-prefix", "t_", "--triples", "1T"}, Map.of());
+        assertEquals(1e12, o.genConfig().entities() * LoaderOptions.triplesPerEntity(o.genConfig()), 1e10);
+        final StoreRdfConfiguration conf = o.rdfConf();
+        final SplitPlanner.Sample sample = SplitPlanner.sample(new EntityGenerator(o.genConfig()), conf, o.statsOnes(), 5_000);
+        final Map<String, Integer> splits = SplitPlanner.splitsBySize(sample, o.genConfig().entities(), o.compression(),
+                o.tabletSize(), 0, conf.getTableLayoutStrategy().getGeo());
+        // SCALE-STUDY.md 4.4: about 21 B per triple on disk for each statement table, so about 2,100 tablets of 10 GB.
+        for (final String t : List.of("t_spo", "t_po", "t_osp")) {
+            assertTrue(splits.get(t) > 1_200 && splits.get(t) < 3_000, t + ": " + splits.get(t));
+        }
+    }
+
+    @Test
     void separatorIsTheShortestPrefixAfterThePreviousRow() {
         assertArrayEquals(b("ab"), SplitPlanner.separator(b("aa"), b("abc")));
         assertArrayEquals(b("b"), SplitPlanner.separator(b("a"), b("b")));

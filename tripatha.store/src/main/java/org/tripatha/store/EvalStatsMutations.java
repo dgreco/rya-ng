@@ -150,6 +150,11 @@ public final class EvalStatsMutations {
             return sums.size();
         }
 
+        /** Each pending counter and its sum, without clearing them (for reports, such as the loader's dry run). */
+        public void forEachSum(final java.util.function.ObjLongConsumer<CounterKey> action) {
+            sums.forEach((key, sum) -> action.accept(key, sum[0]));
+        }
+
         /** The pending sums as mutations (one per row; zero sums are dropped), and clears them. */
         public List<RowMutation> drain() {
             return drain(CounterPolicy.ALL);
