@@ -185,6 +185,7 @@ All on a real cluster with NVMe disks, unless the row says otherwise.
 | M10 | **Class-star queries in the join benchmark:** entities of a large class selected by two to four constant properties, with and without a value filter and with attributes fetched. For example, people of one nationality working for one company, and observations of one property above a value. They measure O14, O22 and O23 | O14, O22, O23 | Done: seven `class-*` queries; baseline in section 4.7 |
 | M11 | **Against other engines, on a standard benchmark:** WatDiv's 20 basic templates at about 10M triples, on Tripatha's endpoint over RocksDB, QLever and Oxigraph, over HTTP, with the same data and checked rows (`compare.sh`, tripatha.loader/README.md) | The endpoint's cost per query, O11, O22 to O24 | Done: section 4.13 |
 | M12 | **Where a query's time goes, in-process:** `QueryProfile` (tripatha.loader test sources) runs one query on a RocksDB store and splits its time between reading the rows and writing them, the store's scans by reason, and JFR CPU samples. Applied to WatDiv's complex queries | O16, O17, O11 | Done: section 4.14 |
+| M13 | **The native executable's collector and build:** its heap settings, and native-image's `-O3`, `-march=native` and profile-guided optimization, on WatDiv over HTTP against the JVM on the same path | M11 | Done: section 4.15 |
 
 ### 2.3 Milestones
 
@@ -829,6 +830,61 @@ Measured on 2026-11-19 with `QueryProfile`: one query in-process on the JVM, thr
 - **The rest** of both suites is within noise, and no query returns different rows: the WatDiv runs agree on every count, the join benchmark's variants on every row.
 - **QLever** is now 1.7 times faster on C2 (36.6 ms) and 2.6 times on C3 (345 ms); C1 is ahead of it (16.7 against 21.5 ms).
 - **Accumulo and HBase** keep it off: the tablet server was the limit on the test cluster (4.6), so overlapping client work with it is for a cluster to measure (M3).
+
+## 4.15 The native executable: its collector and its build (M13)
+
+The comparison serves Tripatha as the endpoint's native executable. On the JVM, `QueryProfile` had C3-01 at 496 ms; the native executable took 893 to 1,100 ms on the same store. That gap was the native runtime, not the queries.
+
+**The collector.** native-image's Serial collector (the only one on macOS, and GraalVM Community's on Linux) sizes its young generation from the minimum heap.
+- **Without `-Xms`,** as the comparison and the Docker image ran it, the young generation stayed at about 100 MB, however large `-Xmx` was.
+  - C3 filled it every 30 to 40 ms, and each collection copied 15 to 25 MB of live windows: the entity prefetch holds up to two windows of statements.
+  - Over 13 runs of C3-01 that was 458 pauses and 6.4 s of collection in 15 s: about 38 % of the time, on one thread, stopping the others.
+- **With `-Xms6g`** the young generation grows to about 1.2 GB: 25 pauses and 0.4 s.
+- **What didn't help:** raising the young generation's maximum (`-Xmn`, `-XX:MaxNewSize`), and the other policies (`BySpaceAndTime`, `Proportionate`). The minimum heap is what the policy sizes from.
+
+WatDiv, native executable alone, the same build, settings in turn (p50, ms; geometric means):
+
+| | All 100 | Complex | C3 | Small (S, L, F) | Peak memory |
+|---|---|---|---|---|---|
+| No `-Xms` (two runs) | 3.19, 2.83 | 116.0, 103.9 | 1,109, 1,001 | 1.42–2.11 | 401, 462 MB |
+| `-Xms2g` | 3.34 | 100.4 | 948 | 1.52–2.20 | 968 MB |
+| `-Xms6g` | 2.97 | 86.9 | 645 | 1.39–2.12 | 1,691 MB |
+| The JVM (G1), the standalone jar on the same path | 3.61 | 73.5 | 507 | 1.80–2.41 | 1,309 MB |
+
+- **The gain:** about 21 % on the complex queries and 38 % on C3. The small queries don't change.
+- **The cost:** memory peaks at 1.7 GB instead of about 0.4 GB.
+- **What follows:** `compare.sh` now passes `-Xms` equal to `-Xmx` (`TRIPATHA_MIN_HEAP`), as QLever gets `-m 6G`. The README tells servers to do the same. The Docker image keeps no fixed minimum, so small containers still start.
+- **The JVM, on the same HTTP path,** was still 10 to 20 % ahead on the complex queries. Its small queries were slower, as the runs don't warm its JIT fully. So the build had room left.
+
+**The build** (all with `-Xms6g`; the default build is `-O2`, which in Oracle GraalVM uses ML-inferred profiles):
+
+| | All 100 | Complex | C3 | C2 | Small |
+|---|---|---|---|---|---|
+| Default build (two runs) | 2.85, 2.69 | 87.9, 86.8 | 753, 791 | 57.3, 55.2 | 1.24–1.91 |
+| `-O3` | 2.55 | 76.4 | 590 | 54.1 | 1.20–1.68 |
+| `-march=native` | 2.89 | 91.7 | 786 | 58.6 | 1.30–1.97 |
+| Profile-guided, trained at 10M triples | 2.34 | 71.0 | 599 | 49.0 | 1.11–1.57 |
+| Profile-guided and `-march=native` | 2.33 | 66.1 | 503 | 47.9 | 1.12–1.56 |
+
+- **Profile-guided optimization** (`--pgo`, which implies `-O3`) is the one that pays everywhere. A second series agreed: all 100 2.88 and 2.79 → 2.50, complex 90.7 and 86.4 → 75.5. In all, 11 to 16 % on all 100 queries and 10 to 19 % on the complex ones; C3 alone varies too much between runs to say more than 8 to 22 %.
+- **Its training run:** an instrumented build answers the join benchmark's 25 queries (M8) over a store of its own data, never WatDiv. Trained at 1M triples instead of 10M, the profile does as well (2.48, complex 78.2, C2 49.5), so the build script loads 1M: 15 s.
+- **`-march=native`** gains nothing alone. On top of the profile it took C3 to 503 ms, but it builds for the build machine's CPU only, and QLever and Oxigraph run generic builds, so it isn't used.
+- **Oracle GraalVM only.** Profile-guided optimization isn't in GraalVM Community, whose `-O3` is its `-O2` and which has no ML-inferred profiles either. CI and the Docker image build with Community, so they keep the default build; the published executable is probably slower than any row here (not measured).
+- **How it's built:** `tripatha.standalone/build-optimized.sh` (opt-in, about 5 minutes after the modules) builds the instrumented executable, loads the training store, runs the suite through `CompareBench`, and builds with `--pgo`. Each build's log must show the PGO setting it was given. `compare.sh` uses it when it finds Oracle GraalVM, and its report names the build.
+
+**Where WatDiv stands,** with what `compare.sh` now builds and runs: the 1M-trained executable and `-Xms6g`. The three engines were measured in one run of `compare.sh` with no options (23:10), one after the other, and returned the same rows for every query.
+
+| | Tripatha | QLever 0.6.0 | Oxigraph 0.5.13 |
+|---|---|---|---|
+| All 100 queries, geometric mean | **2.27 ms** | 9.49 ms | 3.63 ms |
+| Complex (C1 to C3) | 67.9 ms | **66.3 ms** | 375.9 ms |
+| Small (S, L, F) | **1.25 ms** | 6.73 ms | 1.60 ms |
+| C1, C2, C3 | 12.4, 47.3, 533 ms | 21.8, **37.9**, **353** ms | **11.9**, 271.7, 16,383 ms |
+| Templates where it's the fastest | **11** | 2 (C2, C3) | 7 |
+
+- **On the complex queries** Tripatha is within 3 % of QLever (67.9 against 66.3 ms), and QLever stays 1.25 times faster on C2 and 1.5 times on C3.
+- **Oxigraph's 7 templates** are small queries it answers 0.02 to 1.9 ms sooner.
+- **Noise:** this machine was slower in the evening than in the afternoon. The default build without `-Xms` took C3 893 ms at 21:10 (section 4.14) and 1,001 to 1,109 ms an hour later. Only rows of one series compare.
 
 ---
 
