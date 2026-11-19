@@ -14,25 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Compares Tripatha's endpoint on RocksDB with QLever and Oxigraph (SCALE-STUDY.md M11). See
-# tripatha.loader/README.md for the installation on macOS and Linux.
+# Compares Tripatha's endpoint on RocksDB with QLever and Oxigraph on a standard benchmark, WatDiv
+# (SCALE-STUDY.md M11). See tripatha.loader/README.md for the installation on macOS and Linux.
 #
-#   tripatha.loader/compare.sh [--build] [--suite join|watdiv] [--engines tripatha,qlever,oxigraph]
+#   tripatha.loader/compare.sh [--build] [--scale 100] [--per-template 5] [--engines tripatha,qlever,oxigraph]
 #                              [--only a,b] [--warmup 3] [--runs 10] [--timeout 120] [--out DIR]
-#     --suite join      the join benchmark's queries and data (the default): --triples 10M
-#     --suite watdiv    WatDiv's 20 basic templates over its data: --scale 100 (about 10M triples),
-#                       --per-template 5 queries from each
 #
-# Each dataset lives in a directory of its own under tripatha.loader/target/compare (COMPARE_DIR
-# names another), with every engine's store; they are built once and reused. The reports go there
-# too, unless --out says otherwise. --build installs the modules first, as for bench.sh.
+# --scale is WatDiv's scale factor (100: about 10M triples), --per-template the queries generated
+# from each of its 20 basic templates. Each scale lives in a directory of its own under
+# tripatha.loader/target/compare (COMPARE_DIR names another), with the data, the queries and every
+# engine's store; they are built once and reused. The reports go there too, unless --out says
+# otherwise. --build installs the modules first, as for bench.sh.
 #
-# - join: bench.sh loads its RocksDB store (or reuses it), with the entity index, exports it as
-#   N-Quads, and runs the suite in-process on it, for reference.
-# - watdiv: the WatDiv generator is downloaded from the University of Waterloo, checked against its
-#   SHA-256 and built (it needs Boost and a C++ compiler); it writes the data and the queries once.
-#   Tripatha loads the data into a RocksDB store of its own (RdfFileLoad).
-# - QLever builds its index and Oxigraph loads and optimizes a store, from the same file.
+# - The WatDiv generator is downloaded from the University of Waterloo, checked against its SHA-256
+#   and built (it needs Boost and a C++ compiler); it writes the data and the queries once.
+# - Tripatha loads the data into a RocksDB store (RdfFileLoad), QLever builds its index and
+#   Oxigraph loads and optimizes a store, from the same file.
 # - Tripatha's endpoint (tripatha.standalone) serves a clone of its store, so nothing it writes
 #   reaches the original; QLever and Oxigraph serve theirs read-only. All listen on 127.0.0.1.
 # - CompareBench checks that the engines hold the same statements, sends them every query in turn,
@@ -63,8 +60,6 @@ PORT_QLEVER=7102
 PORT_OXIGRAPH=7103
 
 build=false
-suite=join
-triples=10M
 scale=100
 per_template=5
 engines=tripatha,qlever,oxigraph
@@ -79,14 +74,12 @@ while [ $# -gt 0 ]; do
     --help|-h)
       awk 'NR > 16 && /^set -euo/ { exit } NR > 16 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"
       exit 0 ;;
-    --suite|--triples|--scale|--per-template|--engines|--only|--warmup|--runs|--timeout|--out)
+    --scale|--per-template|--engines|--only|--warmup|--runs|--timeout|--out)
       if [ $# -lt 2 ]; then
         echo "missing value for $1" >&2
         exit 2
       fi
       case "$1" in
-        --suite) suite="$2" ;;
-        --triples) triples="$2" ;;
         --scale) scale="$2" ;;
         --per-template) per_template="$2" ;;
         --engines) engines="$2" ;;
@@ -102,10 +95,6 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-case "$suite" in
-  join|watdiv) ;;
-  *) echo "unknown suite $suite: join or watdiv" >&2; exit 2 ;;
-esac
 has() {
   case ",$engines," in
     *",$1,"*) return 0 ;;
@@ -247,89 +236,52 @@ if $build || [ ! -f "$HERE/target/bench.classpath" ]; then
 fi
 bench_cp="$HERE/target/test-classes:$HERE/target/classes:$(cat "$HERE/target/bench.classpath")"
 
-suite_args=(--warmup "$warmup" --runs "$runs" --timeout "$timeout")
-if [ -n "$only" ]; then
-  suite_args+=(--only "$only")
+# ---- WatDiv's data and queries ----
+
+dir="$work/watdiv-sf$scale"
+data="$dir/data.nt.gz"
+if [ ! -f "$dir/ready" ]; then
+  watdiv="$(watdiv_binary)"
+  tree="$cache/watdiv-v06/watdiv"
+  echo "Generating WatDiv's data at scale factor $scale, and $per_template queries per template..." >&2
+  # New data makes every engine's store stale.
+  rm -rf "$dir"
+  mkdir -p "$dir/gen/run" "$dir/queries"
+  # WatDiv reads its name lists from ../../files and keeps its model in saved.txt, for the queries.
+  ln -s "$tree/files" "$dir/files"
+  (cd "$dir/gen/run" && "$watdiv" -d "$tree/model/wsdbm-data-model.txt" "$scale" 2> ../data.log | gzip -1 > "$data.part")
+  mv "$data.part" "$data"
+  for t in $WATDIV_TEMPLATES; do
+    (cd "$dir/gen/run" && "$watdiv" -q "$tree/model/wsdbm-data-model.txt" "$tree/testsuite/$t.txt" "$per_template" 1 \
+      2>> ../queries.log) |
+      awk -v dir="$dir/queries" -v t="$t" 'BEGIN { RS = "" } { f = sprintf("%s/%s-%02d.rq", dir, t, NR); print > f; close(f) }'
+  done
+  generated=$(ls "$dir/queries" | wc -l | tr -d ' ')
+  if [ "$generated" -ne $(( per_template * 20 )) ]; then
+    echo "WatDiv wrote $generated queries, not $(( per_template * 20 )): see $dir/gen" >&2
+    exit 1
+  fi
+  gzip -dc "$data" | wc -l | tr -d ' ' > "$dir/statements"
+  sha256_of "$data" > "$dir/data.sha256"
+  date -u +%Y-%m-%d > "$dir/generated"
+  touch "$dir/ready"
 fi
 
-# ---- the data, and Tripatha's store ----
+# ---- the engines' stores ----
 
-compare_args=()
-info=()
-if [ "$suite" = join ]; then
-  dir="$work/join-$triples"
-  data="$dir/data.nq.gz"
-  format=nq
-  store="$(absolute "${BENCH_ROCKSDB_PATH:-$HERE/target/bench/rocksdb}")"
-  prefix=bench_
-  indexes=(--tripatha.text-index=true --tripatha.geo-index=true --tripatha.entity-index=true)
-  mkdir -p "$dir"
-  if [ ! -f "$data" ]; then
-    # A new export makes the engines' stores stale.
-    rm -rf "$dir/qlever" "$dir/oxigraph"
-    "$HERE/bench.sh" --triples "$triples" --entity-index --export "$data"
-  fi
-  echo "Running the suite in-process..." >&2
-  "$HERE/bench.sh" --triples "$triples" --entity-index --out "$dir/inprocess" "${suite_args[@]}" > "$work/logs/inprocess.log" 2>&1 ||
-    { echo "the in-process run failed: see $work/logs/inprocess.log" >&2; exit 1; }
-  inprocess_csv="$(ls -t "$dir/inprocess"/rocksdb-*.csv | head -1)"
-  compare_args=(--triples "$triples" --inprocess "$inprocess_csv")
-  info+=(--info "The in-process column is JoinBench on the same store, its report $(basename "$inprocess_csv" .csv).")
-  store_note="the benchmark store with the text, geo and entity indexes"
-else
-  dir="$work/watdiv-sf$scale"
-  data="$dir/data.nt.gz"
-  format=nt
-  store="$dir/tripatha"
-  prefix=watdiv_
-  indexes=(--tripatha.entity-index=true)
-  if [ ! -f "$dir/ready" ]; then
-    watdiv="$(watdiv_binary)"
-    tree="$cache/watdiv-v06/watdiv"
-    echo "Generating WatDiv's data at scale factor $scale, and $per_template queries per template..." >&2
-    rm -rf "$dir"
-    mkdir -p "$dir/gen/run" "$dir/queries"
-    # WatDiv reads its name lists from ../../files and keeps its model in saved.txt, for the queries.
-    ln -s "$tree/files" "$dir/files"
-    (cd "$dir/gen/run" && "$watdiv" -d "$tree/model/wsdbm-data-model.txt" "$scale" 2> ../data.log | gzip -1 > "$data.part")
-    mv "$data.part" "$data"
-    for t in $WATDIV_TEMPLATES; do
-      (cd "$dir/gen/run" && "$watdiv" -q "$tree/model/wsdbm-data-model.txt" "$tree/testsuite/$t.txt" "$per_template" 1 \
-        2>> ../queries.log) |
-        awk -v dir="$dir/queries" -v t="$t" 'BEGIN { RS = "" } { f = sprintf("%s/%s-%02d.rq", dir, t, NR); print > f; close(f) }'
-    done
-    generated=$(ls "$dir/queries" | wc -l | tr -d ' ')
-    if [ "$generated" -ne $(( per_template * 20 )) ]; then
-      echo "WatDiv wrote $generated queries, not $(( per_template * 20 )): see $dir/gen" >&2
-      exit 1
-    fi
-    gzip -dc "$data" | wc -l | tr -d ' ' > "$dir/statements"
-    sha256_of "$data" > "$dir/data.sha256"
-    date -u +%Y-%m-%d > "$dir/generated"
-    touch "$dir/ready"
-  fi
-  if has tripatha; then
-    echo "Loading Tripatha's store..." >&2
-    start=$(date +%s)
-    "$java_bin" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED "-Xmx${TRIPATHA_HEAP:-6g}" \
-      -Dorg.slf4j.simpleLogger.defaultLogLevel=warn -cp "$bench_cp" org.tripatha.loader.bench.RdfFileLoad \
-      --rocksdb-path "$store" --file "$data" --id "$(cat "$dir/data.sha256")" --table-prefix "$prefix" > "$dir/tripatha-load.log" 2>&1 ||
-      { echo "Tripatha's load failed: see $dir/tripatha-load.log" >&2; exit 1; }
-    if grep -q "Loaded and compacted" "$dir/tripatha-load.log"; then
-      echo $(( $(date +%s) - start )) > "$dir/tripatha-load-seconds"
-    fi
-  fi
-  compare_args=(--queries "$dir/queries")
-  info+=(--info "WatDiv v0.6 (G. Aluç, O. Hartig, M. T. Özsu and K. Daudjee, Diversified stress testing of RDF data management \
-systems, ISWC 2014), scale factor $scale: $(cat "$dir/statements") statements generated on $(cat "$dir/generated"), and \
-$per_template queries from each of its 20 basic templates.")
-  store_note="its own store with the entity index, loaded in $(cat "$dir/tripatha-load-seconds" 2>/dev/null || echo "?") s"
+store="$dir/tripatha"
+prefix=watdiv_
+echo "Loading Tripatha's store..." >&2
+start=$(date +%s)
+"$java_bin" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED "-Xmx${TRIPATHA_HEAP:-6g}" \
+  -Dorg.slf4j.simpleLogger.defaultLogLevel=warn -cp "$bench_cp" org.tripatha.loader.bench.RdfFileLoad \
+  --rocksdb-path "$store" --file "$data" --id "$(cat "$dir/data.sha256")" --table-prefix "$prefix" > "$dir/tripatha-load.log" 2>&1 ||
+  { echo "Tripatha's load failed: see $dir/tripatha-load.log" >&2; exit 1; }
+if grep -q "Loaded and compacted" "$dir/tripatha-load.log"; then
+  echo $(( $(date +%s) - start )) > "$dir/tripatha-load-seconds"
 fi
+
 qdir="$dir/qlever"
-odir="$dir/oxigraph"
-
-# ---- the other engines' stores ----
-
 if has qlever && [ ! -f "$qdir/ready" ]; then
   echo "Building QLever's index..." >&2
   rm -rf "$qdir"
@@ -337,18 +289,19 @@ if has qlever && [ ! -f "$qdir/ready" ]; then
   printf '{ "ascii-prefixes-only": false, "num-triples-per-batch": 1000000 }\n' > "$qdir/settings.json"
   start=$(date +%s)
   # -f - reads stdin (without -f, 0.6.0 fails an assertion).
-  (cd "$qdir" && gzip -dc "$data" | "$qindex" -i index -F "$format" -f - -p true -s settings.json > index.log 2>&1) ||
+  (cd "$qdir" && gzip -dc "$data" | "$qindex" -i index -F nt -f - -p true -s settings.json > index.log 2>&1) ||
     { echo "QLever's index build failed: see $qdir/index.log" >&2; exit 1; }
   echo $(( $(date +%s) - start )) > "$qdir/load-seconds"
   touch "$qdir/ready"
 fi
 
+odir="$dir/oxigraph"
 if has oxigraph && [ ! -f "$odir/ready" ]; then
   echo "Loading Oxigraph..." >&2
   rm -rf "$odir"
   mkdir -p "$odir"
   start=$(date +%s)
-  gzip -dc "$data" | "$oxigraph" load --location "$odir/store" --format "$format" > "$odir/load.log" 2>&1
+  gzip -dc "$data" | "$oxigraph" load --location "$odir/store" --format nt > "$odir/load.log" 2>&1
   "$oxigraph" optimize --location "$odir/store" >> "$odir/load.log" 2>&1
   echo $(( $(date +%s) - start )) > "$odir/load-seconds"
   touch "$odir/ready"
@@ -374,6 +327,10 @@ for port in $PORT_TRIPATHA $PORT_QLEVER $PORT_OXIGRAPH; do
   fi
 done
 
+info=(--info "WatDiv v0.6 (G. Aluç, O. Hartig, M. T. Özsu and K. Daudjee, Diversified stress testing of RDF data management \
+systems, ISWC 2014), scale factor $scale: $(cat "$dir/statements") statements generated on $(cat "$dir/generated"), and \
+$per_template queries from each of its 20 basic templates.")
+
 # A clone shares the store's blocks until something writes (APFS, or a reflink elsewhere).
 rm -rf "$clone"
 if [ "$(uname -s)" = Darwin ]; then
@@ -384,13 +341,14 @@ fi
 heap="${TRIPATHA_HEAP:-6g}"
 "$java_bin" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED "-Xmx$heap" -jar "$jar" \
   --server.address=127.0.0.1 --server.port=$PORT_TRIPATHA --logging.level.root=warn \
-  --tripatha.backend=rocksdb "--tripatha.rocksdb.path=$clone" "--tripatha.table-prefix=$prefix" "${indexes[@]}" \
+  --tripatha.backend=rocksdb "--tripatha.rocksdb.path=$clone" "--tripatha.table-prefix=$prefix" --tripatha.entity-index=true \
   "--tripatha.sparql.query-timeout=${timeout}s" > "$work/logs/tripatha.log" 2>&1 &
 pids+=($!)
 tripatha_pid=$!
 endpoints=(--endpoint "tripatha=http://127.0.0.1:$PORT_TRIPATHA/sparql")
 info+=(--info "Tripatha $(git -C "$ROOT" rev-parse --short HEAD): tripatha.standalone on $("$java_bin" -version 2>&1 | head -1 | tr -d '"'), \
--Xmx$heap, over a clone of $store_note ($(gigabytes "$store") on disk, counters and indexes included).")
+-Xmx$heap, over a clone of its store with the entity index, loaded in $(cat "$dir/tripatha-load-seconds" 2>/dev/null || echo "?") s \
+($(gigabytes "$store") on disk, counters and index included).")
 
 if has qlever; then
   qmemory="${QLEVER_MEMORY:-6G}"
@@ -401,8 +359,8 @@ if has qlever; then
   pids+=($!)
   qlever_pid=$!
   endpoints+=(--endpoint "qlever=http://127.0.0.1:$PORT_QLEVER/" --clear "qlever=http://127.0.0.1:$PORT_QLEVER/?cmd=clear-cache")
-  info+=(--info "QLever $("$qserver" --version 2>&1 | head -1 | awk '{ print $NF }'): qlever-server -m $qmemory${QLEVER_SERVER_ARGS:+ $QLEVER_SERVER_ARGS}, its result cache emptied before every \
-run; index built in $(cat "$qdir/load-seconds") s ($(gigabytes "$qdir") on disk).")
+  info+=(--info "QLever $("$qserver" --version 2>&1 | head -1 | awk '{ print $NF }'): qlever-server -m $qmemory${QLEVER_SERVER_ARGS:+ $QLEVER_SERVER_ARGS}, \
+its result cache emptied before every run; index built in $(cat "$qdir/load-seconds") s ($(gigabytes "$qdir") on disk).")
 fi
 
 if has oxigraph; then
@@ -439,7 +397,11 @@ if has oxigraph; then
   wait_ready oxigraph "$oxigraph_pid" "http://127.0.0.1:$PORT_OXIGRAPH/query"
 fi
 
+suite_args=(--warmup "$warmup" --runs "$runs" --timeout "$timeout")
+if [ -n "$only" ]; then
+  suite_args+=(--only "$only")
+fi
 echo "Comparing..." >&2
 cd "$HERE"
-"$java_bin" -cp "$bench_cp" org.tripatha.loader.bench.CompareBench "${compare_args[@]}" "${endpoints[@]}" "${suite_args[@]}" \
+"$java_bin" -cp "$bench_cp" org.tripatha.loader.bench.CompareBench --queries "$dir/queries" "${endpoints[@]}" "${suite_args[@]}" \
   "${info[@]}" --out "$out"

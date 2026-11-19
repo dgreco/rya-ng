@@ -2,15 +2,12 @@
 
 Two tools in this module measure Tripatha's query performance, on a laptop and without a cluster:
 
-- **The join benchmark** (`bench.sh`, `JoinBench`) runs a fixed suite of 25 queries over a generated store of 10M triples, in-process, on RocksDB, Accumulo or HBase. It is the yardstick for Tripatha's own optimizations ([SCALE-STUDY.md](../SCALE-STUDY.md), M8).
-- **The engine comparison** (`compare.sh`, `CompareBench`) runs a query suite against Tripatha's SPARQL endpoint on RocksDB and against two other open-source engines loaded with the same data, all over HTTP (SCALE-STUDY.md, M11):
+- **The join benchmark** (`bench.sh`, `JoinBench`) runs a fixed suite of 25 queries over a generated store of 10M triples, in-process, on RocksDB, Accumulo or HBase. It was written to measure Tripatha's own optimizations ([SCALE-STUDY.md](../SCALE-STUDY.md), M8), so it is not used to compare Tripatha with other engines.
+- **The engine comparison** (`compare.sh`, `CompareBench`) runs a standard benchmark, [WatDiv](https://dsg.uwaterloo.ca/watdiv/) (the Waterloo SPARQL Diversity Test Suite), against Tripatha's SPARQL endpoint on RocksDB and against two other open-source engines loaded with the same data, all over HTTP (SCALE-STUDY.md, M11):
   - [QLever](https://github.com/ad-freiburg/qlever) (Apache 2.0), a fast single-machine engine;
   - [Oxigraph](https://github.com/oxigraph/oxigraph) (MIT or Apache 2.0), an embedded store that, like Tripatha here, stores its data in RocksDB.
 
-The comparison has two suites:
-
-- `--suite join` (the default): the join benchmark's queries and data. It was written to measure Tripatha's optimizations, so it leans towards the queries Tripatha was tuned for.
-- `--suite watdiv`: [WatDiv](https://dsg.uwaterloo.ca/watdiv/), the Waterloo SPARQL Diversity Test Suite: its own data generator, and 20 query templates of four shapes (linear, star, snowflake, complex) that no engine here was tuned for.
+WatDiv has its own data generator and 20 query templates of four shapes (linear, star, snowflake, complex), designed by others and tuned for by no engine here.
 
 ## Installing what they need
 
@@ -61,30 +58,24 @@ Check with `qlever-server --version`, and see [QLever's quickstart](https://docs
 # the join benchmark, in-process on RocksDB (loads its 10M-triple store the first time)
 tripatha.loader/bench.sh --build
 
-# the engine comparison on the join benchmark's suite
+# the engine comparison on WatDiv, at scale factor 100 (about 10M triples), 5 queries per template
 tripatha.loader/compare.sh --build
-
-# ... and on WatDiv, at scale factor 100 (about 10M triples), 5 queries per template
-tripatha.loader/compare.sh --suite watdiv
 ```
 
-Use `--build` after changing code, so the benchmarks run the change. The first run of each suite prepares its data and the engines' stores; later runs reuse them:
+Use `--build` after changing code, so the benchmarks run the change. The first comparison run at a scale prepares its data and the engines' stores; later runs reuse them:
 
-- **join:** `bench.sh` loads the benchmark's RocksDB store (or reuses it, in `target/bench/rocksdb`) and exports it as N-Quads. It also runs the suite in-process, for a reference column.
-- **watdiv:** `compare.sh` downloads WatDiv's source from the University of Waterloo, checks it against its SHA-256 and builds it in `~/.m2/repository/.cache/tripatha-compare`. WatDiv writes the data and the queries, and Tripatha loads the data into a RocksDB store of its own (`RdfFileLoad`).
-- QLever builds its index and Oxigraph loads and optimizes its store, from the same file.
+- `compare.sh` downloads WatDiv's source from the University of Waterloo, checks it against its SHA-256 and builds it in `~/.m2/repository/.cache/tripatha-compare`. WatDiv writes the data and the queries.
+- Tripatha loads the data into a RocksDB store of its own (`RdfFileLoad`, through the same DAO as a live store, with its statistics counters and the entity index). QLever builds its index and Oxigraph loads and optimizes its store, from the same file.
 - Tripatha's endpoint serves a copy of its store, so nothing it writes reaches the original. On macOS the copy is an APFS clone: instant, and sharing the store's blocks. On Linux it is a reflink copy where the file system has them (Btrfs, XFS), and otherwise a full copy, which needs as much free disk as the store.
 
-Everything goes under `tripatha.loader/target/compare` (`COMPARE_DIR` names another directory): one directory per dataset (`join-10M`, `watdiv-sf100`) holding the data, every engine's store and, for WatDiv, the queries, plus the logs and the reports. Delete a dataset's directory to start it afresh.
+Everything goes under `tripatha.loader/target/compare` (`COMPARE_DIR` names another directory): one directory per scale factor (`watdiv-sf100`) holding the data, the queries and every engine's store, plus the logs and the reports. Delete a scale's directory to start it afresh.
 
 | Option | Default | |
 |---|---|---|
-| `--suite join\|watdiv` | `join` | which queries and data |
-| `--triples N` | `10M` | the join suite's dataset size |
 | `--scale N` | `100` | WatDiv's scale factor: about 105,000 triples each |
-| `--per-template N` | `5` | WatDiv queries generated from each template |
+| `--per-template N` | `5` | queries generated from each of the 20 templates |
 | `--engines a,b` | `tripatha,qlever,oxigraph` | which engines; Tripatha is always one of them |
-| `--only a,b` | all | run only these queries |
+| `--only a,b` | all | run only these queries (`S1-01,C3-02`) |
 | `--warmup N`, `--runs N` | 3, 10 | runs per query and engine, before and while timing |
 | `--timeout S` | 120 | seconds per query run |
 | `--out DIR` | `target/compare` | where the reports go |
@@ -97,7 +88,6 @@ Everything goes under `tripatha.loader/target/compare` (`COMPARE_DIR` names anot
 | `QLEVER_BIN` | the directory of `qlever-index` and `qlever-server`, if they aren't on the `PATH` |
 | `OXIGRAPH` | another Oxigraph binary than the pinned release |
 | `BOOST_HOME` | Boost's prefix, for building WatDiv (on macOS, Homebrew's by default) |
-| `BENCH_ROCKSDB_PATH` | the join suite's RocksDB store (`target/bench/rocksdb`) |
 
 The servers listen on 127.0.0.1 only, on ports 7101 (Tripatha), 7102 (QLever) and 7103 (Oxigraph), and stop when the script ends.
 
@@ -105,13 +95,13 @@ The servers listen on 127.0.0.1 only, on ports 7101 (Tripatha), 7102 (QLever) an
 
 The report (Markdown and CSV, `compare-<date>`) starts with each engine's version, settings, load time and size on disk.
 
-- **The engines must hold the same data.** The report first compares their statement counts, overall and per named graph. A query without `GRAPH` reads every graph on all three (Oxigraph runs with `--union-default-graph`).
-- **They must return the same rows.** A query whose row count differs between engines, or that fails on one, is marked and left out of the summary. On the join suite, `text` uses Tripatha's own text search function, which the others don't have.
+- **The engines must hold the same data.** The report first compares their statement counts.
+- **They must return the same rows.** A query whose row count differs between engines, or that fails on one, is marked and left out of the summary.
 - **How a query is timed:** a SPARQL protocol POST, its whole result read as TSV, uncompressed, to the last byte. Each engine runs each query a few times first, then the engines take turns, so a slow phase of the machine doesn't land on one engine. QLever keeps a cache of results, which would answer the timed runs from the warm-up, so it is emptied before each of its runs.
-- **The summary** is the geometric mean of the p50s over the queries every engine answered with the same rows, and for WatDiv one per query shape.
+- **The summary** is the geometric mean of the p50s over the queries every engine answered with the same rows, overall and per query shape.
 - **Warm cache only:** a cold-cache run needs the operating system's caches dropped (`sudo purge` on macOS), which the script doesn't do.
-- Tripatha's store size includes its statistics counters and its secondary indexes (text, geo and entity on the join suite; entity on WatDiv), which the other engines don't build.
-- Everything runs on one machine, the engines side by side: keep other heavy programs closed while it runs.
+- Tripatha's store size includes its statistics counters and its entity index, which the other engines don't build.
+- Everything runs on one machine, the engines side by side: keep other heavy programs closed while it runs. Absolute times move between runs; the ratios within a run, where the engines take turns, hold better.
 
 ## WatDiv
 
@@ -119,4 +109,5 @@ WatDiv is the work of G. Aluç, O. Hartig, M. T. Özsu and K. Daudjee. When repo
 
 - **It is not part of this repository.** WatDiv publishes no license, so its source, data model and templates can't be redistributed under this project's license. `compare.sh` downloads version 0.6 from its publisher, checks it, and builds it on your machine.
 - **Each generation is a new dataset.** WatDiv seeds its random numbers from the clock, and builds strings from the system's word list, so two generations differ, also between machines. The script generates the data and the queries once per scale factor and keeps them, so every engine and every later run use the same files. Compare numbers only within one generated dataset.
+- **Some queries find nothing.** WatDiv picks a query's constants from its model's distributions, so some combinations don't occur in the data: at scale factor 100, every query of S3, S5 and S7 came back empty, on every engine.
 - It is built as C++14: its code uses `std::random_shuffle`, which C++17 removed.

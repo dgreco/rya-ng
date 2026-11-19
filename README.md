@@ -101,7 +101,7 @@ The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.ja
 
 ## Benchmarks
 
-[tripatha.loader/README.md](tripatha.loader/README.md) describes the two benchmarks and how to install what they need on macOS and Linux: the join benchmark, in-process on any backend, and the comparison of Tripatha's endpoint on RocksDB with QLever and Oxigraph, on the join benchmark's suite and on WatDiv.
+[tripatha.loader/README.md](tripatha.loader/README.md) describes the two benchmarks and how to install what they need on macOS and Linux: the join benchmark, in-process on any backend, and the comparison of Tripatha's endpoint on RocksDB with QLever and Oxigraph on a standard benchmark, WatDiv.
 
 ## Storage backends
 

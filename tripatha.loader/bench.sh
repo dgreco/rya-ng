@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
     --build) build=true ;;
     --backend) backend="$2"; shift ;;
     --backend=*) backend="${1#--backend=}" ;;
-    --out|--baseline|--export)
+    --out|--baseline)
       if [ $# -lt 2 ]; then
         echo "missing value for $1" >&2
         exit 2

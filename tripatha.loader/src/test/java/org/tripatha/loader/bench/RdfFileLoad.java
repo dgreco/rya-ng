@@ -49,9 +49,8 @@ import org.tripatha.store.spi.TableKind;
 import org.tripatha.store.spi.WriterOptions;
 
 /**
- * Loads an RDF file into a RocksDB store, for the engine comparison's WatDiv suite
- * ({@code compare.sh --suite watdiv}): N-Triples or N-Quads, gzipped if the name ends with
- * {@code .gz}. The statements go through the DAO, as the endpoint would write them, with their
+ * Loads an N-Triples file into a RocksDB store, for the engine comparison on WatDiv
+ * ({@code compare.sh}), gzipped if the name ends with {@code .gz}. The statements go through the DAO, as the endpoint would write them, with their
  * counters and the entity index; then every table is compacted.
  *
  * <p>The file is parsed on one thread and written in batches by several, each with a DAO of its
@@ -128,11 +127,9 @@ public final class RdfFileLoad {
             writers.add(w);
         }
         final long[] count = {0};
-        final RDFFormat format = file.getFileName().toString().replace(".gz", "").endsWith(".nq") ? RDFFormat.NQUADS
-                : RDFFormat.NTRIPLES;
         try (InputStream raw = new BufferedInputStream(Files.newInputStream(file), 1 << 20);
                 InputStream in = file.getFileName().toString().endsWith(".gz") ? new GZIPInputStream(raw, 1 << 16) : raw) {
-            final RDFParser parser = Rio.createParser(format);
+            final RDFParser parser = Rio.createParser(RDFFormat.NTRIPLES);
             parser.setRDFHandler(new AbstractRDFHandler() {
                 private List<RyaStatement> batch = new ArrayList<>(BATCH);
 

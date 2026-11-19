@@ -30,22 +30,24 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.tripatha.loader.LoaderOptions;
-import org.tripatha.loader.gen.EntityGenerator;
-import org.tripatha.loader.gen.GenConfig;
-
 /**
- * Runs the join benchmark's suite against several SPARQL endpoints and compares them
- * (SCALE-STUDY.md M11): Tripatha's endpoint over its RocksDB store, and other engines loaded with
- * the same data, exported from that store. Run it with {@code tripatha.loader/compare.sh}, which
- * loads the engines and starts their servers.
+ * Runs a standard benchmark's queries against several SPARQL endpoints and compares them
+ * (SCALE-STUDY.md M11): WatDiv's, on Tripatha's endpoint over RocksDB and on other engines loaded
+ * with the same data. Run it with {@code tripatha.loader/compare.sh}, which generates the data and
+ * the queries, loads the engines and starts their servers.
+ *
+ * <p>The queries are the {@code .rq} files of a directory. Files named after WatDiv's templates
+ * ({@code S1-03.rq}) come in its order (linear, star, snowflake, complex), and the report adds a
+ * summary per query shape.
  *
  * <p>Every query goes over HTTP as a SPARQL protocol POST, and its whole result is read as TSV
  * (one line per row, uncompressed); its time is the time to the last byte. Every engine runs each
@@ -56,14 +58,7 @@ import org.tripatha.loader.gen.GenConfig;
  * <p>Numbers mean something only if the engines hold and return the same data, so it checks
  * first: the statement count overall and per graph, and then every query's row count. A query
  * whose row count differs between engines, or that fails on one, is reported but left out of the
- * summary. The row counts and latencies of the in-process benchmark ({@code --inprocess}, a
- * {@code JoinBench} CSV of the same store) are shown alongside, so the cost of HTTP and of writing
- * the results shows apart from the engine's.
- *
- * <p>With {@code --queries DIR} it runs the {@code .rq} files of a directory instead, such as those
- * WatDiv's query generator wrote ({@code compare.sh --suite watdiv}). Files named after WatDiv's
- * templates ({@code S1-03.rq}) come in its order (linear, star, snowflake, complex), and the report
- * adds a summary per query shape.
+ * summary.
  */
 public final class CompareBench {
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT);
@@ -71,6 +66,11 @@ public final class CompareBench {
     /** A WatDiv query file's name: the template's shape and number, then the instance. */
     private static final Pattern TEMPLATE = Pattern.compile("^([LSFC])(\\d+)-(\\d+)$");
     private static final String SHAPES = "LSFC";
+    private static final Map<String, String> SHAPE_NAMES = Map.of("L", "linear", "S", "star", "F", "snowflake", "C", "complex");
+
+    /** A query, named after its file. */
+    record Query(String name, String sparql) {
+    }
 
     /** An engine's query URL, and the URL that empties its result cache (or null). */
     record Endpoint(String name, URI query, URI clear) {
@@ -81,10 +81,6 @@ public final class CompareBench {
         boolean ok() {
             return error == null;
         }
-    }
-
-    /** What the in-process benchmark measured for a query. */
-    record InProcess(long rows, double p50) {
     }
 
     private final Settings settings;
@@ -114,45 +110,39 @@ public final class CompareBench {
 
     private void run() throws Exception {
         Files.createDirectories(settings.out);
-        final GenConfig gen = settings.queries != null ? null
-                : LoaderOptions.parse(new String[] {"load", "--table-prefix", "bench_", "--triples", settings.triples}, Map.of())
-                        .genConfig();
-        final List<JoinBench.Query> suite = (gen == null ? readQueries(settings.queries) : JoinBench.suite(new EntityGenerator(gen)))
-                .stream().filter(q -> settings.only.isEmpty() || settings.only.contains(q.name())).toList();
-        final Map<String, InProcess> inProcess = settings.inProcess == null ? Map.of() : readInProcess(settings.inProcess);
+        final List<Query> suite = readQueries(settings.queries).stream()
+                .filter(q -> settings.only.isEmpty() || settings.only.contains(q.name())).toList();
         System.out.printf(Locale.ROOT, "Comparing %s on %d queries.%n", settings.endpoints.stream().map(Endpoint::name).toList(),
                 suite.size());
-
         final Map<String, Map<String, String>> checks = checks();
         final Map<String, Map<String, Outcome>> results = new LinkedHashMap<>();
-        for (final JoinBench.Query q : suite) {
+        for (final Query q : suite) {
             final Map<String, Outcome> byEngine = measure(q);
             results.put(q.name(), byEngine);
-            final StringBuilder line = new StringBuilder(String.format(Locale.ROOT, "%-18s", q.name()));
+            final StringBuilder line = new StringBuilder(String.format(Locale.ROOT, "%-10s", q.name()));
             byEngine.forEach((e, o) -> line.append(String.format(Locale.ROOT, "  %s %s", e,
                     o.ok() ? String.format(Locale.ROOT, "%,d rows %.1f ms", o.rows(), o.p50()) : o.error())));
             System.out.println(line);
         }
-        report(gen, suite, checks, results, inProcess);
+        report(suite, checks, results);
     }
 
     /** The {@code .rq} files of a directory, in WatDiv's order when they are named after its templates. */
-    static List<JoinBench.Query> readQueries(final Path dir) throws IOException {
+    static List<Query> readQueries(final Path dir) throws IOException {
         final List<Path> files;
         try (var listing = Files.list(dir)) {
             files = listing.filter(f -> f.getFileName().toString().endsWith(".rq")).toList();
         }
-        final List<JoinBench.Query> out = new ArrayList<>();
+        final List<Query> out = new ArrayList<>();
         for (final Path f : files) {
-            final String name = f.getFileName().toString().replaceFirst("\\.rq$", "");
-            out.add(new JoinBench.Query(name, "", Files.readString(f, StandardCharsets.UTF_8)));
+            out.add(new Query(f.getFileName().toString().replaceFirst("\\.rq$", ""), Files.readString(f, StandardCharsets.UTF_8)));
         }
         out.sort(CompareBench::watDivOrder);
         return out;
     }
 
     /** WatDiv's order: L, S, F, C, then the template's number, then the instance; other names after, by name. */
-    static int watDivOrder(final JoinBench.Query a, final JoinBench.Query b) {
+    static int watDivOrder(final Query a, final Query b) {
         final Matcher x = TEMPLATE.matcher(a.name());
         final Matcher y = TEMPLATE.matcher(b.name());
         if (x.matches() && y.matches()) {
@@ -166,7 +156,7 @@ public final class CompareBench {
     // ---- checks ----
 
     /**
-     * The statement count overall and per named graph, from each engine: the export must have
+     * The statement count overall and per named graph, from each engine: the data must have
      * reached each one whole. A query without {@code GRAPH} reads every graph on all of them
      * (Oxigraph with {@code --union-default-graph}).
      */
@@ -219,7 +209,7 @@ public final class CompareBench {
 
     // ---- queries ----
 
-    private Map<String, Outcome> measure(final JoinBench.Query q) {
+    private Map<String, Outcome> measure(final Query q) {
         final int n = settings.endpoints.size();
         final Map<String, List<Double>> times = new LinkedHashMap<>();
         final Map<String, Long> rows = new LinkedHashMap<>();
@@ -256,7 +246,7 @@ public final class CompareBench {
      * Returns the milliseconds to the last byte, or -1 after recording an error (or a row count
      * that changed between runs).
      */
-    private double timed(final Endpoint e, final JoinBench.Query q, final Map<String, Long> rows, final Map<String, String> errors) {
+    private double timed(final Endpoint e, final Query q, final Map<String, Long> rows, final Map<String, String> errors) {
         try {
             if (e.clear() != null) {
                 final HttpResponse<Void> cleared = http.send(HttpRequest.newBuilder(e.clear()).timeout(Duration.ofSeconds(30)).GET().build(),
@@ -331,17 +321,12 @@ public final class CompareBench {
 
     // ---- the report ----
 
-    private void report(final GenConfig gen, final List<JoinBench.Query> suite, final Map<String, Map<String, String>> checks,
-            final Map<String, Map<String, Outcome>> results, final Map<String, InProcess> inProcess) throws IOException {
+    private void report(final List<Query> suite, final Map<String, Map<String, String>> checks,
+            final Map<String, Map<String, Outcome>> results) throws IOException {
         final List<String> engines = settings.endpoints.stream().map(Endpoint::name).toList();
         final String reference = engines.get(0);
         final String name = "compare-" + LocalDateTime.now().format(STAMP);
-        final boolean local = !inProcess.isEmpty();
         final StringBuilder md = new StringBuilder("# Engine comparison\n\n");
-        if (gen != null) {
-            md.append(String.format(Locale.ROOT, "- The join benchmark's suite: %,d entities, about %s triples (dataset %s), exported "
-                    + "from Tripatha's benchmark store as N-Quads.%n", gen.entities(), settings.triples, gen.fingerprint().substring(0, 16)));
-        }
         md.append(String.format(Locale.ROOT, "- %d processors, %d GB of memory, %s.%n", Runtime.getRuntime().availableProcessors(),
                 Math.round(memoryBytes() / 1e9), System.getProperty("os.name") + " " + System.getProperty("os.version")));
         md.append(String.format(Locale.ROOT, "- Warm cache: %d warm-up and %d timed runs of each query per engine, the engines taking "
@@ -353,28 +338,22 @@ public final class CompareBench {
         checks.forEach((check, byEngine) -> md.append("| ").append(check).append(" | ")
                 .append(String.join(" | ", engines.stream().map(e -> byEngine.getOrDefault(e, "missing")).toList())).append(" |\n"));
 
-        md.append("\n## Queries\n\n| Query | Rows | ").append(local ? "In-process | " : "").append(String.join(" | ", engines));
+        md.append("\n## Queries\n\n| Query | Rows | ").append(String.join(" | ", engines));
         engines.stream().skip(1).forEach(e -> md.append(" | ").append(e).append(" / ").append(reference));
-        md.append(" |\n|---|---|").append(local ? "---|" : "").append("---|".repeat(engines.size() * 2 - 1)).append('\n');
+        md.append(" |\n|---|---|").append("---|".repeat(engines.size() * 2 - 1)).append('\n');
         final StringBuilder csv = new StringBuilder("query,engine,rows,p50_ms,p90_ms,comparable,error\n");
         final Map<String, List<Double>> comparable = new LinkedHashMap<>();
         engines.forEach(e -> comparable.put(e, new ArrayList<>()));
-        final Map<String, Map<String, List<Double>>> byShape = new java.util.TreeMap<>(
-                java.util.Comparator.comparingInt(SHAPES::indexOf));
-        for (final JoinBench.Query q : suite) {
+        final Map<String, Map<String, List<Double>>> byShape = new TreeMap<>(Comparator.comparingInt(SHAPES::indexOf));
+        for (final Query q : suite) {
             final Map<String, Outcome> byEngine = results.get(q.name());
-            final InProcess here = inProcess.get(q.name());
             final List<Long> counts = byEngine.values().stream().filter(Outcome::ok).map(Outcome::rows).distinct().toList();
             final boolean allOk = byEngine.values().stream().allMatch(Outcome::ok);
-            final boolean same = allOk && counts.size() == 1 && (here == null || here.rows() == counts.get(0));
+            final boolean same = allOk && counts.size() == 1;
             final String rows = same ? String.format(Locale.ROOT, "%,d", counts.get(0))
                     : (allOk ? "differ: " : "not comparable: ") + String.join(", ", engines.stream().map(e -> e + " "
-                            + (byEngine.get(e).ok() ? String.format(Locale.ROOT, "%,d", byEngine.get(e).rows()) : "failed")).toList())
-                            + (here == null ? "" : String.format(Locale.ROOT, ", in-process %,d", here.rows()));
+                            + (byEngine.get(e).ok() ? String.format(Locale.ROOT, "%,d", byEngine.get(e).rows()) : "failed")).toList());
             md.append("| ").append(q.name()).append(" | ").append(rows);
-            if (local) {
-                md.append(" | ").append(here == null ? "" : String.format(Locale.ROOT, "%.1f", here.p50()));
-            }
             for (final String e : engines) {
                 final Outcome o = byEngine.get(e);
                 md.append(" | ").append(o.ok() ? String.format(Locale.ROOT, "%.1f", o.p50()) : o.error().replace("|", "\\|"));
@@ -396,21 +375,19 @@ public final class CompareBench {
             }
             md.append(" |\n");
         }
-        final int kept = comparable.get(reference).size();
         md.append(String.format(Locale.ROOT, "%nGeometric mean of the p50s over the %d of %d queries every engine answered with the "
-                + "same rows:%n%n", kept, suite.size()));
+                + "same rows:%n%n", comparable.get(reference).size(), suite.size()));
+        final double r = geometricMean(comparable.get(reference));
         for (final String e : engines) {
             final double g = geometricMean(comparable.get(e));
-            final double r = geometricMean(comparable.get(reference));
             md.append(String.format(Locale.ROOT, "- %s: %.1f ms%s%n", e, g, e.equals(reference) ? "" : String.format(Locale.ROOT,
                     " (%.2f times %s)", g / r, reference)));
         }
         if (!byShape.isEmpty()) {
             md.append("\nBy query shape (geometric mean of the p50s, comparable queries only):\n\n| Shape | Queries | ")
                     .append(String.join(" | ", engines)).append(" |\n|---|---|").append("---|".repeat(engines.size())).append('\n');
-            final Map<String, String> shapeNames = Map.of("L", "linear", "S", "star", "F", "snowflake", "C", "complex");
             byShape.forEach((shape, byEngine) -> {
-                md.append("| ").append(shapeNames.get(shape)).append(" | ").append(byEngine.get(reference).size());
+                md.append("| ").append(SHAPE_NAMES.get(shape)).append(" | ").append(byEngine.get(reference).size());
                 engines.forEach(e -> md.append(String.format(Locale.ROOT, " | %.1f", geometricMean(byEngine.getOrDefault(e, List.of())))));
                 md.append(" |\n");
             });
@@ -432,40 +409,24 @@ public final class CompareBench {
                 .getTotalMemorySize();
     }
 
-    /** The in-process benchmark's rows and p50 per query, from its CSV (the first line of each query). */
-    static Map<String, InProcess> readInProcess(final Path csv) throws IOException {
-        final List<String> lines = Files.readAllLines(csv, StandardCharsets.UTF_8);
-        final List<String> header = List.of(lines.get(0).split(","));
-        final int rows = header.indexOf("rows");
-        final int p50 = header.indexOf("p50_ms");
-        final Map<String, InProcess> out = new LinkedHashMap<>();
-        for (final String line : lines.subList(1, lines.size())) {
-            final String[] f = line.split(",");
-            out.putIfAbsent(f[0], new InProcess(Long.parseLong(f[rows]), Double.parseDouble(f[p50])));
-        }
-        return out;
-    }
-
     // ---- settings ----
 
-    record Settings(String triples, List<Endpoint> endpoints, int warmup, int runs, int timeoutSeconds, List<String> only, Path out,
-            Path inProcess, List<String> info, Path queries) {
+    record Settings(Path queries, List<Endpoint> endpoints, int warmup, int runs, int timeoutSeconds, List<String> only, Path out,
+            List<String> info) {
         static final String USAGE = """
-                Usage: CompareBench --endpoint NAME=URL [--endpoint NAME=URL ...] [options]   (run it with compare.sh)
+                Usage: CompareBench --queries DIR --endpoint NAME=URL [--endpoint NAME=URL ...] [options]   (run it with compare.sh)
+                  --queries DIR        the .rq files to run
                   --endpoint NAME=URL  an engine's SPARQL query URL; the first is the reference of the ratios
                   --clear NAME=URL     a URL to GET before every run of that engine, to empty its result cache
-                  --triples 10M        the dataset the engines hold: the suite's constants come from it
-                  --queries DIR        run the .rq files of DIR instead of the join benchmark's suite
                   --warmup 3 --runs 10 runs per query and engine, before and while timing
                   --timeout 120        seconds per query run
                   --only a,b           run only these queries
-                  --inprocess FILE.csv the in-process benchmark of the same store (JoinBench), shown alongside
                   --info TEXT          a line for the report's header (repeat it)
                   --out DIR            where reports go (default target/compare)
                 """;
 
         static Settings parse(final String[] args) {
-            String triples = "10M";
+            Path queries = null;
             final Map<String, URI> endpoints = new LinkedHashMap<>();
             final Map<String, URI> clears = new LinkedHashMap<>();
             int warmup = 3;
@@ -473,8 +434,6 @@ public final class CompareBench {
             int timeout = 120;
             List<String> only = List.of();
             Path out = Path.of("target", "compare");
-            Path inProcess = null;
-            Path queries = null;
             final List<String> info = new ArrayList<>();
             for (int i = 0; i < args.length; i++) {
                 final String a = args[i];
@@ -483,19 +442,20 @@ public final class CompareBench {
                 }
                 final String v = args[++i];
                 switch (a) {
+                    case "--queries" -> queries = Path.of(v);
                     case "--endpoint" -> endpoints.put(name(v), URI.create(v.substring(v.indexOf('=') + 1)));
                     case "--clear" -> clears.put(name(v), URI.create(v.substring(v.indexOf('=') + 1)));
-                    case "--triples" -> triples = v;
                     case "--warmup" -> warmup = Integer.parseInt(v);
                     case "--runs" -> runs = Math.max(1, Integer.parseInt(v));
                     case "--timeout" -> timeout = Integer.parseInt(v);
                     case "--only" -> only = List.of(v.split(","));
-                    case "--inprocess" -> inProcess = Path.of(v);
-                    case "--queries" -> queries = Path.of(v);
                     case "--info" -> info.add(v);
                     case "--out" -> out = Path.of(v);
                     default -> throw new IllegalArgumentException("unknown option " + a);
                 }
+            }
+            if (queries == null) {
+                throw new IllegalArgumentException("give the queries with --queries DIR");
             }
             if (endpoints.isEmpty()) {
                 throw new IllegalArgumentException("give at least one --endpoint");
@@ -507,7 +467,7 @@ public final class CompareBench {
             }
             final List<Endpoint> list = endpoints.entrySet().stream()
                     .map(e -> new Endpoint(e.getKey(), e.getValue(), clears.get(e.getKey()))).toList();
-            return new Settings(triples, list, warmup, runs, timeout, only, out, inProcess, List.copyOf(info), queries);
+            return new Settings(queries, list, warmup, runs, timeout, only, out, List.copyOf(info));
         }
 
         private static String name(final String v) {
