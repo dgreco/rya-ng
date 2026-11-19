@@ -13,6 +13,15 @@ on:
 permissions:
   contents: read
 
+env:
+  # Maven Central answers 429 Too Many Requests when GitHub's runners ask too often: retry, waiting
+  # longer. Maven 3.9's resolver and Maven 4's spell the settings differently; each ignores the other's.
+  MAVEN_ARGS: >-
+    -Daether.connector.http.retryHandler.count=8 -Daether.connector.http.retryHandler.interval=10000
+    -Daether.connector.http.retryHandler.serviceUnavailable=429,503
+    -Daether.transport.http.retryHandler.count=8 -Daether.transport.http.retryHandler.interval=10000
+    -Daether.transport.http.retryHandler.serviceUnavailable=429,503
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -31,7 +40,15 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-          cache: maven
+
+      # A cache of this job's own. setup-java's cache has one key for every job, saved once, by the
+      # first to finish: the RocksDB job's, without JaCoCo, so the coverage build fetched it from
+      # Maven Central on every run, and failed when Central rate-limited.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ github.job }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: maven-${{ github.job }}-
 
       - name: Check the shell scripts
         run: |
@@ -111,7 +128,15 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-          cache: maven
+
+      # A cache of this job's own. setup-java's cache has one key for every job, saved once, by the
+      # first to finish: the RocksDB job's, without JaCoCo, so the coverage build fetched it from
+      # Maven Central on every run, and failed when Central rate-limited.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ github.job }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: maven-${{ github.job }}-
 
       - name: Build
         run: mvn -B -ntp install -DskipTests -DskipITs
@@ -145,7 +170,15 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-          cache: maven
+
+      # A cache of this job's own. setup-java's cache has one key for every job, saved once, by the
+      # first to finish: the RocksDB job's, without JaCoCo, so the coverage build fetched it from
+      # Maven Central on every run, and failed when Central rate-limited.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ github.job }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: maven-${{ github.job }}-
 
       - name: Build
         run: mvn -B -ntp install -DskipTests -DskipITs
