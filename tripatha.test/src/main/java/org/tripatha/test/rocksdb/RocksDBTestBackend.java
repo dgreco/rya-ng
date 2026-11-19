@@ -21,11 +21,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import org.tripatha.rocksdb.RocksStore;
 import org.tripatha.rocksdb.RocksStoreProvider;
@@ -34,8 +36,9 @@ import org.tripatha.test.TestBackend;
 
 /**
  * The RocksDB backend for tests: one database per JVM, in a new temporary directory (or the one
- * named by {@code -Dtripatha.test.rocksdbPath}), kept open until the JVM exits. Tests isolate
- * themselves with unique table prefixes, as on the other backends.
+ * named by {@code -Dtripatha.test.rocksdbPath}), kept open until the JVM exits. A temporary
+ * directory is then deleted; a named one is kept, for the benchmark's store or a {@code DevServer}'s
+ * data. Tests isolate themselves with unique table prefixes, as on the other backends.
  *
  * <p>The backend has no accounts, so every label is held; the labels a test grants are only
  * remembered, for {@link #labels()}.
@@ -53,6 +56,23 @@ public final class RocksDBTestBackend implements TestBackend {
             throw new UncheckedIOException(e);
         }
         this.keeper = RocksStore.open(directory);
+        if (configured.isEmpty()) {
+            // A test JVM's store is a few megabytes, an endpoint's or a loader test's much more.
+            Runtime.getRuntime().addShutdownHook(new Thread(this::deleteDirectory, "rocksdb-test-cleanup"));
+        }
+    }
+
+    /**
+     * Closes this backend's store and deletes the temporary directory. A store a test left open
+     * keeps the database open, but its files can still be unlinked: the process is exiting.
+     */
+    private void deleteDirectory() {
+        keeper.close();
+        try (Stream<Path> files = Files.walk(directory)) {
+            files.sorted(Comparator.reverseOrder()).forEach(f -> f.toFile().delete());
+        } catch (final IOException | UncheckedIOException e) {
+            System.err.println("Could not delete the RocksDB test directory " + directory + ": " + e);
+        }
     }
 
     @Override

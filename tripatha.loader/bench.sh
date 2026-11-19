@@ -20,13 +20,23 @@
 #
 # --build installs the modules first: do it after changing code, so the benchmark runs the change.
 # On RocksDB the store is kept in tripatha.loader/target/bench/rocksdb (BENCH_ROCKSDB_PATH names
-# another directory) and reused while the dataset is the same. The other backends start a test
-# cluster in the JVM and load the dataset each time.
+# another directory) and reused while it holds the whole dataset: it records that itself, so
+# deleting the directory is all it takes to start afresh. The other backends start a test cluster
+# in the JVM and load the dataset each time. Relative paths (--out, --baseline, BENCH_ROCKSDB_PATH)
+# are read from the directory this is run in; reports go to tripatha.loader/target/bench by default.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 CLASSPATH_FILE="$HERE/target/bench.classpath"
+
+# The benchmark runs in tripatha.loader, so a path given relative to the caller's directory is made absolute.
+absolute() {
+  case "$1" in
+    /*) printf '%s' "$1" ;;
+    *) printf '%s' "$PWD/$1" ;;
+  esac
+}
 
 build=false
 backend=rocksdb
@@ -36,6 +46,12 @@ while [ $# -gt 0 ]; do
     --build) build=true ;;
     --backend) backend="$2"; shift ;;
     --backend=*) backend="${1#--backend=}" ;;
+    --out|--baseline)
+      if [ $# -lt 2 ]; then
+        echo "missing value for $1" >&2
+        exit 2
+      fi
+      args+=("$1" "$(absolute "$2")"); shift ;;
     --help|-h) args+=("--help") ;;
     *) args+=("$1") ;;
   esac
@@ -60,7 +76,7 @@ if [ "$(uname -s)" = Darwin ]; then
   java_opts+=(-Djava.net.preferIPv4Stack=true)
 fi
 if [ "$backend" = rocksdb ]; then
-  rocks="${BENCH_ROCKSDB_PATH:-$HERE/target/bench/rocksdb}"
+  rocks="$(absolute "${BENCH_ROCKSDB_PATH:-$HERE/target/bench/rocksdb}")"
   mkdir -p "$rocks"
   java_opts+=("-Dtripatha.test.rocksdbPath=$rocks")
 fi

@@ -52,7 +52,15 @@ import org.tripatha.loader.gen.EntityGenerator;
 import org.tripatha.loader.gen.GenConfig;
 import org.tripatha.rdftriplestore.RyaSailFactory;
 import org.tripatha.store.StoreRdfConfiguration;
+import org.tripatha.store.spi.Auths;
+import org.tripatha.store.spi.CellScanner;
+import org.tripatha.store.spi.CellWriter;
+import org.tripatha.store.spi.KeyRange;
+import org.tripatha.store.spi.RowMutation;
+import org.tripatha.store.spi.ScanSpec;
 import org.tripatha.store.spi.Store;
+import org.tripatha.store.spi.TableKind;
+import org.tripatha.store.spi.WriterOptions;
 import org.tripatha.store.trace.StoreTrace;
 import org.tripatha.store.trace.TraceEvent;
 import org.tripatha.test.TestBackend;
@@ -80,6 +88,14 @@ import jdk.jfr.consumer.RecordingFile;
  */
 public final class JoinBench {
     private static final String PREFIX = "bench_";
+    /**
+     * The table saying that the store holds the whole dataset: one cell, the dataset's fingerprint,
+     * written after the load and its compaction. It is in the store, so it goes with it.
+     */
+    private static final String LOADED = PREFIX + "loaded";
+    private static final byte[] LOADED_ROW = "loaded".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] FINGERPRINT = "fingerprint".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] EMPTY = new byte[0];
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT);
 
     private final Settings settings;
@@ -175,37 +191,51 @@ public final class JoinBench {
         return a.toArray(new String[0]);
     }
 
+    /** The load's progress file; the benchmark never resumes a load, so it is deleted once the load is done. */
     private Path progressFile() {
         return settings.out.resolve("load-" + TestBackends.id() + ".progress");
     }
 
-    /**
-     * A file saying that the store at this location holds the whole dataset, written after a load
-     * and its compaction. A kept RocksDB store is reused when it holds the same dataset and the file
-     * is there; a new test cluster holds nothing, so it is always loaded.
-     */
-    private Path loadedMarker(final TestBackend backend, final GenConfig gen) {
-        final String where = backend.storeSettings().getProperty("rocksdb.path", "");
-        return settings.out.resolve("loaded-" + backend.id() + "-" + gen.fingerprint().substring(0, 16) + "-"
-                + Integer.toHexString(where.hashCode()));
+    /** The fingerprint of the dataset the store was loaded with, or null if no load finished. */
+    private static String loadedFingerprint(final Store store) {
+        if (!store.tables().exists(LOADED)) {
+            return null;
+        }
+        final ScanSpec spec = ScanSpec.builder(Auths.NONE).column(FINGERPRINT, EMPTY).build();
+        try (CellScanner scanner = store.scan(LOADED, KeyRange.row(LOADED_ROW), spec)) {
+            return scanner.hasNext() ? new String(scanner.next().value(), StandardCharsets.UTF_8) : null;
+        }
     }
 
-    /** Loads the dataset unless the store already holds all of it (a kept RocksDB store). */
+    private static void markLoaded(final Store store, final String fingerprint) {
+        store.tables().create(LOADED, TableKind.METADATA);
+        try (CellWriter writer = store.newWriter(WriterOptions.DEFAULT)) {
+            writer.table(LOADED).write(new RowMutation(LOADED_ROW).put(FINGERPRINT, EMPTY, EMPTY,
+                    fingerprint.getBytes(StandardCharsets.UTF_8)));
+            writer.flush();
+        }
+    }
+
+    /**
+     * Loads the dataset unless the store already holds all of it (a kept RocksDB store): the
+     * fingerprint prepare recorded and the one {@link #markLoaded} wrote after the load must both be
+     * this dataset's. A new test cluster holds nothing, so it is always loaded.
+     */
     private void ensureLoaded(final TestBackend backend, final Store store, final LoaderOptions dataset) throws Exception {
         final StoreRdfConfiguration conf = dataset.rdfConf();
+        final String fingerprint = dataset.genConfig().fingerprint();
         final boolean exists = store.tables().exists(conf.getTableLayoutStrategy().getSpo());
         final String stored = exists ? StoreCheck.storedFingerprint(store, conf, dataset.genConfig()) : null;
-        final Path marker = loadedMarker(backend, dataset.genConfig());
-        if (stored != null && stored.equals(dataset.genConfig().fingerprint()) && Files.exists(marker)) {
+        if (fingerprint.equals(stored) && fingerprint.equals(loadedFingerprint(store))) {
             out.println("Store already loaded; reusing it.");
             matchEntityIndex(store, conf);
             return;
         }
-        if (exists) {
-            out.println("Store holds other or partial data: deleting its tables.");
+        if (store.tables().list().stream().anyMatch(t -> t.startsWith(PREFIX))) {
+            out.println(fingerprint.equals(stored) ? "Store holds the dataset but no record that its load finished: "
+                    + "deleting its tables." : "Store holds another dataset: deleting its tables.");
             backend.deleteTables(PREFIX);
         }
-        Files.deleteIfExists(marker);
         Files.deleteIfExists(progressFile());
         final long t0 = System.nanoTime();
         final PrintStream quiet = new PrintStream(OutputStream.nullOutputStream());
@@ -222,7 +252,8 @@ public final class JoinBench {
                 backend.compact(table);
             }
         }
-        Files.writeString(marker, dataset.genConfig().fingerprint() + "\n", StandardCharsets.UTF_8);
+        markLoaded(store, fingerprint);
+        Files.deleteIfExists(progressFile());
         out.printf(Locale.ROOT, "Loaded and compacted in %.0f s.%n", (System.nanoTime() - t0) / 1e9);
     }
 
@@ -781,7 +812,8 @@ public final class JoinBench {
                   --variant NAME:k=v,k=v  run every query under this variant too, alternating with the others on the
                                        same store (repeat it; the first is the reference; NAME: alone changes nothing)
                   --baseline FILE.csv  compare the p50 latencies with an earlier report
-                  --out DIR            where reports go (default tripatha.loader/target/bench)
+                  --out DIR            where reports go (default tripatha.loader/target/bench); bench.sh reads
+                                       this, --baseline and BENCH_ROCKSDB_PATH from the directory it is run in
                   --load-threads 8     writer threads for the one-time load
                 """;
 

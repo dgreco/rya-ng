@@ -51,17 +51,20 @@ mvn -pl tripatha.sail verify -Dit.test=InferenceIT -Dtest=none -Dsurefire.failIf
   - `tripatha.sail` tests use `RyaSailITBase`, which adds `newConf()`, `newDao(conf)` and `newStore(conf, inference)`.
   - `tripatha.test`'s own tests are the store-level ITs (`RyaStoreDAOIT`, `RangeParityIT`, `LabelParityIT`, `CounterIT`, …), run on the selected backend.
 - **The Accumulo test cluster** (`MiniAccumuloSingleton`): one MiniAccumuloCluster per JVM, with `rpc.bind.addr` set to the loopback address. Otherwise its servers advertise the machine's host name, and a name that stops resolving mid-run makes the manager halt the tablet server; the tests then hang until the fork times out.
-- **The RocksDB test backend** (`RocksDBTestBackend`): one database per JVM in a new temporary directory (`-Dtripatha.test.rocksdbPath` names another), kept open until the JVM exits. The backend has no accounts, so the labels a test grants are only remembered. It is the fastest way to run the ITs while working on anything above the storage SPI; run them on Accumulo and HBase before a PR.
+- **The RocksDB test backend** (`RocksDBTestBackend`): one database per JVM in a new temporary directory (`-Dtripatha.test.rocksdbPath` names another), kept open until the JVM exits. A shutdown hook then deletes the temporary directory; a named one is kept. The backend has no accounts, so the labels a test grants are only remembered. It is the fastest way to run the ITs while working on anything above the storage SPI; run them on Accumulo and HBase before a PR.
 - **The HBase test cluster** (`MiniHBaseSingleton`, recipe in BACKENDS-STUDY.md phase 0): ZooKeeper plus HBase in the test JVM, on the local file system (in-process HDFS clashes with Accumulo's Jersey 3), with `VisibilityController` and `hbase.security.authorization=true`. The process user is an HBase superuser, who sees every cell, so tests run as the normal account `tripathatest`. The coprocessor is on the cluster's classpath through `tripatha.test`'s dependencies. It binds to and advertises the loopback address: with two interfaces on one network, the host name can resolve to the wrong one mid-run. Its data goes under `target/test-data/<id>` (`createRootDir(true)`), which the shutdown hook deletes with `cleanupTestDir()`: a benchmark load leaves about 25 GB otherwise.
 - **Speed:** MAC tests cost about 5 s each, mostly creating the six Tripatha tables; HBase tests about the same (table deletes run in the background).
 - **Join benchmark** (`JoinBench` in `tripatha.loader`'s test sources, SCALE-STUDY.md M8): `tripatha.loader/bench.sh [--build] [--backend rocksdb|accumulo|hbase] [--profile] [--baseline FILE.csv]`.
   - It loads a generated store of 10M triples once. On RocksDB the store is kept in `tripatha.loader/target/bench/rocksdb` and reused.
+    - The store records a finished load itself: the table `bench_loaded` holds the dataset's fingerprint, written after the load's compaction. Deleting the store's directory is all a fresh load needs.
+    - A store without that record, or with another dataset, is deleted and loaded again.
   - It runs a fixed query suite and writes a Markdown and a CSV report to `tripatha.loader/target/bench`:
     - latencies;
     - the query thread's CPU time and the JVM's (the rest of a query's time is waiting);
     - scans, cells and storage time from the trace.
   - `--profile` adds where the CPU time goes (CPU samples only).
   - `--entity-index` keeps the entity index (O23): loaded with it, or built on a kept RocksDB store; without it, a kept store's index is dropped. `BENCH_ROCKSDB_PATH` names another RocksDB directory, for a fresh load.
+  - Relative paths (`--out`, `--baseline`, `BENCH_ROCKSDB_PATH`) are read from the directory `bench.sh` is run in.
   - It prints the tables' sizes on disk after the load (`TableAdmin.diskUsage`; HBase doesn't report them yet).
   - `--variant NAME:k=v,…` (repeatable) runs each query under each setting, alternating, on the same store, and flags a variant that returns different rows. Runs on different days are too noisy to compare (±40 % on the Accumulo test cluster), so prefer variants.
   - Use `--build` after changing code. Report a query-path optimization as a before/after pair of reports, or as variants of one run when it has a switch.

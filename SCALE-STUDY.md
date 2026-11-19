@@ -634,10 +634,10 @@ The reports are `rocksdb-20261119-072427` (10M, the whole suite), `bench-100m/ro
   - `type-limit` (`?p a o:Person` under `LIMIT 100`) keeps its single scan, since the limit is shorter than the setting.
 - **The entity index** stays faster where it applies (5.5 against 9.9 ms at 10M): it reads one term's postings shard by shard, and the store counts.
 - **At 10^12,** a class of billions read by one client is bound by what the client can absorb (M4), however it is sliced. So this is a constant factor, not a change of scale. Counts belong to the store (O23) or to the counters (O8).
-- **The 100M run began with an unintended reload** of the same dataset into the store kept from 2026-11-18. The benchmark keeps its "loaded" marker in its report directory, and another directory was given.
-  - Statements and index entries were rewritten unchanged, but every counter delta was added again, so its estimates are doubled.
-  - The store was uncompacted while the queries ran.
-  - None of these plans depends on the counters' scale, and the variants alternated on the same store.
+- **The 100M run began by loading the store again.** The benchmark kept its "loaded" marker in its report directory, and another directory was given. So it deleted the store kept from 2026-11-18 and loaded the same dataset afresh, in 35 minutes.
+  - The queries thus ran on a fresh, compacted load: its tables have the sizes of the day before, to the megabyte.
+  - An earlier version of this note said the counters were doubled. They weren't: the old tables were deleted before the load, as the run's log says.
+  - The record of a finished load is now in the store itself (table `bench_loaded`), and `bench.sh` reads relative paths from the directory it is run in.
 
 ---
 

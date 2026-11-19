@@ -1814,7 +1814,7 @@ sequenceDiagram
 
 - **Naming:** `*Test` classes are pure unit tests (surefire, `mvn test`). `*IT` classes need a cluster (failsafe, `mvn verify`).
 - **`MiniAccumuloSingleton`** and **`MiniHBaseSingleton`** start one in-process cluster per test JVM, on first use, and stop it with a shutdown hook. The HBase one runs `VisibilityController` with authorization on, and tests use it as a normal account, since the process user is a superuser who sees every cell.
-- **`RocksDBTestBackend`** opens one RocksDB database per test JVM in a temporary directory. It needs no cluster, so the ITs run on it in seconds.
+- **`RocksDBTestBackend`** opens one RocksDB database per test JVM in a temporary directory, deleted when the JVM exits. It needs no cluster, so the ITs run on it in seconds.
 - **`StoreITBase`** gives each test, on the backend of `-Dtripatha.test.backend` (`accumulo` by default, `hbase` or `rocksdb`):
   - a `Store`;
   - a unique table prefix, whose tables are deleted afterwards;
