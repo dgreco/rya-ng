@@ -55,7 +55,7 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
 | Statistics cells stored if totals of 1 are not written | *est.* about 0.5 | about 0.5 T |
 | Distinct terms (IRIs and literals) | 0.45 to 0.49 | up to about 450 billion |
 
-**Order of the work, and why** (re-ordered 2026-11-16: internal optimizations first, load work deferred):
+**Order of the work, and why** (re-ordered 2026-11-16: internal optimizations first, load work deferred; re-ordered again on 2026-11-19, items 10 and 11 and section 7):
 1. **Skip counters of 1 in the loader (O1).**
    - The planner already reads a missing counter as 1, so counters holding 1 carry no information. 90 % of the stored counters are such.
    - Measured: the cells sent per triple drop from 11.6 to 8.2, and the bytes from 1,065 to 871.
@@ -78,7 +78,7 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
    - O14 makes a selective value condition the driver of its star: `class-value` 3,964 → 151 ms on Accumulo, `class-value-int` 1,796 → 408 ms (section 4.8). With O25 a condition most values pass leaves the star to its constant patterns.
    - O24 reads the merges' lists as subjects only, in 4 slices of the subject space on threads of their own: `class-large` 109 → 67 ms on Accumulo, 94 → 30 ms on RocksDB (section 4.9).
    - O7a reads a long star pattern on its own, a whole class say, as a merge of one list, its subjects in slices: `class-scan` 2.8 times faster on RocksDB and 2.3 on Accumulo at 10M, 4.9 times on RocksDB at 100M (section 4.12).
-   - O23 keeps an optional entity index, sharded by subject, and the store intersects a star's lists in each shard: in Accumulo's tablet servers, with native seeks on RocksDB. Stars are 2.3 to 4 times faster on the benchmark, with 15 to 160 times fewer cells reaching the client. Counts, of a star or of one pattern such as a class's size, are 2.7 to 4.2 times faster on Accumulo, which returns one cell per shard. Value stars are 5 to 10 % slower. It costs 17 % more disk and about a fifth of the load rate (section 4.10). HBase still intersects on the client: a coprocessor endpoint when HBase at 10^12 is active (D14). Hash versus subject-range shards is open until M3.
+   - O23 keeps an optional entity index, sharded by subject, and the store intersects a star's lists in each shard: in Accumulo's tablet servers, with native seeks on RocksDB. Stars are 2.3 to 4 times faster on the benchmark, with 15 to 160 times fewer cells reaching the client. Counts, of a star or of one pattern such as a class's size, are 2.7 to 4.2 times faster on Accumulo, which returns one cell per shard. Value stars are 5 to 10 % slower. It costs 17 % more disk and about a fifth of the load rate (section 4.10). HBase still intersects on the client, until its coprocessor endpoint (phase 4, D14 (a)). Hash versus subject-range shards is open until M3.
 6. **A step up: 100M triples, bigger than memory (section 4.11).**
    - What scales as designed: selective queries don't depend on the store's size, and ranges, index searches and the entity index's stars grow with what they read or less.
    - Lookups that miss the page cache cost about 4 times more (19 against 4.8 µs on local NVMe). At 10^12 most do, so queries bound by lookups should be planned with that figure.
@@ -87,11 +87,13 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
    - Each engine measured alone, Tripatha as its native executable. Over WatDiv's 100 queries at about 10M triples, Tripatha has the lowest geometric mean (3.8 ms), then Oxigraph (4.0) and QLever (10.1).
    - Small queries: Tripatha and Oxigraph are close, within half a millisecond on 9 of the 17 smaller templates. QLever pays 20 to 70 ms on selective stars and snowflakes.
    - Large intermediate results: QLever is 3 to 11 times faster than Tripatha (C3 346 ms against 3,872, C2 37 against 121). It reads IDs from a dictionary and merges whole sorted lists, which is where O11 and O22 to O24 point.
+   - **The same day, after O16, O17 and the native executable's heap and build (sections 4.14 and 4.15):** 2.27 ms against Oxigraph's 3.63 and QLever's 9.49, the complex queries 67.9 ms against QLever's 66.3. QLever still leads on C2 and C3, which O26 targets.
 8. **IRI prefix codes: measured (M9), and deferred.**
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
 9. **Whole-table operations and planning at scale (O4 to O6, O8, O9).**
-10. **Deferred:** the load work (O2, O3, O10, M2, M6), and with it the 1T runs. Dictionary encoding (O11) and an analytics engine (O12) stay conditional.
+10. **Next (2026-11-19): the load work,** no longer deferred, since it blocks 1T outright: the loader at 1T (O2), the bulk spikes (M6), then the bulk builds of Accumulo and RocksDB (O3) and of HBase (O10).
+11. **Then queries in the servers, on every backend:** HBase's coprocessor endpoint (D14 (a)), then patterns whose object is never used, counted in the servers (O26). Every optimization must hold on Accumulo, HBase and RocksDB at 10^12. Whole-table operations and planning at scale follow (item 9), then the fixed cost per query (M14). Dictionary encoding (O11) and an analytics engine (O12) stay conditional.
 
 **Dictionary encoding comes late on purpose (R1, section 5.1).**
 - The statement tables send 446 B per triple (0.5 PB at 1T), but compress about 7× on disk.
@@ -105,19 +107,19 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | # | Decision | Options | Recommendation | Decided |
 |---|---|---|---|---|
 | D1 | Which queries must work at 1T | (a) selective: lookups, entity stars, batched joins, search, approximate counts; (b) also analytics over the whole store (large scans, exact aggregates) | (a) as the target. (b) only through a separate engine (O12): no single process can stream a large share of 1T rows interactively | 2026-11-16: **"all entities matching X"**: entities of large classes selected by several properties and values. That is (a) plus large stars. It puts O22 and O23 on the plan, and makes O14 (D12) matter more |
-| D2 | How the data arrives | (a) one bulk build, then small online updates; (b) a continuous stream at high rate | (a). The online path stays for updates; (b) would need the online path at about 1M triples/s, which nobody has measured (section 5.4) | |
-| D3 | Backend for the first 1T run | Accumulo, HBase | Accumulo. Labelled RFiles import directly, and bulk counters sum through the existing combiner. HBase needs label ordinals in its files and unique counter timestamps (section 6.2) | |
+| D2 | How the data arrives | (a) one bulk build, then small online updates; (b) a continuous stream at high rate | (a). The online path stays for updates; (b) would need the online path at about 1M triples/s, which nobody has measured (section 5.4) | 2026-11-19: **(a)**, with the plan of section 7 |
+| D3 | Backend for the first 1T run | Accumulo, HBase | Accumulo. Labelled RFiles import directly, and bulk counters sum through the existing combiner. HBase needs label ordinals in its files and unique counter timestamps (section 6.2) | 2026-11-19: **Accumulo first.** Every optimization must still hold on all three backends at 1T, so HBase's bulk build (O10) follows in the same phase |
 | D4 | Source data | (a) the synthetic loader; (b) a real dataset | Both: (a) for the benchmark ladder, (b) for acceptance. (b) must come as N-Triples or N-Quads, which split by line; Turtle can't be parsed in parallel | |
-| D5 | What sorts the bulk build | (a) the loader itself: partitioned sorted runs, then one merge per tablet; (b) Spark | (a), unless M6 shows Spark runs Tripatha's JDK 25 code. That is unproven, and (a) reuses the loader's parts, progress and resume | |
-| D6 | Counters with a total of 1 | (a) don't write them: the per-subject families in the loader (O1), every family but `p` in a bulk build (O3); (b) write every counter | (a): the same estimates for a load into an empty store (section 6.3) | |
-| D7 | The hashed row layout (`tbl.hashprefix`) | keep, deprecate | deprecate: it doesn't do what it is kept for (section 5.3) | |
+| D5 | What sorts the bulk build | (a) the loader itself: partitioned sorted runs, then one merge per tablet; (b) Spark | (a), unless M6 shows Spark runs Tripatha's JDK 25 code. That is unproven, and (a) reuses the loader's parts, progress and resume | 2026-11-19: **(a)**, unless M6 shows Spark runs Tripatha's JDK 25 code |
+| D6 | Counters with a total of 1 | (a) don't write them: the per-subject families in the loader (O1), every family but `p` in a bulk build (O3); (b) write every counter | (a): the same estimates for a load into an empty store (section 6.3) | 2026-11-19: **(a)** |
+| D7 | The hashed row layout (`tbl.hashprefix`) | keep, deprecate | deprecate: it doesn't do what it is kept for (section 5.3) | 2026-11-19: **deprecate** (O9, phase 6) |
 | D8 | Dropping a graph at 1T | (a) a graph-first table (`gspo`), optional like the indexes, so a drop costs the graph's size; (b) graph tombstones hidden by scan and compaction filters on every backend; (c) accept a full-table scan per drop | (a) if graphs are the unit you load and replace, (c) otherwise. (b) puts a filter on every read path of every backend | |
 | D9 | Dictionary encoding | (a) decide after M5, on the criteria of section 6.5; (b) start now | (a) | |
-| D10 | Disks | NVMe SSD, HDD | NVMe for interactive use: at 1T most lookups miss the cache, and each miss is one read | |
+| D10 | Disks | NVMe SSD, HDD | NVMe for interactive use: at 1T most lookups miss the cache, and each miss is one read | 2026-11-19: **NVMe** |
 | D11 | IRI prefix codes in the stored keys | (a) decide after M9, on the criteria of section 6.9; (b) start now; (c) never | (a), and M9 says **not now**: −4 to −5 % on disk is far below the bar. The cache gain (−25 to −35 %) is worth revisiting if a cluster shows lookups bound by cache misses (M3) | |
 | D12 | Datatype markers for O14 (section 6.7) | (a) write them on every add from now on, flag new stores, rebuild old stores with O5; (b) no markers, so no O14 | (a) if range filters on numbers and dates matter to the workload. They cost one more `eval` cell per single-statement insert, cover new stores only until a rebuild, and forbid writes from older versions into flagged stores | 2026-11-16: **(a), with a storage-version check.** The workload's value conditions need O14. The DAO gets a version check: the markers raise the storage version, and a DAO refuses to write to a store whose version is newer than its own (older stores stay writable). Today it writes the version when missing and never checks it. A rebuild command for older stores comes with O5. O14 comes after O22 |
 | D13 | The subject-partitioned table of O23 | (a) an optional table like the text and geo indexes, with Tripatha server code on the tablet servers (an Accumulo iterator jar, an HBase coprocessor); (b) none, so stars stay with O22 on the client | decide after O22 is measured: (a) only if the client's intersection is the limit. It costs about another copy of `po` on disk and in writes, and an iterator jar to deploy | 2026-11-17: **(a).** At 10M the client is not the limit (`class-large` merges 247,677 cells in 137 ms on Accumulo). At 10^12 it is: the lists of large classes and common values grow about 10^5 times, so `class-large`'s merge would read about 25 billion cells, some 4 hours on one thread, every cell crossing to one client, and `class-count` the same to return one number. In the servers each shard is intersected in parallel, with seeks that skip what can't match, and only matches or counts come back. It pays for counts, `LIMIT`s and intersections much smaller than their lists. **How:** optional and off by default, like the text and geo indexes; built after O25 and O24; Accumulo first, the same shards on local threads for RocksDB, HBase after. The benchmark gets counts and selective intersections of long lists; proving the gain at scale needs M3 and a larger load, deferred with the load work |
-| D14 | How HBase intersects the entity index (O23, phase 4) | (a) a coprocessor endpoint on each region server doing what the Accumulo iterator does; (b) a semi-join: the shortest term's subjects per shard, then a seeking filter checks only those in each next term; (c) defer: HBase keeps the client intersection | An HBase filter sees a shard's cells as one stream ordered by term, so it can't leapfrog between the terms' lists, and it can't add a cell with a match's count without buffering the whole row. (a) is the right design but needs protobuf service definitions in the build; (b) still moves the shortest list whole | 2026-11-18: **(c), defer,** until phase 5's measurements; then, the same day, **(a), when HBase at 10^12 is an active target** (the milestone is deferred with the load work). The client intersection is about as fast as no index (section 4.10), so until then the index is to be left off on HBase (README). (b) is out: it moves the shortest list whole, and for stars whose every list is long that is the 10^12 problem D13 is about |
+| D14 | How HBase intersects the entity index (O23, phase 4) | (a) a coprocessor endpoint on each region server doing what the Accumulo iterator does; (b) a semi-join: the shortest term's subjects per shard, then a seeking filter checks only those in each next term; (c) defer: HBase keeps the client intersection | An HBase filter sees a shard's cells as one stream ordered by term, so it can't leapfrog between the terms' lists, and it can't add a cell with a match's count without buffering the whole row. (a) is the right design but needs protobuf service definitions in the build; (b) still moves the shortest list whole | 2026-11-18: **(c), defer,** until phase 5's measurements; then, the same day, **(a), when HBase at 10^12 is an active target** (the milestone is deferred with the load work). The client intersection is about as fast as no index (section 4.10), so until then the index is to be left off on HBase (README). (b) is out: it moves the shortest list whole, and for stars whose every list is long that is the 10^12 problem D13 is about. 2026-11-19: **(a), now** (phase 4): every optimization must hold on all three backends at 10^12, so HBase at 10^12 is an active target. One endpoint counts ranges for O26 and intersects the entity index |
 
 **Where to read what:**
 
@@ -141,16 +143,16 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | # | Optimization | Closes | Gain | Depends on | Phase | Status |
 |---|---|---|---|---|---|---|
 | O1 | **Loader: don't write per-subject counters of 1** (`s`, `sp`, `so`), summed per block. Includes reading a missing counter as 1 in the inference sum, in `verify` and in `LoaderIT` (section 6.1) | R5 | measured (`dry-run` at 1T, both indexes): cells sent per triple 11.6 → 8.2 (−29 %), bytes 1,065 → 871 (−18 %), `eval` 348 → 154 B. *est.* −20 % on disk (about 100 TB less at 1T with 3 replicas) | — | 0 | Done (PR #15) |
-| O2 | **Loader at 1T:**<br>• `--triples 1T`<br>• `prepare --tablet-size`, planning splits by size instead of 4 per server<br>• `dry-run` reports stored counter cells and their share of 1s | R8, R9 | tablets near the target size from the start, instead of about 50 GB tablets splitting online | — | later | Deferred (2026-11-16: internal optimizations first) |
-| O3 | **Bulk build on Accumulo and RocksDB:**<br>• sorted files per tablet, then an import<br>• every counter of 1 left out except `p`<br>• the DAO's guards in the writer<br>• input from the generator or from N-Triples/N-Quads files<br>(section 6.2) | R4, R5, R11 | no write-ahead log, memory tables or compactions. *est.* counters about 5.4 → 0.5 stored cells per triple, 160 → about 115 B per triple on disk | O1, M6 | later | Deferred (2026-11-16: internal optimizations first) |
-| O4 | **Graph drops in time proportional to the graph** (D8) | R6 | a drop reads the graph, not the 5 cells per triple of every table (about 5T cells at 1T) | D8 | 3 | Not started |
-| O5 | **Index rebuilds through the bulk build; purge by recreating tables** when the caller sees everything | R6 | a rebuild becomes a batch job; such a purge becomes constant time | O3 | 3 | Not started |
-| O6 | **Text planning from per-term posting counts** | R7 | an AND is driven by its rarest word | — | 3 | Not started |
+| O2 | **Loader at 1T:**<br>• `--triples 1T`<br>• `prepare --tablet-size`, planning splits by size instead of 4 per server<br>• `dry-run` reports stored counter cells and their share of 1s | R8, R9 | tablets near the target size from the start, instead of about 50 GB tablets splitting online | — | 3 | Next: phase 3, item 1 (2026-11-19: the load work is no longer deferred) |
+| O3 | **Bulk build on Accumulo and RocksDB:**<br>• sorted files per tablet, then an import<br>• every counter of 1 left out except `p`<br>• the DAO's guards in the writer<br>• input from the generator or from N-Triples/N-Quads files<br>(section 6.2) | R4, R5, R11 | no write-ahead log, memory tables or compactions. *est.* counters about 5.4 → 0.5 stored cells per triple, 160 → about 115 B per triple on disk | O1, M6 | 3 | Planned: phase 3, after M6 |
+| O4 | **Graph drops in time proportional to the graph** (D8) | R6 | a drop reads the graph, not the 5 cells per triple of every table (about 5T cells at 1T) | D8 | 5 | Not started |
+| O5 | **Index rebuilds through the bulk build; purge by recreating tables** when the caller sees everything | R6 | a rebuild becomes a batch job; such a purge becomes constant time | O3 | 5 | Not started |
+| O6 | **Text planning from per-term posting counts** | R7 | an AND is driven by its rarest word | — | 5 | Not started |
 | O7a | **Parallel reads of one large range, constant object:** a star pattern on its own (`?x a :C`: alone, counted, or driving lookups) read as a merge of one list, its subjects in slices at `spo`'s split points (section 6.6) | R2 | every server holding the list reads at once, and the client decodes no statements | O24 | 1 | Done: `query.join.mergesingle` (10,000). A whole class returned is 2.8 times faster on RocksDB and 2.3 on Accumulo at 10M, 4.9 times on RocksDB at 100M; counted without the entity index, 2.1 to 4.3 times; with a lookup per member, 13 to 16 % on RocksDB and nothing on Accumulo, where the lookups are the time (section 4.12) |
 | O7b | **Parallel reads of one large range, variable object:** `?s :p ?o` (a whole predicate, such as a filter no index covers), cut at the table's own split points, statements decoded on the slice threads (section 6.6) | R2 | every server holding the range reads at once | — | 1 | Not started: later, when a workload needs it (decided 2026-11-19) |
-| O8 | **Approximate counts from the counters** (class sizes, like `stats:approxSize`) | R12 | a count in a few reads instead of a scan | — | 3 | Not started |
-| O9 | **Deprecate `tbl.hashprefix`** | R3 | removes a layout that costs 33 B per row and spreads nothing | D7 | 3 | Not started |
-| O10 | **HBase bulk build:** label ordinals in the files, counter timestamps per import | R4, R10 | as O3, on HBase | O3, M6 | later | Deferred (2026-11-16: internal optimizations first) |
+| O8 | **Approximate counts from the counters** (class sizes, like `stats:approxSize`) | R12 | a count in a few reads instead of a scan | — | 5 | Not started |
+| O9 | **Deprecate `tbl.hashprefix`** | R3 | removes a layout that costs 33 B per row and spreads nothing | D7 | 6 | Not started |
+| O10 | **HBase bulk build:** label ordinals in the files, counter timestamps per import | R4, R10 | as O3, on HBase | O3, M6 | 3 | Planned: phase 3, after O3 |
 | O11 | **Dictionary encoding**, only if M5 says go (section 6.5) | R1 | to be measured | M5, D9 | later | Not started |
 | O12 | **An analytics engine and pushdown**, only if D1 (b) (section 6.6) | R2 | whole-store analytics | D1 | later | Not started |
 | O13 | **`STRSTARTS` as a prefix range:** a filter `STRSTARTS(?o, "abc")` on a pattern's object narrows its scan to the objects whose data starts with `abc`, with no type check; the filter stays. Not `STRSTARTS(STR(?o), …)`: numbers, dates and booleans aren't stored as their text (section 6.7, ARCH.md 12.8) | R2 | measured (M8): `prefix` 92 → 0.7 ms on RocksDB and 72 → 2.2 ms on Accumulo, 133,579 → 522 cells. `query.prefixranges` turns it off | M8 | 1 | Done (PR #15) |
@@ -163,9 +165,10 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O20 | **The object-type check as a row suffix:** `ScanSpec.rowSuffix`, set by the query engine when the type is the only row condition. RocksDB compares bytes. Accumulo and HBase filter with the equivalent linear `[\s\S]*` and the quoted suffix, instead of three open groups. It also fixes datatype IRIs being pasted into the expression unquoted, which let a `.` in a custom datatype IRI match any character | R2 | measured with O19, above. On Accumulo it means less tablet-server CPU per type-checked cell, not measured separately | — | 1 | Done (PR #15) |
 | O21 | **One range per subject:** when a window looks up two or more links of the same subject in `spo`, it reads the subject's range once and lets `BatchLookup`'s exact matching keep the cells asked for. A batch whose subject ranges return more than 64 cells per subject plus 1,024 is re-read one range per link (section 6.8) | R2 | measured (M8): `star-in` 17,594 → 8,799 ranges but 25,445 → 103,265 cells; `star-optional` 7,601 → 2,537 ranges, 9,345 → 28,772 cells. Accumulo: no change beyond noise. RocksDB: +64 % and +49 %. So `query.join.subjectranges` is **off by default**. Untested hypothesis: on a cold cache a seek is a block read and the extra cells are in the same block (M3) | M8 | 1 | Built, off by default |
 | O22 | **Merge joins of subject-sorted ranges:** for a star with constant objects (`?x a :Person ; :worksFor :Acme ; :nationality :IT`), each pattern is a `po` range sorted by subject. Stream them side by side and intersect, instead of one lookup per row. The subject space is sliced so several slices are intersected at once (section 6.10) | R2 | measured on M10's class stars (section 4.7): 3 to 10 times faster than a lookup per driver row on the Accumulo test cluster, `class-large` 1,446 → 137 ms | M10 | 1 | Done: `SubjectMergeJoin`, on by default with a ratio per backend (35 Accumulo, 20 HBase, 8 RocksDB); measured in section 4.7. Slices in parallel and subject-only reads are O24 |
-| O23 | **Stars evaluated in the servers:** an optional subject-partitioned table, maintained like an index. A shard holds, per predicate and object, the sorted subjects of its share of the store. A server-side iterator (Accumulo) or coprocessor (HBase) intersects a star's lists inside every shard in parallel, and returns only the matching subjects (section 6.10) | R2 | the distributed join for "all entities matching X" (D1). To be measured against O22 | O22, D13 | 2 | Done on Accumulo and RocksDB (PR #17): the entity index (`index.entity`, storage version 1.2.0), read shard by shard by merge joins and intersected by the store (`Store.intersect`), in Accumulo's tablet servers (`tripatha.accumulo.iterators`) and with RocksDB's native seeks. The store also counts a star, or one pattern (a class's size). On the benchmark stars are 2.3 to 4 times faster, counts 2.7 to 4.2 times on Accumulo (one cell per shard back), `count-class` 4 times; value stars 5 to 10 % slower. The index costs 17 % more disk and a fifth of the load rate (section 4.10). HBase intersects on the client until a coprocessor endpoint (D14) |
+| O23 | **Stars evaluated in the servers:** an optional subject-partitioned table, maintained like an index. A shard holds, per predicate and object, the sorted subjects of its share of the store. A server-side iterator (Accumulo) or coprocessor (HBase) intersects a star's lists inside every shard in parallel, and returns only the matching subjects (section 6.10) | R2 | the distributed join for "all entities matching X" (D1). To be measured against O22 | O22, D13 | 2 | Done on Accumulo and RocksDB (PR #17): the entity index (`index.entity`, storage version 1.2.0), read shard by shard by merge joins and intersected by the store (`Store.intersect`), in Accumulo's tablet servers (`tripatha.accumulo.iterators`) and with RocksDB's native seeks. The store also counts a star, or one pattern (a class's size). On the benchmark stars are 2.3 to 4 times faster, counts 2.7 to 4.2 times on Accumulo (one cell per shard back), `count-class` 4 times; value stars 5 to 10 % slower. The index costs 17 % more disk and a fifth of the load rate (section 4.10). HBase intersects on the client until its coprocessor endpoint, phase 4 (D14) |
 | O24 | **Merge joins, part 2:** intersect a star's lists in slices of the subject space on several threads at once (cut at `spo`'s tablet splits or at sampled subjects), and read only each cell's subject instead of decoding the whole statement (section 6.10) | R2 | O22 reads one list per pattern on one thread, and decodes every cell | O22 | 1 | Done: subjects read as bytes, no statement decoding; slices cut at `spo`'s split points (`TableAdmin.splitRows`), up to `query.join.mergeslices` (4) on threads of their own. With 4 slices merges are 1.6 to 2 times faster on Accumulo and HBase and 3 times on RocksDB (section 4.9). At 100M triples the slices stalled when no lookups followed: 4 were 11 % faster than 1. Since 2026-11-18 they share one queue then: 3.7 times (section 4.11) |
 | O25 | **A real estimate for a value range:** count the range's cells up to a cap (about 10,000) when its pattern is in a join, and use the count when the range is shorter, or assume most of the predicate when it isn't. Only the join order depends on it, so a pattern on its own needs none | R2 | O14's estimate is a fixed tenth of the predicate: `class-value-wide` (`?v > 0`, 91 % pass) is 8.2 times slower on Accumulo with it, 4.1 on RocksDB and 3.6 on HBase (section 4.8) | O14 | 1 | Done: counted up to `query.valueranges.count` (10,000) for a pattern in a join. `class-value-wide` is back within 1 to 6 % of the merge plan, and the selective stars keep their gains; a condition between the cap and the star's lists (`class-value-mid`) gets the merge plan, 1.2 to 2.75 times slower than the range would be (section 4.8). Since 2026-11-18 the count stops at the shortest other pattern of the join, at most 1,000,000 cells. At 100M the fixed cap had lost `class-value-int` its plan (510 → 224 ms with the fix); `class-value-mid` now gets the range plan, 12 to 39 % faster at 10M; a wide condition pays 1 to 7.5 % for the longer count (section 4.11) |
+| O26 | **Patterns whose object is never used, counted in the servers:** a pattern whose object variable appears once and isn't returned (`SELECT ?s WHERE { ?s :p ?o … }`) only decides how many times a row comes back. Its lookups ask the store for one count per range, under the query's labels and the graph condition, instead of reading and decoding every match; the joins repeat the row that many times, and with `DISTINCT` existence is enough. Accumulo counts with an option of its iterators, RocksDB with native iteration that copies no values, HBase with the coprocessor endpoint of D14 (a client count where it isn't deployed). Never from the `eval` counters: they leave out 1s and can drift | R2 | one cell per range crosses the network instead of every match (about 10 times fewer for `?s :friendOf ?f`). On WatDiv C1 to C3, where QLever leads, decoding and row building were 29 % of C3's CPU (section 4.14) | D14 | 4 | Not started |
 
 ### 2.2 Measurements
 
@@ -174,26 +177,27 @@ All on a real cluster with NVMe disks, unless the row says otherwise.
 | # | Measurement | Feeds | Status |
 |---|---|---|---|
 | M1 | **Bytes on disk per table**, at 1B and 10B triples on Accumulo, and for a real dataset of at least 1B (D4). Replaces the README's test-load figure | section 4, cluster size, O3 | Not started |
-| M2 | **Ingest on the current write path:** triples/s against the number of servers, and the compaction backlog. Also BACKENDS-STUDY.md's benchmark B0, which never ran | D2, section 4.5 | Deferred (2026-11-16: load work later) |
+| M2 | **Ingest on the current write path:** triples/s against the number of servers, and the compaction backlog. Also BACKENDS-STUDY.md's benchmark B0, which never ran | D2, section 4.5 | Planned: phase 3, on a cluster (2026-11-19) |
 | M3 | **The query suite:** lookups, star and chain joins, entity prefetch, text, geo, `stats:approxSize`, inference. p50 and p99, cold and warm, with scans and cells per query from the trace. Also `query.join.subjectranges` on and off, on a cold cache (O21) | the 1T run's acceptance | Not started |
 | M4 | **Single-client scan rates**, Scanner and BatchScanner | R2, O7, D1 | Not started |
 | M5 | **The dictionary spike,** offline, on a 1B-triple sample (section 6.5) | D9, O11 | Not started |
-| M6 | **Bulk spikes:**<br>• Accumulo RFiles with labels and counters, written from JDK 25 and imported into a live table (with a `LoadPlan`)<br>• RocksDB SST files with `merge` entries, ingested into a family that already has counters<br>• HBase HFiles with visibility tags through the expression resolver, and the same counter file imported twice in coprocessor mode<br>• Spark executors running `tripatha.api` code on JDK 25 | O3, O10, D5 | Deferred (2026-11-16: load work later) |
-| M7 | **Maintenance at 10B:** `DROP GRAPH` of a small and of a large graph, graph sizes, an index rebuild | O4, O5 | Not started |
+| M6 | **Bulk spikes:**<br>• Accumulo RFiles with labels and counters, written from JDK 25 and imported into a live table (with a `LoadPlan`)<br>• RocksDB SST files with `merge` entries, ingested into a family that already has counters<br>• HBase HFiles with visibility tags through the expression resolver, and the same counter file imported twice in coprocessor mode<br>• Spark executors running `tripatha.api` code on JDK 25 | O3, O10, D5 | Next: phase 3, item 2 (2026-11-19) |
+| M7 | **Maintenance at 10B:** `DROP GRAPH` of a small and of a large graph, graph sizes, an index rebuild | O4, O5 | Not started (with phase 5) |
 | M8 | **A local join benchmark,** no cluster needed: a fixed query suite over a generated store of about 10M triples, on RocksDB and the Accumulo test cluster. Star and chain joins, entity prefetch, OPTIONAL, `LIMIT`, value and prefix filters, text and geo. Reports p50 and p99, a profile of where the time goes, and scans and cells per query from the trace. Checked in, so each optimization reports before and after | O13 to O17 | Done: `tripatha.loader/bench.sh` (`JoinBench`); baseline in section 4.6. Follow-ups: report CPU samples apart from threads blocked in native code, and compare settings back to back in one run (`--conf` variants) |
 | M9 | **IRI prefix codes, measured offline:** the generator's `spo`, `po` and `osp` rows written to RFiles as today and with prefix codes. Compares bytes sent, compressed size, and scan and decode time (section 6.9) | D11, O18 | Done 2026-11-16: results in section 6.9 |
 | M10 | **Class-star queries in the join benchmark:** entities of a large class selected by two to four constant properties, with and without a value filter and with attributes fetched. For example, people of one nationality working for one company, and observations of one property above a value. They measure O14, O22 and O23 | O14, O22, O23 | Done: seven `class-*` queries; baseline in section 4.7 |
 | M11 | **Against other engines, on a standard benchmark:** WatDiv's 20 basic templates at about 10M triples, on Tripatha's endpoint over RocksDB, QLever and Oxigraph, over HTTP, with the same data and checked rows (`compare.sh`, tripatha.loader/README.md) | The endpoint's cost per query, O11, O22 to O24 | Done: section 4.13 |
 | M12 | **Where a query's time goes, in-process:** `QueryProfile` (tripatha.loader test sources) runs one query on a RocksDB store and splits its time between reading the rows and writing them, the store's scans by reason, and JFR CPU samples. Applied to WatDiv's complex queries | O16, O17, O11 | Done: section 4.14 |
 | M13 | **The native executable's collector and build:** its heap settings, and native-image's `-O3`, `-march=native` and profile-guided optimization, on WatDiv over HTTP against the JVM on the same path | M11 | Done: section 4.15 |
+| M14 | **The fixed cost per query:** where a small query's time goes between the request and its first scan, on the JVM endpoint that Accumulo and HBase use and on the native executable, over HTTP with warm JITs (Oxigraph answers 7 small WatDiv templates 0.02 to 1.9 ms sooner) | phase 6 | Not started |
 
 ### 2.3 Milestones
 
 | Milestone | Needs | Exit | Status |
 |---|---|---|---|
-| 10B bulk build on Accumulo | O3 | the build is measured, with a time model to 1T | Deferred (2026-11-16) |
-| 1T on Accumulo | O1 to O9, M1 to M7 | a report against the extrapolations of M1 to M4, with every gap explained (phase 3) | Deferred (2026-11-16) |
-| 1T on HBase | O10 | the same report on HBase | Deferred (2026-11-16) |
+| 10B bulk build on Accumulo | O3 | the build is measured, with a time model to 1T | Planned: phase 3 (2026-11-19) |
+| 1T on Accumulo | O1 to O9, M1 to M7 | a report against the extrapolations of M1 to M4, with every gap explained | Planned: after phases 3 to 5 and the cluster measurements |
+| 1T on HBase | O10, D14 | the same report on HBase | Planned: after phases 3 to 5 and the cluster measurements |
 
 ---
 
@@ -1436,14 +1440,14 @@ The target workload (D1) is entities of large classes selected by several proper
   1. The table and its maintenance, and merge joins reading it shard by shard on the client: correct everywhere, not yet faster (done).
   2. The intersection in Accumulo's servers: an iterator in a jar of its own, with the client intersection as the fallback when it isn't installed (done).
   3. RocksDB: the shards intersected with native seeks on local threads (done).
-  4. HBase: a coprocessor endpoint doing what the Accumulo iterator does, built when HBase at 10^12 is an active target (D14). A seeking filter can't do it, and a semi-join moves the shortest list whole.
+  4. HBase: a coprocessor endpoint doing what the Accumulo iterator does, built in phase 4 (D14 (a), 2026-11-19). A seeking filter can't do it, and a semi-join moves the shortest list whole.
   5. Counts in the servers, benchmark queries it should win (counts, selective intersections of long lists), and the measurements: query times, and the write and storage cost (done, section 4.10).
 
 ---
 
 ## 7. Plan
 
-Re-ordered on 2026-11-16: internal optimizations first, load work deferred. Each phase ends green on `mvn clean verify`, and on the RocksDB and HBase IT runs. Each can be merged on its own.
+Re-ordered on 2026-11-16: internal optimizations first, load work deferred (phases 0 to 2). Re-ordered again on 2026-11-19: the load work first, then work in the servers of every backend (phases 3 to 6). Each phase ends green on `mvn clean verify`, and on the RocksDB and HBase IT runs. Each step is merged on its own before the next starts.
 
 ### Phase 0: counters and the benchmark
 
@@ -1466,7 +1470,7 @@ In this order, each measured on M8 before and after (on RocksDB and on the Accum
 7. **O14**, comparisons as value ranges, with the datatype markers and the storage-version check (D12), and **O25**, their counted estimate: done;
 8. **O16** and **O17**, only if the split profile shows where the Accumulo joins' time goes;
 9. **O7a**, parallel reads of one large range with a constant object (a class on its own): done; **O7b**, a whole predicate: later;
-10. **O23**, stars evaluated in the servers (D13): done on Accumulo and RocksDB, with counts in the servers and benchmark queries it wins (section 4.10); on HBase a coprocessor endpoint when HBase at 10^12 is active (D14).
+10. **O23**, stars evaluated in the servers (D13): done on Accumulo and RocksDB, with counts in the servers and benchmark queries it wins (section 4.10); on HBase a coprocessor endpoint, now phase 4 (D14 (a), 2026-11-19).
 
 **Exit:**
 - every change has an M8 report;
@@ -1477,35 +1481,47 @@ In this order, each measured on M8 before and after (on RocksDB and on the Accum
 
 M9 ran on 2026-11-16: −4 to −5 % on disk, −25 to −35 % in the cache (section 6.9). D11's recommendation is not now. O18 is deferred until a cluster measurement (M3) shows lookups bound by cache misses.
 
-### Phase 3: whole-table operations and planning at scale
+### Re-ordered on 2026-11-19: every backend, at 1T
 
-- **O4**, graph drops per D8;
-- **O5**, index rebuilds and purge;
-- **O6**, text planning from posting counts;
-- **O8**, approximate counts;
-- **O9**, deprecating `tbl.hashprefix`.
+Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, not only on the local RocksDB benchmark: designs above the storage SPI, or a server-side path per backend with a client fallback, and their ITs on all three. The load work is no longer deferred, since without it 1T can't be loaded. The decisions taken with this plan are in section 1 (D2, D3, D5, D6, D7, D10, D14); D8 waits for item 7.
+
+### Phase 3: the load at 1T
+
+1. **O2**, the loader at 1T: `--triples 1T`, split points by target tablet or region size, a progress file that isn't rewritten whole at every commit, and `dry-run` reporting stored counter cells.
+2. **M6**, the bulk spikes, all local: labelled Accumulo RFiles with counters into a live table, RocksDB SST files with merge entries, HBase HFiles with visibility tags and a counter file imported twice, and Spark on JDK 25 (D5).
+3. **O3**, the bulk build on Accumulo and RocksDB: sorted files per tablet, every counter of 1 but `p` left out, the DAO's guards in the writer, checked cell by cell against the online path.
+4. **O10**, the bulk build on HBase: label ordinals in the files, unique counter timestamps per import.
+
+**Exit:** the 10B bulk build on Accumulo measured, with a time model to 1T; the bulk builds of all three backends equal cell by cell to the online path.
+
+### Phase 4: queries in the servers, on every backend
+
+5. **HBase's coprocessor endpoint** (D14 (a)): one protobuf service on each region that counts ranges under the caller's labels and the graph condition, then intersects the entity index's lists as Accumulo's iterator does. The caller's labels are enforced and tested as `LabelParityIT` tests scans. A cluster without the coprocessor jar falls back to the client.
+6. **O26**, patterns whose object is never used, counted in the servers: the optimizer and the joins on every backend, the counts in Accumulo's iterators, RocksDB's native iteration and item 5's endpoint.
+
+**Exit:** answers identical with O26 on and off on every backend, including `OPTIONAL`, `DISTINCT`, labels and graphs; the entity index worth turning on for HBase (README).
+
+### Phase 5: whole-table operations and planning at scale
+
+7. **O4**, graph drops per D8 (to be decided then);
+8. **O5**, index rebuilds through the bulk build, and purge by recreating tables;
+9. **O8**, approximate counts;
+10. **O6**, text planning from posting counts.
 
 **Exit:**
 - an AND of a common and a rare word is driven by the rare one;
 - a graph drop costs the graph's size (with D8 (a)).
 
-### Later
+### Phase 6: smaller wins
 
-**Load work, deferred on 2026-11-16:**
-- **O2:** the loader at 1T;
-- **O3 and O10:** the bulk build, with its spikes (M6);
-- **M2:** the ingest measurements;
-- **the 1T milestones.**
+11. **M14**, the fixed cost per query, on the JVM endpoint and the native executable; then what it shows.
+12. **O9**, deprecating `tbl.hashprefix` (D7).
 
-Sections 6.2 and 6.3 keep their designs.
+### On a cluster, and conditional
 
-**Measurements on a real cluster:**
-- **M1, M3 and M4** whenever a cluster is available;
-- **M7**, with phase 3.
-
-**Conditional:**
-- **dictionary encoding (O11)**, after M5;
-- **an analytics engine (O12)**, only for D1 (b).
+13. **Measurements on a real cluster** with NVMe disks (D10), Accumulo first (D3): M1, M3 and M4, then M2, and M7 with phase 5. They settle the Accumulo and HBase defaults of O16 (lookup threads, fetching ahead), O21 on a cold cache, hash or subject-range shards for the entity index, and O18.
+14. **M5**, the dictionary spike on a 1B-triple sample (about 400 GB of disk), then D9 and perhaps O11.
+15. **On demand:** O7b when a workload needs it; O12 isn't needed under D1 (a); O18 after M3.
 
 ---
 
