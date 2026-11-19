@@ -72,11 +72,12 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
    - **Done meanwhile:**
      - the benchmark's two blind spots (M8): it now reports CPU apart from waiting, and compares settings within one run. It shows Accumulo joins are bound by the servers, not the client;
      - the type check without a regex (O20) and RocksDB key decoding (O19): on RocksDB, range scans are 23 to 31 % faster and joins 13 to 19 %.
-   - **Then,** if the split profile supports them: more lookups in flight (O16), less client work per cell (O17), and parallel reads of one large range (O7).
+   - **Then,** if the split profile supports them: more lookups in flight (O16), less client work per cell (O17), and parallel reads of one large range (O7: a class on its own is done, item 5).
 5. **"All entities matching X" (D1): class stars in the benchmark (M10), merge joins (O22), value ranges (O14) and stars in the servers (O23) done.**
    - O22 reads a star's constant patterns as subject-sorted `po` ranges and intersects them. On the Accumulo test cluster that is 3 to 10 times faster than one lookup per driver row: `class-large` 1,446 → 137 ms, `class-2` 267 → 47 ms. On RocksDB, where a lookup is cheap, it gains only for lists of similar lengths, so the ratio that decides is per backend (section 4.7).
    - O14 makes a selective value condition the driver of its star: `class-value` 3,964 → 151 ms on Accumulo, `class-value-int` 1,796 → 408 ms (section 4.8). With O25 a condition most values pass leaves the star to its constant patterns.
    - O24 reads the merges' lists as subjects only, in 4 slices of the subject space on threads of their own: `class-large` 109 → 67 ms on Accumulo, 94 → 30 ms on RocksDB (section 4.9).
+   - O7a reads a long star pattern on its own, a whole class say, as a merge of one list, its subjects in slices: `class-scan` 2.8 times faster on RocksDB and 2.3 on Accumulo at 10M, 4.9 times on RocksDB at 100M (section 4.12).
    - O23 keeps an optional entity index, sharded by subject, and the store intersects a star's lists in each shard: in Accumulo's tablet servers, with native seeks on RocksDB. Stars are 2.3 to 4 times faster on the benchmark, with 15 to 160 times fewer cells reaching the client. Counts, of a star or of one pattern such as a class's size, are 2.7 to 4.2 times faster on Accumulo, which returns one cell per shard. Value stars are 5 to 10 % slower. It costs 17 % more disk and about a fifth of the load rate (section 4.10). HBase still intersects on the client: a coprocessor endpoint when HBase at 10^12 is active (D14). Hash versus subject-range shards is open until M3.
 6. **A step up: 100M triples, bigger than memory (section 4.11).**
    - What scales as designed: selective queries don't depend on the store's size, and ranges, index searches and the entity index's stars grow with what they read or less.
@@ -141,7 +142,8 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O4 | **Graph drops in time proportional to the graph** (D8) | R6 | a drop reads the graph, not the 5 cells per triple of every table (about 5T cells at 1T) | D8 | 3 | Not started |
 | O5 | **Index rebuilds through the bulk build; purge by recreating tables** when the caller sees everything | R6 | a rebuild becomes a batch job; such a purge becomes constant time | O3 | 3 | Not started |
 | O6 | **Text planning from per-term posting counts** | R7 | an AND is driven by its rarest word | — | 3 | Not started |
-| O7 | **Parallel reads of one large range,** split at tablet or region boundaries (section 6.6) | R2 | every server holding the range reads at once | — | 1 | Not started |
+| O7a | **Parallel reads of one large range, constant object:** a star pattern on its own (`?x a :C`: alone, counted, or driving lookups) read as a merge of one list, its subjects in slices at `spo`'s split points (section 6.6) | R2 | every server holding the list reads at once, and the client decodes no statements | O24 | 1 | Done: `query.join.mergesingle` (10,000). A whole class returned is 2.8 times faster on RocksDB and 2.3 on Accumulo at 10M, 4.9 times on RocksDB at 100M; counted without the entity index, 2.1 to 4.3 times; with a lookup per member, 13 to 16 % on RocksDB and nothing on Accumulo, where the lookups are the time (section 4.12) |
+| O7b | **Parallel reads of one large range, variable object:** `?s :p ?o` (a whole predicate, such as a filter no index covers), cut at the table's own split points, statements decoded on the slice threads (section 6.6) | R2 | every server holding the range reads at once | — | 1 | Not started: later, when a workload needs it (decided 2026-11-19) |
 | O8 | **Approximate counts from the counters** (class sizes, like `stats:approxSize`) | R12 | a count in a few reads instead of a scan | — | 3 | Not started |
 | O9 | **Deprecate `tbl.hashprefix`** | R3 | removes a layout that costs 33 B per row and spreads nothing | D7 | 3 | Not started |
 | O10 | **HBase bulk build:** label ordinals in the files, counter timestamps per import | R4, R10 | as O3, on HBase | O3, M6 | later | Deferred (2026-11-16: internal optimizations first) |
@@ -550,7 +552,7 @@ So the estimate holds: about another copy of `po`, 23 B per triple on Accumulo, 
 
 ### 4.11 A step up: 100M triples, and two fixes it showed
 
-Every figure above is at 10M triples, a store that fits in memory. On 2026-11-18 the benchmark ran on a store ten times larger, bigger than the development machine's memory (24 GB, NVMe disk), with the same code (`main` at `4ba0faf`) and the same flags as a 10M run of the same day: `bench.sh --triples 100M --entity-index --variant po:query.useindex=false --variant store:`, RocksDB, kept in `tripatha.loader/target/bench-100m`.
+Every figure above is at 10M triples, a store that fits in memory. On 2026-11-18 the benchmark ran on a store ten times larger, bigger than the development machine's memory (24 GB, NVMe disk), with the same code (`main` at `4ba0faf`) and the same flags as a 10M run of the same day: `bench.sh --triples 100M --entity-index --variant po:query.useindex=false --variant store:`, RocksDB, in `tripatha.loader/target/bench-100m` (`BENCH_ROCKSDB_PATH`, with `--out` to the same directory). The store is deleted after each round of runs, so every round loads it afresh: it doesn't fit beside much else on the development disk.
 - **The store:** 13,357,823 entities, 99,979,596 triples, 31.5 GB on disk against 3.3 GB at 10M: spo 5,020 MB, po 4,240, osp 4,561, eval 4,638, text 8,383, geo 193, entity 4,450 (1.05 times po).
 - **The load:** 42 minutes, 39,681 triples/s against 104,635 at 10M. The disk was nearly full and space was freed during the load, so that isn't a scaling figure. The store held 37 GB at 91 % of the load, before its compaction.
 - **Reports:** 10M `rocksdb-20261118-174040`; 100M `bench-100m/rocksdb-20261118-185126`, then `-185358` (slices), `-190056` (the cap) and `-190656` (with `iostat`).
@@ -597,6 +599,45 @@ Every figure above is at 10M triples, a store that fits in memory. On 2026-11-18
 On Accumulo at 10M, where the slices' queues never filled, 4 slices still beat 1: 63.5 against 110 ms.
 
 **The whole suite after both fixes:** at 10M (`rocksdb-20261118-194151` against `-174040`) every query returns the same rows and reads the same scans, ranges and cells except `class-value-mid` (its new plan) and `class-value-wide` (its longer count). At 100M (`bench-100m/rocksdb-20261118-194955`) a before/after comparison is confounded by the cache: `class-value-wide`, with the same plan before and after, went from 12.1 to 2.8 s. The variants above, timed alternately in one run, are the measurements of the fixes.
+
+### 4.12 A class on its own, read as a merge of one list (O7a)
+
+A star pattern that no other list joins was read as one `po` range through one scanner, every cell decoded into a statement on the query thread. Such patterns are a whole class (`SELECT ?s { ?s a o:Sensor }`), its count without the entity index, or a class driving a chain of lookups. Without the entity index, at 100M triples, a class of 534,313 members took 270 ms, all of it CPU on that thread.
+
+The pattern is one subject-sorted list, which merges already read well (O22, O24). Since 2026-11-19, a star pattern evaluated once per query whose `po` counter is at least `query.join.mergesingle` (10,000) is a merge of one list (ARCH.md 13.6, item 7): its subjects only, in up to 4 slices at `spo`'s split points, in subject order when lookups follow. The variable-object shape (`?s :p ?o`, O7b) is left for later.
+
+Two queries were added to the benchmark:
+- `class-scan`: `SELECT ?s WHERE { ?s a o:Sensor }`;
+- `class-label`: the same with each member's `rdfs:label`, one lookup per member.
+
+They were run as variants of one run:
+- `off`: `query.join.mergesingle=0`;
+- `on`: the default;
+- `index`, on RocksDB: the entity index used. `off` and `on` don't use it.
+
+The reports are `rocksdb-20261119-072427` (10M, the whole suite), `bench-100m/rocksdb-20261119-080233` (100M) and `accumulo-20261119-081907` (10M).
+
+| Query (rows at 10M / 100M) | RocksDB 10M, off → on | RocksDB 100M, off → on | Accumulo 10M, off → on | `index`, RocksDB 10M / 100M |
+|---|---|---|---|---|
+| `class-scan` (53,431 / 534,313) | 27.5 → **9.9 ms** (2.8×) | 279.5 → **57.4 ms** (4.9×) | 39.2 → **17.1 ms** (2.3×) | 5.5 / 42.6 ms |
+| `count-class` (1) | 27.2 → **12.7 ms** (2.1×) | 260.9 → **60.9 ms** (4.3×) | 38.9 → **17.4 ms** (2.2×) | 8.2 / 31.5 ms (the store counts) |
+| `class-label` (53,431 / 534,313) | 265.6 → 231.9 ms (−13 %) | 2,676 → 2,250 ms (−16 %) | 2,370 → 2,393 ms (+1 %) | 242 / 2,513 ms |
+
+- **Where the time went:**
+  - Off, the query thread did all of it: `class-scan` at 100M used 279 ms of its CPU in 279 ms.
+  - On, it uses 47 ms, and the slices' threads read the subjects.
+  - At 100M the gain is more than 4 slices give. The subjects aren't decoded into statements either, which is O24's gain for merges, now for one list.
+- **With lookups following,** the gain is the list's share of the time: 13 to 16 % on RocksDB. On Accumulo there is none: the 53,431 lookups are server round trips.
+- **The rest of the suite,** at 10M:
+  - reads the same scans, ranges and cells with the setting on and off;
+  - every query returns the same rows in every variant;
+  - `type-limit` (`?p a o:Person` under `LIMIT 100`) keeps its single scan, since the limit is shorter than the setting.
+- **The entity index** stays faster where it applies (5.5 against 9.9 ms at 10M): it reads one term's postings shard by shard, and the store counts.
+- **At 10^12,** a class of billions read by one client is bound by what the client can absorb (M4), however it is sliced. So this is a constant factor, not a change of scale. Counts belong to the store (O23) or to the counters (O8).
+- **The 100M run began with an unintended reload** of the same dataset into the store kept from 2026-11-18. The benchmark keeps its "loaded" marker in its report directory, and another directory was given.
+  - Statements and index entries were rewritten unchanged, but every counter delta was added again, so its estimates are doubled.
+  - The store was uncompacted while the queries ran.
+  - None of these plans depends on the counters' scale, and the variants alternated on the same store.
 
 ---
 
@@ -663,7 +704,7 @@ M4 measures that rate: cells per second for one Scanner, and for one BatchScanne
 
 **To add:**
 - **Approximate counts** for more shapes (O8);
-- **parallel reads of one large range** (O7);
+- **parallel reads of one large range** (O7a done for a class on its own; O7b, a whole predicate, to add);
 - **a separate engine** for real analytics (O12, D1 (b)).
 
 **Pushdown can do less than it sounds.** In a range-partitioned store, a join across subjects can't run inside one server. What can move to the servers:
@@ -690,7 +731,7 @@ These cut bytes for filtered scans. They don't remove the funnel, and RocksDB ha
 Apart from the configuration class that defines it, `RyaTripleContext` and `GraphSizes` are the only code that tests the flag. Hence O9.
 
 **Where the hot spots really are:**
-- **Large ranges** such as `rdf:type` (about 13 % of `po` in this dataset) are split into many tablets by `prepare`'s quantile split points, so their storage and their writes spread. Reading one through a single Scanner is still sequential, which is R2 (O7).
+- **Large ranges** such as `rdf:type` (about 13 % of `po` in this dataset) are split into many tablets by `prepare`'s quantile split points, so their storage and their writes spread. Read through a single Scanner it was sequential, which is R2: a class on its own is now read in slices (O7a), a whole predicate still isn't (O7b).
 - **The `p` counter rows** receive a cell from every block: about 45 predicates × 9 graph columns.
   - At 1T with 1,000-entity blocks, the hottest row (`rdf:type`) receives about 1.2 billion small cells over the whole load.
   - At 1M triples/s that is about 1,200 cells per second, to a row whose combiner sums them without locks. That isn't a hot spot. A bulk build sums them before writing.
@@ -929,6 +970,8 @@ A spike measures it before any product change: offline, on a 1B-triple sample, w
   - **When:** a statement pattern whose estimate is large and whose order isn't needed.
   - **How:** split its range at the tablet (or region) boundaries and read the pieces with a batch scan.
   - **Gain:** that uses every server holding the range. It doesn't remove the funnel into one JVM, but it lifts the rate to what the JVM can absorb (M4).
+  - **Constant object (O7a), done:** a star pattern on its own is read as a merge of one list (ARCH.md 13.6, item 7), its subjects only, in slices at `spo`'s split points. Those cut any `po` list of one predicate and object by subject, and keep subject order where lookups follow. Measured in section 4.12.
+  - **Variable object (O7b), later:** `?s :p ?o` is sorted by object, so subject boundaries don't cut it. It needs `po`'s own split points, and its statements decoded on the slice threads, since its object is returned.
 - **Analytics (O12, D1 (b))** means a distributed engine over the same data:
   - Spark or Trino reading the tables through the SPI;
   - or, offline, reading RFiles and HFiles directly;
@@ -1175,7 +1218,7 @@ In this order, each measured on M8 before and after (on RocksDB and on the Accum
 6. **M10**, class-star queries in the benchmark, then **O22**, merge joins of subject-sorted ranges, and **O24**, their slices intersected in parallel and subjects read without decoding statements: done;
 7. **O14**, comparisons as value ranges, with the datatype markers and the storage-version check (D12), and **O25**, their counted estimate: done;
 8. **O16** and **O17**, only if the split profile shows where the Accumulo joins' time goes;
-9. **O7**, parallel reads of one large range;
+9. **O7a**, parallel reads of one large range with a constant object (a class on its own): done; **O7b**, a whole predicate: later;
 10. **O23**, stars evaluated in the servers (D13): done on Accumulo and RocksDB, with counts in the servers and benchmark queries it wins (section 4.10); on HBase a coprocessor endpoint when HBase at 10^12 is active (D14).
 
 **Exit:**
