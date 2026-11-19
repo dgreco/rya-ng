@@ -50,6 +50,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *        default.
  * @param joinMergeSingle how long a star pattern on its own ({@code ?x a :C}) must be to be read
  *        as a merge of one list, its subjects in slices; 0 never, unset takes the default (10,000).
+ * @param joinLookupThreads how many threads a batch of lookups whose ranges can't overlap (an
+ *        entity chain's links) is read on; unset takes the store's default (4 on RocksDB, 1 on
+ *        Accumulo and HBase), 1 reads every batch on the request's thread.
  * @param textIndex whether to keep the full-text index that speeds up {@code text:matches}.
  * @param textIndexPredicates the predicates whose text literals are indexed; empty for all.
  * @param geoIndex whether to keep the geospatial index that speeds up GeoSPARQL filters
@@ -75,6 +78,7 @@ public record RyaProperties(
         Double joinMergeRatio,
         Integer joinMergeSlices,
         Long joinMergeSingle,
+        Integer joinLookupThreads,
         @DefaultValue("false") boolean textIndex,
         @DefaultValue List<String> textIndexPredicates,
         @DefaultValue("false") boolean geoIndex,

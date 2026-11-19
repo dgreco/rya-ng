@@ -158,6 +158,82 @@ public class BatchLookupIT extends RyaSailITBase {
         assertMatchesSingleLookups(batch);
     }
 
+    /** Subjects urn:t0 … urn:t8, each with urn:p and urn:q: two of them under the labels A and B, one in urn:G1. */
+    private List<LookupKey> manySubjects() {
+        final List<RyaStatement> statements = new ArrayList<>();
+        final List<LookupKey> keys = new ArrayList<>();
+        for (int i = 0; i < 9; i++) {
+            final RyaIRI t = new RyaIRI("urn:t" + i);
+            statements.add(new RyaStatement(t, new RyaIRI("urn:p"), new RyaIRI("urn:o" + i)));
+            statements.add(new RyaStatement(t, new RyaIRI("urn:q"), new RyaType("v" + i)));
+            keys.add(LookupKey.of(VF.createIRI("urn:t" + i), P, null));
+            keys.add(LookupKey.of(VF.createIRI("urn:t" + i), VF.createIRI("urn:q"), null));
+        }
+        statements.add(new RyaStatement(new RyaIRI("urn:t3"), new RyaIRI("urn:q"), new RyaType("w"), null, null, new StatementMetadata(),
+                "A".getBytes(StandardCharsets.UTF_8)));
+        statements.add(new RyaStatement(new RyaIRI("urn:t3"), new RyaIRI("urn:q"), new RyaType("w"), null, null, new StatementMetadata(),
+                "B".getBytes(StandardCharsets.UTF_8)));
+        statements.add(new RyaStatement(new RyaIRI("urn:t7"), new RyaIRI("urn:p"), new RyaIRI("urn:x"), new RyaIRI("urn:G1")));
+        dao.add(statements.iterator());
+        return keys;
+    }
+
+    /**
+     * A disjoint batch is read on several threads (O16): one scan per chunk, the later ones
+     * labelled as parts, and the same answers as one thread and as single lookups.
+     */
+    @Test
+    public void aDisjointBatchIsReadOnSeveralThreads() {
+        final List<LookupKey> keys = manySubjects();
+        conf.setJoinLookupThreads(1);
+        final Map<LookupKey, List<Statement>> oneThread = BatchLookup.fetch(dao, conf, keys, 1000);
+        conf.setJoinLookupThreads(3);
+        conf.setJoinLookupThreadKeys(1);
+        final List<Integer> ranges = new ArrayList<>();
+        final List<String> reasons = new ArrayList<>();
+        final Map<LookupKey, List<Statement>> threads;
+        try (StoreTrace.Scope scope = StoreTrace.start(event -> {
+            if (event instanceof TraceEvent.ScanStart scan) {
+                synchronized (ranges) {
+                    ranges.add(scan.rangeCount());
+                    reasons.add(scan.reason());
+                }
+            }
+        })) {
+            threads = BatchLookup.fetch(dao, conf, keys, 1000);
+        }
+        assertNotNull(threads);
+        assertEquals(List.of(6, 6, 6), ranges.stream().sorted().toList(), "18 lookups in three chunks: " + ranges);
+        assertTrue(reasons.stream().anyMatch(r -> r != null && r.contains("part 2 of 3")), reasons.toString());
+        assertEquals(oneThread, threads);
+        assertEquals(3, threads.get(LookupKey.of(VF.createIRI("urn:t3"), VF.createIRI("urn:q"), null)).size(), "v3, and w under A and B");
+        assertEquals(2, threads.get(LookupKey.of(VF.createIRI("urn:t7"), P, null)).size(), "the default graph and urn:G1");
+        assertMatchesSingleLookups(threads);
+    }
+
+    /** The limit counts the statements of every chunk together. */
+    @Test
+    public void theLimitHoldsAcrossThreads() {
+        final List<LookupKey> keys = manySubjects();
+        conf.setJoinLookupThreads(3);
+        conf.setJoinLookupThreadKeys(1);
+        assertNotNull(BatchLookup.fetch(dao, conf, keys, 1000));
+        assertEquals(null, BatchLookup.fetch(dao, conf, keys, 10), "21 statements, over 10 in all though under 10 per chunk");
+    }
+
+    /** A batch whose ranges may overlap stays one scan, on this thread, whatever the setting. */
+    @Test
+    public void aBatchWhoseRangesMayOverlapIsReadOnce() {
+        conf.setJoinLookupThreads(3);
+        conf.setJoinLookupThreadKeys(1);
+        final List<LookupKey> keys = List.of(LookupKey.of(S, P, null), LookupKey.of(S, P, VF.createIRI("urn:o")), LookupKey.of(V, P, null),
+                LookupKey.of(G, P, null));
+        final List<Integer> ranges = new ArrayList<>();
+        final Map<LookupKey, List<Statement>> batch = traced(ranges, new ArrayList<>(), () -> BatchLookup.fetch(dao, conf, keys, 1000));
+        assertEquals(1, ranges.size(), ranges.toString());
+        assertMatchesSingleLookups(batch);
+    }
+
     /** With subject ranges on, a subject asked for by several keys is read as one range; the answers stay those of single lookups. */
     @Test
     public void aSubjectAskedForSeveralTimesIsReadOnce() {

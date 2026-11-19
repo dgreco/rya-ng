@@ -44,8 +44,10 @@ public abstract class RyaSailITBase extends StoreITBase {
      *         {@code -Dtripatha.test.indexes=true} turns on the text, geo and entity indexes (each test then
      *         checks that the indexes match the stored statements), and
      *         {@code -Dtripatha.test.mergeRatio=1000000} merges every star of constant patterns
-     *         (O22), whatever their lengths, and {@code -Dtripatha.test.mergeSingle=1} reads every
-     *         star pattern on its own as a merge of one list (O7a).
+     *         (O22), whatever their lengths, {@code -Dtripatha.test.mergeSingle=1} reads every
+     *         star pattern on its own as a merge of one list (O7a), and
+     *         {@code -Dtripatha.test.lookupThreads=3} reads every batch of disjoint lookups on
+     *         three threads, one lookup each at least (O16).
      */
     protected StoreRdfConfiguration newConf() {
         final StoreRdfConfiguration conf = new StoreRdfConfiguration();
@@ -57,6 +59,12 @@ public abstract class RyaSailITBase extends StoreITBase {
         final String mergeRatio = System.getProperty("tripatha.test.mergeRatio");
         if (mergeRatio != null && !mergeRatio.isBlank()) {
             conf.setJoinMergeRatio(Double.parseDouble(mergeRatio.trim()));
+        }
+        // Every batch of disjoint lookups on that many threads, one lookup each at least.
+        final String lookupThreads = System.getProperty("tripatha.test.lookupThreads");
+        if (lookupThreads != null && !lookupThreads.isBlank()) {
+            conf.setJoinLookupThreads(Integer.parseInt(lookupThreads.trim()));
+            conf.setJoinLookupThreadKeys(1);
         }
         final String mergeSingle = System.getProperty("tripatha.test.mergeSingle");
         if (mergeSingle != null && !mergeSingle.isBlank()) {

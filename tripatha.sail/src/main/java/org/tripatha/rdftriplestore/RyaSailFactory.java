@@ -58,6 +58,9 @@ public final class RyaSailFactory {
     public static RdfCloudTripleStore<StoreRdfConfiguration> createSail(final Store store, final StoreRdfConfiguration conf) {
         requireNonNull(store, "store");
         requireNonNull(conf, "conf");
+        if (conf.get(RdfCloudTripleStoreConfiguration.CONF_JOIN_LOOKUP_THREADS) == null) {
+            conf.setJoinLookupThreads(store.capabilities().lookupThreads());
+        }
         if (conf.get(RdfCloudTripleStoreConfiguration.CONF_JOIN_MERGE_RATIO) == null) {
             conf.setJoinMergeRatio(store.capabilities().lookupCost());
         }

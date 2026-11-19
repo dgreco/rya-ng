@@ -103,6 +103,7 @@ Everything goes under `tripatha.loader/target/compare` (`COMPARE_DIR` names anot
 | Environment variable | |
 |---|---|
 | `TRIPATHA_HEAP` | the heap of Tripatha's native executable (`-Xmx`, `6g`) |
+| `TRIPATHA_ARGS` | more endpoint settings for Tripatha, for example `--tripatha.join-lookup-threads=1` |
 | `QLEVER_MEMORY` | QLever's memory for queries (`6G`) |
 | `QLEVER_SERVER_ARGS` | more options for `qlever-server`, for example `--enable-prefilter-on-index-scans false` |
 | `QLEVER_BIN` | the directory of `qlever-index` and `qlever-server`, if they aren't on the `PATH` |

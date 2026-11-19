@@ -63,7 +63,7 @@ public final class RocksStore implements Store {
     public static final String ID = "rocksdb";
 
     /** A lookup costs about 8 cells read in sequence: a seek, with no round trip (SCALE-STUDY.md O22). */
-    private static final Capabilities CAPABILITIES = new Capabilities(true, true, true, false, Integer.MAX_VALUE, 8);
+    private static final Capabilities CAPABILITIES = new Capabilities(true, true, true, false, Integer.MAX_VALUE, 8, 4);
     private static final int DELETE_BATCH = 1000;
 
     private final RocksDatabase database;

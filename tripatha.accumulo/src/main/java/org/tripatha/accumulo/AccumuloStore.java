@@ -95,7 +95,7 @@ public final class AccumuloStore implements Store {
     /** Accumulo's default key size constraint. */
     private static final int MAX_KEY_BYTES = 1_048_576;
     /** A lookup costs about 35 cells read in sequence, measured on the test cluster (SCALE-STUDY.md 4.6, O22). */
-    private static final Capabilities CAPABILITIES = new Capabilities(true, true, true, true, MAX_KEY_BYTES, 35);
+    private static final Capabilities CAPABILITIES = new Capabilities(true, true, true, true, MAX_KEY_BYTES, 35, 1);
 
     private final AccumuloClient client;
     private final boolean ownsClient;

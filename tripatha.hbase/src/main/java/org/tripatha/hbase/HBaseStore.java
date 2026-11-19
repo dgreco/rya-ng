@@ -172,7 +172,7 @@ public final class HBaseStore implements Store {
         }
         // A lookup costs about 20 cells read in sequence, measured on the test cluster (SCALE-STUDY.md 4.7, O22).
         this.capabilities = new Capabilities(labels, options.counters() == CounterMode.COPROCESSOR, true, false,
-                HBaseCodec.MAX_ROW_BYTES, 20);
+                HBaseCodec.MAX_ROW_BYTES, 20, 1);
         if (labels) {
             if (options.checkLabels()) {
                 HBaseLabels.probe(this, options.labelsTable());

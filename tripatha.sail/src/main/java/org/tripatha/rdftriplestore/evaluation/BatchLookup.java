@@ -28,6 +28,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.tripatha.api.RdfCloudTripleStoreConfiguration;
 import org.tripatha.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
@@ -42,6 +48,7 @@ import org.tripatha.api.resolver.RyaToRdfConversions;
 import org.tripatha.api.resolver.UnsupportedValueException;
 import org.tripatha.api.resolver.RyaTripleContext;
 import org.tripatha.store.trace.StoreTrace;
+import org.tripatha.store.trace.Trace;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.Statement;
@@ -63,6 +70,15 @@ import org.eclipse.rdf4j.model.Statement;
  * of them overlap: no cell can come twice, and the scan neither keeps track of the cells it has
  * seen nor encodes their objects again (SCALE-STUDY.md O17).
  *
+ * <p>Such a group's cells also come, for each key, from that key's own range only, so its ranges
+ * can be read by several threads (O16, {@code query.join.lookupthreads}): the group is cut into
+ * chunks of at least {@code query.join.lookupthreadkeys} patterns, the query thread reads the
+ * first and pool threads the others, each one reading, decoding and matching its chunk into a
+ * map of its own, under the query's trace. The query thread then waits for every chunk, whatever
+ * happened to the others, so no scan outlives the call, and merges the maps: each key's list
+ * comes from one chunk, in the order a single scan would give it. The limit counts the whole
+ * group's statements across the threads.
+ *
  * <p>With {@code query.join.subjectranges} on (it is off by default), a subject asked for by two
  * or more keys in {@code spo} (the links of an entity chain, for example) is read as one range,
  * its whole subject, instead of one range per key: its statements are neighbouring rows, so that
@@ -81,6 +97,12 @@ public final class BatchLookup {
     static final int SUBJECT_RANGE_SLACK = 1024;
     private static final long OVER_LIMIT = -1;
     private static final long OVER_BUDGET = -2;
+    /** Threads reading a batch's chunks: daemons, kept a minute when idle. */
+    private static final ExecutorService LOOKUP_THREADS = Executors.newCachedThreadPool(r -> {
+        final Thread t = new Thread(r, "tripatha-lookup");
+        t.setDaemon(true);
+        return t;
+    });
 
     private BatchLookup() {
     }
@@ -126,7 +148,10 @@ public final class BatchLookup {
                 StoreTrace.note("batched lookup", () -> "subject ranges returned over " + budget
                         + " cells: reading this batch one range per lookup");
             }
-            final long matched = scan(dao, conf, group, group.patterns, results, limit - held, Long.MAX_VALUE);
+            final int chunks = group.disjoint() ? Math.min(conf.getJoinLookupThreads(),
+                    group.patterns.size() / conf.getJoinLookupThreadKeys()) : 1;
+            final long matched = chunks > 1 ? scanInChunks(dao, conf, group, chunks, results, limit - held)
+                    : scan(dao, conf, group, group.patterns, results, limit - held, Long.MAX_VALUE);
             if (matched == OVER_LIMIT) {
                 return null;
             }
@@ -150,8 +175,7 @@ public final class BatchLookup {
         long held = 0;
         long read = 0;
         // Subject ranges overlap the keys they stand for: only a group's own patterns can be disjoint.
-        final boolean disjoint = patterns == group.patterns && group.index.size() == 1
-                && !group.index.keySet().iterator().next().object();
+        final boolean disjoint = patterns == group.patterns && group.disjoint();
         final boolean objects = !disjoint || group.index.keySet().stream().anyMatch(Shape::object);
         final Set<CellId> seen = disjoint ? null : new HashSet<>();
         try (CloseableIteration<RyaStatement> found = dao.getQueryEngine().batchQuery(patterns, conf)) {
@@ -187,6 +211,126 @@ public final class BatchLookup {
             }
         }
         return held;
+    }
+
+    /**
+     * Reads a disjoint group's patterns in {@code chunks} parts at once, the first on this thread,
+     * and merges what each part matched. Every part is finished before this returns or throws.
+     *
+     * @return the statements given to keys, or {@link #OVER_LIMIT} if more than {@code limit}
+     */
+    private static <C extends RdfCloudTripleStoreConfiguration> long scanInChunks(final RyaDAO<C> dao, final C conf,
+            final Group group, final int chunks, final Map<LookupKey, List<Statement>> results, final long limit) {
+        final List<Map<LookupKey, List<Statement>>> parts = new ArrayList<>(chunks);
+        final AtomicLong held = new AtomicLong();
+        final AtomicBoolean stop = new AtomicBoolean();
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+        final CountDownLatch done = new CountDownLatch(chunks - 1);
+        final Trace trace = StoreTrace.current();
+        // The chunks' scans say what this thread is doing (an entity prefetch's window, say), and which part they read.
+        final String why = trace == null ? "" : trace.reason();
+        final int size = group.patterns.size();
+        for (int c = 0; c < chunks; c++) {
+            parts.add(new HashMap<>());
+        }
+        for (int c = 1; c < chunks; c++) {
+            final List<RyaStatement> chunk = group.patterns.subList(c * size / chunks, (c + 1) * size / chunks);
+            final Map<LookupKey, List<Statement>> part = parts.get(c);
+            final String reason = (why.isEmpty() ? "" : why + " › ") + "part " + (c + 1) + " of " + chunks + ", on a thread of its own";
+            try {
+                LOOKUP_THREADS.execute(() -> {
+                    try (StoreTrace.Scope joined = StoreTrace.join(trace, reason)) {
+                        scanPart(dao, conf, group, chunk, part, held, limit, stop);
+                    } catch (final Throwable t) {
+                        failure.compareAndSet(null, t);
+                        stop.set(true);
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            } catch (final RuntimeException e) {
+                // Not started: count it as done, and stop the others.
+                failure.compareAndSet(null, e);
+                stop.set(true);
+                done.countDown();
+            }
+        }
+        try {
+            scanPart(dao, conf, group, group.patterns.subList(0, size / chunks), parts.get(0), held, limit, stop);
+        } catch (final RuntimeException | Error e) {
+            failure.compareAndSet(null, e);
+            stop.set(true);
+        } finally {
+            awaitUninterruptibly(done, stop);
+        }
+        final Throwable failed = failure.get();
+        if (failed instanceof RuntimeException e) {
+            throw e;
+        }
+        if (failed instanceof Error e) {
+            throw e;
+        }
+        if (failed != null) {
+            throw new IllegalStateException(failed);
+        }
+        if (held.get() > limit) {
+            return OVER_LIMIT;
+        }
+        for (final LookupKey key : group.keys) {
+            results.put(key, new ArrayList<>());
+        }
+        for (final Map<LookupKey, List<Statement>> part : parts) {
+            part.forEach((key, statements) -> results.get(key).addAll(statements));
+        }
+        return held.get();
+    }
+
+    /**
+     * One chunk of a disjoint group: its cells matched to the group's keys into {@code part}, no
+     * cell check needed. Stops when another chunk failed, or when the group holds over {@code limit}.
+     */
+    private static <C extends RdfCloudTripleStoreConfiguration> void scanPart(final RyaDAO<C> dao, final C conf, final Group group,
+            final List<RyaStatement> patterns, final Map<LookupKey, List<Statement>> part, final AtomicLong held, final long limit,
+            final AtomicBoolean stop) {
+        final Map.Entry<Shape, Map<Projection, List<LookupKey>>> only = group.index.entrySet().iterator().next();
+        final Shape shape = only.getKey();
+        try (CloseableIteration<RyaStatement> found = dao.getQueryEngine().batchQuery(patterns, conf)) {
+            while (!stop.get() && found.hasNext()) {
+                final RyaStatement stored = found.next();
+                if (shape.defaultGraphOnly && stored.getContext() != null) {
+                    continue;
+                }
+                final List<LookupKey> matching = only.getValue().get(Projection.of(shape, stored, null));
+                if (matching == null) {
+                    continue;
+                }
+                final Statement converted = RyaToRdfConversions.convertStatement(stored);
+                for (final LookupKey key : matching) {
+                    part.computeIfAbsent(key, k -> new ArrayList<>()).add(converted);
+                    if (held.incrementAndGet() > limit) {
+                        stop.set(true);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /** Waits for every chunk; an interrupt asks them to stop, but they are still waited for, and the interrupt kept. */
+    private static void awaitUninterruptibly(final CountDownLatch done, final AtomicBoolean stop) {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                done.await();
+                break;
+            } catch (final InterruptedException e) {
+                interrupted = true;
+                stop.set(true);
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static TABLE_LAYOUT layoutOf(final RyaTripleContext tripleContext, final RyaStatement pattern,
@@ -286,6 +430,14 @@ public final class BatchLookup {
         int collapsedSubjects;
         final Map<Shape, Map<Projection, List<LookupKey>>> index = new LinkedHashMap<>();
         private final Set<RyaStatement> distinctPatterns = new HashSet<>();
+
+        /**
+         * Whether every key has the same shape and leaves the object free: then the group's ranges
+         * are prefixes ending at a delimiter, and none overlaps another.
+         */
+        boolean disjoint() {
+            return index.size() == 1 && !index.keySet().iterator().next().object();
+        }
 
         void add(final LookupKey key, final Target target) {
             keys.add(key);

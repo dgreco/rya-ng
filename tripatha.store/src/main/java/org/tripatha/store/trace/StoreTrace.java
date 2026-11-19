@@ -174,6 +174,13 @@ public final class StoreTrace {
         if (trace == null) {
             return NO_REASON;
         }
+        final String joined = JOINED_REASON.get();
+        if (joined != null) {
+            // A thread that joined another's trace keeps its reasons to itself: the trace's own
+            // stack belongs to the thread that started it, which may be pushing and popping now.
+            JOINED_REASON.set(joined.isEmpty() ? why.get() : joined + " › " + why.get());
+            return () -> JOINED_REASON.set(joined);
+        }
         trace.pushReason(why.get());
         return trace::popReason;
     }
