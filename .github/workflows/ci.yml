@@ -48,9 +48,7 @@ jobs:
         with:
           path: ~/.m2/repository
           key: maven-${{ github.job }}-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            maven-${{ github.job }}-
-            setup-java-Linux-x64-maven-
+          restore-keys: maven-${{ github.job }}-
 
       - name: Check the shell scripts
         run: |
@@ -138,9 +136,7 @@ jobs:
         with:
           path: ~/.m2/repository
           key: maven-${{ github.job }}-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            maven-${{ github.job }}-
-            setup-java-Linux-x64-maven-
+          restore-keys: maven-${{ github.job }}-
 
       - name: Build
         run: mvn -B -ntp install -DskipTests -DskipITs
@@ -182,9 +178,7 @@ jobs:
         with:
           path: ~/.m2/repository
           key: maven-${{ github.job }}-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            maven-${{ github.job }}-
-            setup-java-Linux-x64-maven-
+          restore-keys: maven-${{ github.job }}-
 
       - name: Build
         run: mvn -B -ntp install -DskipTests -DskipITs
