@@ -43,9 +43,14 @@
 # QLever: qlever-index and qlever-server on the PATH, or QLEVER_BIN naming their directory.
 # Oxigraph: a pinned release, downloaded to ~/.m2/repository/.cache/tripatha-compare (OXIGRAPH names
 # another binary). Boost for WatDiv: BOOST_HOME, else Homebrew's on macOS, else the system's.
-# Tripatha's native executable needs GraalVM for JDK 25 (JAVA_HOME) to build.
-# Memory: TRIPATHA_HEAP (6g) and QLEVER_MEMORY (6G). TRIPATHA_ARGS adds endpoint settings
-# (--tripatha.join-lookup-threads=1, say), QLEVER_SERVER_ARGS options to qlever-server.
+# Tripatha's native executable needs GraalVM for JDK 25 (JAVA_HOME) to build. With Oracle GraalVM it
+# is the profile-guided build (tripatha.standalone/build-optimized.sh, trained on the join benchmark,
+# never on WatDiv; TRIPATHA_PGO=false builds the default one), and the report says which it measured.
+# Memory: TRIPATHA_HEAP (6g, -Xmx), TRIPATHA_MIN_HEAP (-Xms, the heap by default: its Serial
+# collector sizes the young generation from it; TRIPATHA_MIN_HEAP= leaves it out) and QLEVER_MEMORY (6G).
+# TRIPATHA_ARGS adds endpoint settings (--tripatha.join-lookup-threads=1, say), QLEVER_SERVER_ARGS
+# options to qlever-server. TRIPATHA_NATIVE names another executable to serve instead of the one
+# built here (it takes the same arguments; it is never built, even with --build).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -229,6 +234,11 @@ watdiv_binary() {
 # ---- what it needs ----
 
 native="$ROOT/tripatha.standalone/target/tripatha"
+own_native=true
+if [ -n "${TRIPATHA_NATIVE:-}" ]; then
+  native="$(absolute "$TRIPATHA_NATIVE")"
+  own_native=false
+fi
 native_image=""
 if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/native-image" ]; then
   native_image="$JAVA_HOME/bin/native-image"
@@ -249,12 +259,14 @@ preflight() {
     ''|*[!0-9]*) missing+=("a JDK 25, with JAVA_HOME set: GraalVM for JDK 25 (https://www.graalvm.org/downloads/)") ;;
     *) if [ "$v" -lt 25 ]; then missing+=("Java 25 or later; JAVA_HOME has Java $v"); fi ;;
   esac
-  if $build || [ ! -x "$native" ] || [ ! -f "$HERE/target/bench.classpath" ]; then
+  if $build || { $own_native && [ ! -x "$native" ]; } || [ ! -f "$HERE/target/bench.classpath" ]; then
     if ! command -v mvn >/dev/null 2>&1; then
       if $mac; then missing+=("Maven: brew install maven"); else missing+=("Maven: sudo apt install maven (or sudo dnf install maven)"); fi
     fi
   fi
-  if $build || [ ! -x "$native" ]; then
+  if ! $own_native; then
+    [ -x "$native" ] || missing+=("TRIPATHA_NATIVE=$TRIPATHA_NATIVE: not an executable")
+  elif $build || [ ! -x "$native" ]; then
     if [ -z "$native_image" ]; then
       missing+=("GraalVM's native-image, to build Tripatha's native executable: set JAVA_HOME to GraalVM for JDK 25 (https://www.graalvm.org/downloads/)")
     fi
@@ -325,14 +337,26 @@ fi
 
 # ---- the programs of this repository ----
 
+modules_built=false
 if $build || [ ! -f "$HERE/target/bench.classpath" ]; then
   # bench.sh builds the modules and the benchmark classes; --help then only prints its usage.
   "$HERE/bench.sh" --build --help > /dev/null
+  modules_built=true
 fi
-if $build || [ ! -x "$native" ]; then
-  echo "Building the endpoint's native executable (a few minutes)..." >&2
-  (cd "$ROOT" && mvn -B -q -Pnative -pl tripatha.standalone -am package -DskipTests -DskipITs) > "$work/logs/native-build.log" 2>&1 ||
-    { echo "the native build failed: see $work/logs/native-build.log" >&2; exit 1; }
+if $own_native && { $build || [ ! -x "$native" ]; }; then
+  if [ "${TRIPATHA_PGO:-true}" != false ] && "$native_image" --version 2>/dev/null | grep -q "Oracle GraalVM"; then
+    echo "Building the endpoint's profile-guided native executable (about 5 minutes)..." >&2
+    # The script's training needs this tree's benchmark classes: built just now, or by the script.
+    skip=()
+    if $modules_built; then skip=(--skip-modules); fi
+    "$ROOT/tripatha.standalone/build-optimized.sh" ${skip[@]+"${skip[@]}"} > "$work/logs/native-build.log" 2>&1 ||
+      { echo "the native build failed: see $work/logs/native-build.log" >&2; exit 1; }
+  else
+    echo "Building the endpoint's native executable (a few minutes)..." >&2
+    rm -f "$ROOT/tripatha.standalone/target/tripatha.build"
+    (cd "$ROOT" && mvn -B -q -Pnative -pl tripatha.standalone -am package -DskipTests -DskipITs) > "$work/logs/native-build.log" 2>&1 ||
+      { echo "the native build failed: see $work/logs/native-build.log" >&2; exit 1; }
+  fi
 fi
 bench_cp="$HERE/target/test-classes:$HERE/target/classes:$(cat "$HERE/target/bench.classpath")"
 
@@ -479,18 +503,27 @@ else
   cp -R --reflink=auto "$store" "$clone"
 fi
 heap="${TRIPATHA_HEAP:-6g}"
+min_heap="${TRIPATHA_MIN_HEAP-$heap}"
 textra=()
 read -r -a textra <<< "${TRIPATHA_ARGS:-}"
-"$native" "-Xmx$heap" --server.address=127.0.0.1 --server.port=$PORT_TRIPATHA --logging.level.root=warn \
+"$native" "-Xmx$heap" ${min_heap:+"-Xms$min_heap"} --server.address=127.0.0.1 --server.port=$PORT_TRIPATHA --logging.level.root=warn \
   --tripatha.backend=rocksdb "--tripatha.rocksdb.path=$clone" "--tripatha.table-prefix=$prefix" --tripatha.entity-index=true \
   "--tripatha.sparql.query-timeout=${timeout}s" ${textra[@]+"${textra[@]}"} > "$work/logs/tripatha.log" 2>&1 &
 pid=$!
 measure tripatha "http://127.0.0.1:$PORT_TRIPATHA/sparql"
 rm -rf "$clone"
 reports+=(--result "$results/tripatha.tsv")
-info+=(--info "Tripatha $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "(no git)"): the native executable of \
-tripatha.standalone, $(if [ -n "$native_image" ]; then "$native_image" --version 2>/dev/null | head -1; else echo "native-image"; fi), \
--Xmx$heap${TRIPATHA_ARGS:+ $TRIPATHA_ARGS}, over a clone of its store with the entity index, loaded in $(cat "$dir/tripatha-load-seconds" 2>/dev/null || echo "?") s \
+# build-optimized.sh describes its build, with the executable's SHA-256: another build since then isn't that one.
+marker="$ROOT/tripatha.standalone/target/tripatha.build"
+if $own_native && [ -f "$marker" ] && [ "$(cut -d' ' -f1 "$marker")" = "$(sha256_of "$native")" ]; then
+  built="the native executable of tripatha.standalone, $(cut -d' ' -f2- "$marker")"
+elif $own_native; then
+  built="the native executable of tripatha.standalone (mvn -Pnative), $(if [ -n "$native_image" ]; then "$native_image" --version 2>/dev/null | sed -n 2p; else echo "native-image"; fi)"
+else
+  built="$native (TRIPATHA_NATIVE)"
+fi
+info+=(--info "Tripatha $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "(no git)"): $built, \
+-Xmx$heap${min_heap:+ -Xms$min_heap}${TRIPATHA_ARGS:+ $TRIPATHA_ARGS}, over a clone of its store with the entity index, loaded in $(cat "$dir/tripatha-load-seconds" 2>/dev/null || echo "?") s \
 ($(gigabytes "$store") on disk, counters and index included).")
 
 if has qlever; then
