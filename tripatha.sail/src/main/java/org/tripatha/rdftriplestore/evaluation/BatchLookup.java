@@ -57,7 +57,11 @@ import org.eclipse.rdf4j.model.Statement;
  * keeps the answer for a key identical to a single lookup of that key.
  *
  * <p>Within a group each stored cell is counted once (cells differ by qualifier, visibility and
- * timestamp as well as by statement, as in a single lookup).
+ * timestamp as well as by statement, as in a single lookup). When every key of a group has the
+ * same shape and leaves the object free (an entity chain's links, {@code (s, p, ?)}), their
+ * ranges are prefixes ending at a delimiter, and stored terms hold no {@code 00} byte, so no two
+ * of them overlap: no cell can come twice, and the scan neither keeps track of the cells it has
+ * seen nor encodes their objects again (SCALE-STUDY.md O17).
  *
  * <p>With {@code query.join.subjectranges} on (it is off by default), a subject asked for by two
  * or more keys in {@code spo} (the links of an entity chain, for example) is read as one range,
@@ -145,15 +149,19 @@ public final class BatchLookup {
         }
         long held = 0;
         long read = 0;
-        final Set<CellId> seen = new HashSet<>();
+        // Subject ranges overlap the keys they stand for: only a group's own patterns can be disjoint.
+        final boolean disjoint = patterns == group.patterns && group.index.size() == 1
+                && !group.index.keySet().iterator().next().object();
+        final boolean objects = !disjoint || group.index.keySet().stream().anyMatch(Shape::object);
+        final Set<CellId> seen = disjoint ? null : new HashSet<>();
         try (CloseableIteration<RyaStatement> found = dao.getQueryEngine().batchQuery(patterns, conf)) {
             while (found.hasNext()) {
                 final RyaStatement stored = found.next();
                 if (++read > budget) {
                     return OVER_BUDGET;
                 }
-                final ByteBuffer object = encode(stored.getObject());
-                if (object == null || !seen.add(CellId.of(stored, object))) {
+                final ByteBuffer object = objects ? encode(stored.getObject()) : null;
+                if (objects && object == null || !disjoint && !seen.add(CellId.of(stored, object))) {
                     continue;
                 }
                 Statement converted = null;

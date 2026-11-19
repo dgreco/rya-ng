@@ -66,7 +66,8 @@ class RocksCodecTest {
         }
         final Random random = new Random(7);
         for (int i = 0; i < 2000; i++) {
-            final byte[] row = new byte[random.nextInt(6)];
+            // Up to 11 bytes: more than four 00s too, which the decoder copies another way.
+            final byte[] row = new byte[random.nextInt(12)];
             for (int j = 0; j < row.length; j++) {
                 row[j] = (byte) new int[] {0, 1, 2, 'a', 0xfe, 0xff}[random.nextInt(6)];
             }

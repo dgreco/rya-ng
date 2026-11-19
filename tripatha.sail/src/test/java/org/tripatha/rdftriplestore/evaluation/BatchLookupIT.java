@@ -133,6 +133,31 @@ public class BatchLookupIT extends RyaSailITBase {
         assertMatchesSingleLookups(batch);
     }
 
+    /**
+     * Keys of one shape that leave the object free, an entity chain's links, read disjoint ranges:
+     * the batch skips its check for cells it has seen, and still answers as single lookups do,
+     * labels and graphs included.
+     */
+    @Test
+    public void keysOfOneShapeWithoutAnObjectAnswerAsSingleLookups() {
+        dao.add(new RyaStatement(new RyaIRI("urn:s"), new RyaIRI("urn:q"), new RyaType("x")));
+        dao.add(new RyaStatement(new RyaIRI("urn:s"), new RyaIRI("urn:q"), new RyaType("y"), new RyaIRI("urn:G1")));
+        dao.add(new RyaStatement(new RyaIRI("urn:s"), new RyaIRI("urn:pq"), new RyaType("z")));
+        final IRI q = VF.createIRI("urn:q");
+        final IRI pq = VF.createIRI("urn:pq");
+        final List<LookupKey> keys = List.of(LookupKey.of(S, P, null), LookupKey.of(S, q, null), LookupKey.of(S, pq, null),
+                LookupKey.of(V, P, null), LookupKey.of(G, P, null), LookupKey.of(G, q, null));
+        final Map<LookupKey, List<Statement>> batch = BatchLookup.fetch(dao, conf, keys, 1000);
+        assertNotNull(batch);
+        assertEquals(2, batch.get(keys.get(0)).size(), "urn:o and urn:o2");
+        assertEquals(2, batch.get(keys.get(1)).size(), "x, and y in urn:G1");
+        assertEquals(1, batch.get(keys.get(2)).size(), "urn:pq is not urn:p's prefix range");
+        assertEquals(2, batch.get(keys.get(3)).size(), "one triple under the labels A and B");
+        assertEquals(2, batch.get(keys.get(4)).size(), "the default graph and urn:G1");
+        assertEquals(0, batch.get(keys.get(5)).size());
+        assertMatchesSingleLookups(batch);
+    }
+
     /** With subject ranges on, a subject asked for by several keys is read as one range; the answers stay those of single lookups. */
     @Test
     public void aSubjectAskedForSeveralTimesIsReadOnce() {

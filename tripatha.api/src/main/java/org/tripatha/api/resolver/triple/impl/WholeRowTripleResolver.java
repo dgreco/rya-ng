@@ -91,13 +91,23 @@ public class WholeRowTripleResolver implements TripleRowResolver {
         try {
             assert tripleRow != null && table_layout != null;
             final byte[] row = tripleRow.getRow();
-            final int firstIndex = Bytes.indexOf(row, DELIM_BYTE);
-            final int secondIndex = Bytes.lastIndexOf(row, DELIM_BYTE);
-            final int typeIndex = Bytes.indexOf(row, TYPE_DELIM_BYTE);
-            final byte[] first = Arrays.copyOf(row, firstIndex);
-            final byte[] second = Arrays.copyOfRange(row, firstIndex + 1, secondIndex);
-            final byte[] third = Arrays.copyOfRange(row, secondIndex + 1, typeIndex);
-            final byte[] type = Arrays.copyOfRange(row, typeIndex, row.length);
+            // One pass for the two delimiters and the type marker; the parts are read in place.
+            int firstIndex = -1;
+            int secondIndex = -1;
+            int typeIndex = -1;
+            for (int i = 0; i < row.length; i++) {
+                if (row[i] == DELIM_BYTE) {
+                    if (firstIndex < 0) {
+                        firstIndex = i;
+                    }
+                    secondIndex = i;
+                } else if (row[i] == TYPE_DELIM_BYTE && typeIndex < 0) {
+                    typeIndex = i;
+                }
+            }
+            if (firstIndex < 0 || secondIndex == firstIndex || typeIndex < secondIndex) {
+                throw new TripleRowResolverException("TripleRow[" + tripleRow + "] is not a statement row");
+            }
             final byte[] columnFamily = tripleRow.getColumnFamily();
             final boolean contextExists = columnFamily != null && columnFamily.length > 0;
             final RyaIRI context = (contextExists) ? (new RyaIRI(new String(columnFamily, StandardCharsets.UTF_8))) : null;
@@ -109,26 +119,29 @@ public class WholeRowTripleResolver implements TripleRowResolver {
 
             switch (table_layout) {
                 case SPO: {
-                    final byte[] obj = Bytes.concat(third, type);
+                    // s 00 p 00 o 01 type: the object and its type are the row's last run.
+                    final byte[] obj = Arrays.copyOfRange(row, secondIndex + 1, row.length);
                     return new RyaStatement(
-                            new RyaIRI(new String(first, StandardCharsets.UTF_8)),
-                            new RyaIRI(new String(second, StandardCharsets.UTF_8)),
+                            new RyaIRI(new String(row, 0, firstIndex, StandardCharsets.UTF_8)),
+                            new RyaIRI(new String(row, firstIndex + 1, secondIndex - firstIndex - 1, StandardCharsets.UTF_8)),
                             RyaContext.getInstance().deserialize(obj),
                             context, qualifier, columnVisibility, value, timestamp);
                 }
                 case PO: {
-                    final byte[] obj = Bytes.concat(second, type);
+                    // p 00 o 00 s 01 type
+                    final byte[] obj = joined(row, firstIndex + 1, secondIndex, typeIndex);
                     return new RyaStatement(
-                            new RyaIRI(new String(third, StandardCharsets.UTF_8)),
-                            new RyaIRI(new String(first, StandardCharsets.UTF_8)),
+                            new RyaIRI(new String(row, secondIndex + 1, typeIndex - secondIndex - 1, StandardCharsets.UTF_8)),
+                            new RyaIRI(new String(row, 0, firstIndex, StandardCharsets.UTF_8)),
                             RyaContext.getInstance().deserialize(obj),
                             context, qualifier, columnVisibility, value, timestamp);
                 }
                 case OSP: {
-                    final byte[] obj = Bytes.concat(first, type);
+                    // o 00 s 00 p 01 type
+                    final byte[] obj = joined(row, 0, firstIndex, typeIndex);
                     return new RyaStatement(
-                            new RyaIRI(new String(second, StandardCharsets.UTF_8)),
-                            new RyaIRI(new String(third, StandardCharsets.UTF_8)),
+                            new RyaIRI(new String(row, firstIndex + 1, secondIndex - firstIndex - 1, StandardCharsets.UTF_8)),
+                            new RyaIRI(new String(row, secondIndex + 1, typeIndex - secondIndex - 1, StandardCharsets.UTF_8)),
                             RyaContext.getInstance().deserialize(obj),
                             context, qualifier, columnVisibility, value, timestamp);
                 }
@@ -137,6 +150,15 @@ public class WholeRowTripleResolver implements TripleRowResolver {
             throw new TripleRowResolverException(e);
         }
         throw new TripleRowResolverException("TripleRow[" + tripleRow + "] with Table layout[" + table_layout + "] is not deserializable");
+    }
+
+    /** {@code row[from, to)} followed by the type, {@code row[typeIndex, end)}: an object and its type, apart in the row. */
+    private static byte[] joined(final byte[] row, final int from, final int to, final int typeIndex) {
+        final int dataLength = to - from;
+        final byte[] out = new byte[dataLength + row.length - typeIndex];
+        System.arraycopy(row, from, out, 0, dataLength);
+        System.arraycopy(row, typeIndex, out, dataLength, row.length - typeIndex);
+        return out;
     }
 
 }

@@ -164,7 +164,7 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `verif
 - **Batched joins:** `RyaEvaluationStrategy.prepare(Join)` returns a `BatchedJoinStep` when the right side is a plain statement pattern, optionally under filters, and there is no dataset, merge join, scope change or `query.limit`. Otherwise it uses RDF4J's own join.
   - The step reads left rows in windows (64, doubling up to `query.join.batchsize`, default 1000), and `StoreTripleSource.prefetch` fetches all of a window's lookups via `BatchLookup` (one `batchQuery` per table and graph). A `LIMIT` query thus stops after a small fetch.
   - RDF4J's own statement-pattern step then runs per row against that cache, so join semantics stay RDF4J's.
-  - `BatchLookup` matches results to lookups on exact encoded values and deduplicates cells. Never register a partial prefetch: a missing key must mean "ask the store".
+  - `BatchLookup` matches results to lookups on exact encoded values and deduplicates cells. A group whose keys share one shape and leave the object free (an entity chain's `(s, p, ?)` links) reads disjoint prefix ranges, so it skips the deduplication and the objects' encoding (O17); anything that makes such ranges overlap must bring the check back. Never register a partial prefetch: a missing key must mean "ask the store".
   - **Subject ranges** (`query.join.subjectranges`, off by default): a subject asked for by two or more keys of a batch in `spo` is read as its whole range, and the exact matching keeps the answers.
     - If those ranges return more than 64 cells per subject (plus 1,024), the batch is re-read one range per key.
     - It is off because on the warm benchmark it read 4× the cells for no gain. It is to be tried on a cold cache.
