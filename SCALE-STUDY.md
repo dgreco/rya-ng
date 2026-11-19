@@ -156,7 +156,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O13 | **`STRSTARTS` as a prefix range:** a filter `STRSTARTS(?o, "abc")` on a pattern's object narrows its scan to the objects whose data starts with `abc`, with no type check; the filter stays. Not `STRSTARTS(STR(?o), …)`: numbers, dates and booleans aren't stored as their text (section 6.7, ARCH.md 12.8) | R2 | measured (M8): `prefix` 92 → 0.7 ms on RocksDB and 72 → 2.2 ms on Accumulo, 133,579 → 522 cells. `query.prefixranges` turns it off | M8 | 1 | Done (PR #15) |
 | O14 | **Comparisons as value ranges:** `<`, `<=`, `>`, `>=` on a pattern's numeric or date object narrow its scan to the value range, one range per stored type; the filter stays. Needs a record of the datatypes each predicate's objects use (section 6.7) | R2 | the same, for numbers and dates | M8 | 1 | Done: datatype markers, storage version 1.1.0 with a write check, `ValueRangeOptimizer`; on by default (`query.valueranges`). Range queries 5 to 36 times faster on Accumulo, `class-value` 26 times; a condition most values pass is 4 to 8 times slower in a star (section 4.8, O25) |
 | O15 | **Adaptive batch windows in batched joins:** the first window is 64 left rows, doubling up to `query.join.batchsize`, as entity prefetch does (section 6.8) | R2 | measured (M8, section 4.6): `chain-limit` 114 → 19 ms on Accumulo and 6.9 → 0.7 ms on RocksDB (1,003 → 67 ranges); `type-limit` 164 → 40 ms and 22.6 → 1.6 ms (2,004 → 260 ranges). No cost on large joins: `chain` −7 % with 16 batch scans instead of 13 | M8 | 1 | Done (PR #15) |
-| O16 | **More lookups in flight:** batched joins and entity prefetch keep the next window's fetch running while the current one is joined, and more than one when the store has several servers (section 6.8) | R2 | the tablet server is the limit on the test cluster (4.6), so overlapping with client work gains nothing. More server parallelism (more tablets, concurrent batch scans) is the open question, for a cluster (M3) | M8 | 1 | Not started. On RocksDB the client is the limit (section 4.14: C3's query thread is busy 95 % of its wall time), so decoding windows on more threads is the open question there |
+| O16 | **More lookups in flight:** batched joins and entity prefetch keep the next window's fetch running while the current one is joined, and more than one when the store has several servers (section 6.8) | R2 | the tablet server is the limit on the test cluster (4.6), so overlapping with client work gains nothing. More server parallelism (more tablets, concurrent batch scans) is the open question, for a cluster (M3) | M8 | 1 | Done for the reading of a batch (2026-11-19, section 4.14): a batch of disjoint lookups is read on up to `query.join.lookupthreads` threads, 4 by default on RocksDB, 1 on Accumulo and HBase until measured. WatDiv C3 2,371 → 1,189 ms on the native executable (−50 %); the join benchmark's lookup-bound queries −17 to −44 %. Not done: fetching the next window while the current one is joined, and C2's batches, which bind objects. |
 | O17 | **Less work per looked-up row:** `BatchLookup` matches on the row's encoded object instead of encoding every result again, and allocates less per row (section 6.8) | R2 | dropped for joins: on Accumulo the query thread's CPU is 2 to 3 % of a join's wall time (4.6). It could matter for range scans, which are client-bound | M8 | 1 | Done for the lookup path's CPU (2026-11-19, section 4.14): entity chains skip the cell check and the objects' re-encoding, statement rows and RocksDB keys are decoded in one pass. WatDiv on the native executable: C3 3,872 → 2,268 ms (−41 %), the complex queries −24 %, all 100 queries −11 %; the join benchmark within noise. |
 | O18 | **IRI prefix codes**, only if M9 says go (section 6.9) | R1 | measured (M9): −4 to −5 % on disk, −25 to −35 % in the block cache, −44 to −57 % of the key bytes a writer sends, no clear change in scan and decode time | M9, D11 | 2 | Deferred (2026-11-16: below the bar on disk; revisit after M3, see 6.9) |
 | O19 | **RocksDB key decoding:** `RocksCodec` encodes and decodes keys by copying the runs between escapes in bulk, instead of a byte at a time through a synchronized `ByteArrayOutputStream` | — | measured with O20 on RocksDB (M8, against `rocksdb-20261116-204243`): `count-class` 71 → 25 ms, range scans −23 to −31 %, joins −13 to −19 % | — | 1 | Done (PR #15) |
@@ -772,6 +772,25 @@ Measured on 2026-11-19 with `QueryProfile`: one query in-process on the JVM, thr
   - hashing `KeyRange` without `Objects.hash`.
 - **The join benchmark,** two before/after pairs on the same store (`main` and this change, built in turn): within noise. The larger queries moved −3 to −19 % in one pair and −6 to +2 % in the other; the sub-millisecond ones ±30 % either way. Rows were identical.
 - **Next:** C2's remaining cost is per lookup (building keys, grouping them) and RDF4J's binding sets. O16 (more threads) is the other half of section 4.14's conclusion.
+
+**After O16** (the same day): a batch whose ranges can't overlap is read on several threads, chunks of at least 256 lookups each, the query thread reading the first (`query.join.lookupthreads`, 4 by default on RocksDB). Each figure compares 1 and 4 threads:
+
+| | 1 thread | 4 threads |
+|---|---|---|
+| C3-01 in-process, JVM (`QueryProfile`) | 1,344 ms | 548 ms (2 threads 819, 8 threads 402) |
+| WatDiv C3, the native executable alone | 2,371 ms | 1,189 ms (−50 %) |
+| WatDiv C1 | 34.4 ms | 21.8 ms (−36 %) |
+| WatDiv's complex queries, geometric mean | 213.1 ms | 150.9 ms (−29 %) |
+| All 100 WatDiv queries, geometric mean | 3.6 ms | 3.6 ms |
+| Join benchmark (variants of one run): `star-in`, `class-label`, `class-value-wide` | 71, 237, 266 ms | 40, 132, 158 ms (−41 to −44 %) |
+| `star-optional`, `chain` | 18.9, 18.4 ms | 12.0, 15.2 ms |
+
+- **The threads run:** C3's JVM CPU rises from 1,392 to 1,804 ms while its wall time falls, and its trace has the chunks' scans as parts.
+- **Only large batches use them.** Batches under 512 lookups stay on the query thread. F4 and F1 never reach that size, and are the same with 1 and 4 threads in-process. The other queries of both suites are within noise, and every query returns the same rows either way.
+- **Why 4:** 8 threads gain another 27 % on C3, but one query would then take 8 cores, which a server running several queries can't spare. The setting raises it.
+- **C2 doesn't change:** its batches bind objects, so their ranges may overlap and they keep the single scan.
+- **QLever** is still 3.4 times faster on C3 (346 ms). The rest is the query thread's own work: building the lookups' keys and RDF4J's joins.
+- **Not done:** fetching the next window while the current one is joined (the other half of O16), and the Accumulo and HBase defaults, which stay 1 until measured on a cluster.
 
 ---
 
