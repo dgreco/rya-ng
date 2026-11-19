@@ -3,15 +3,28 @@
 Two tools in this module measure Tripatha's query performance, on a laptop and without a cluster:
 
 - **The join benchmark** (`bench.sh`, `JoinBench`) runs a fixed suite of 25 queries over a generated store of 10M triples, in-process, on RocksDB, Accumulo or HBase. It was written to measure Tripatha's own optimizations ([SCALE-STUDY.md](../SCALE-STUDY.md), M8), so it is not used to compare Tripatha with other engines.
-- **The engine comparison** (`compare.sh`, `CompareBench`) runs a standard benchmark, [WatDiv](https://dsg.uwaterloo.ca/watdiv/) (the Waterloo SPARQL Diversity Test Suite), against Tripatha's SPARQL endpoint on RocksDB and against two other open-source engines loaded with the same data, all over HTTP (SCALE-STUDY.md, M11):
+- **The engine comparison** (`compare.sh`, `CompareBench`) runs a standard benchmark, [WatDiv](https://dsg.uwaterloo.ca/watdiv/) (the Waterloo SPARQL Diversity Test Suite), against Tripatha's SPARQL endpoint, as its native executable with RocksDB inside, and against two other open-source engines loaded with the same data, one after the other, over HTTP (SCALE-STUDY.md, M11):
   - [QLever](https://github.com/ad-freiburg/qlever) (Apache 2.0), a fast single-machine engine;
   - [Oxigraph](https://github.com/oxigraph/oxigraph) (MIT or Apache 2.0), an embedded store that, like Tripatha here, stores its data in RocksDB.
 
 WatDiv has its own data generator and 20 query templates of four shapes (linear, star, snowflake, complex), designed by others and tuned for by no engine here.
 
+## Quick start: the engine comparison
+
+1. Install what it needs on your system (next section). `tripatha.loader/compare.sh --check` lists whatever is still missing, with the command that installs it.
+2. Run `tripatha.loader/compare.sh --build`, from the repository's root.
+3. Read the report it prints at the end, also saved as `tripatha.loader/target/compare/compare-<date>.md`.
+
+The first run, at the default scale (about 10M triples), takes 35 to 40 minutes:
+- building Tripatha and its native executable: 5 to 10 minutes;
+- generating WatDiv's data and loading the three engines: about 3 minutes;
+- measuring them one after the other: about 25 minutes, most of it Oxigraph's runs of the largest query (C3, 17 s each).
+
+It needs about 3 GB of disk, plus Maven's downloads on a first build, and 8 GB of free memory. Later runs reuse the data and the stores; leave out `--build` unless the code changed.
+
 ## Installing what they need
 
-Both platforms need a JDK 25 (with `JAVA_HOME` set), Maven, bash, curl and git, as for the rest of the build. The join benchmark needs nothing else. Oxigraph needs nothing either: `compare.sh` downloads a pinned release from GitHub, checks its SHA-256 and keeps it in `~/.m2/repository/.cache/tripatha-compare`.
+Both platforms need **GraalVM for JDK 25** ([Oracle GraalVM or GraalVM Community](https://www.graalvm.org/downloads/)) with `JAVA_HOME` pointing at it. It is the JDK of the build, and its `native-image` builds Tripatha's native executable. They also need Maven, bash, curl and git, as for the rest of the build. The join benchmark needs nothing else. Oxigraph needs nothing either: `compare.sh` downloads a pinned release from GitHub, checks its SHA-256 and keeps it in `~/.m2/repository/.cache/tripatha-compare`.
 
 ### macOS
 
@@ -21,7 +34,8 @@ brew tap qlever-dev/qlever
 brew trust qlever-dev/qlever
 brew install qlever
 
-# WatDiv is built from source: a C++ compiler and Boost. The word list it reads, /usr/share/dict/words, comes with macOS.
+# A C compiler for native-image, and a C++ compiler and Boost for WatDiv, which is built from source.
+# The word list WatDiv reads, /usr/share/dict/words, comes with macOS.
 xcode-select --install          # if the command line tools aren't installed yet
 brew install boost
 ```
@@ -44,11 +58,12 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/qlever.gpg] https://packages
 sudo apt update
 sudo apt install qlever
 
-# WatDiv: a C++ compiler, Boost's date_time library and a word list for /usr/share/dict/words
-sudo apt install build-essential libboost-date-time-dev wamerican
+# native-image: a C compiler and zlib's headers. WatDiv: a C++ compiler, Boost's date_time library and a word
+# list for /usr/share/dict/words.
+sudo apt install build-essential zlib1g-dev libboost-date-time-dev wamerican
 ```
 
-On Fedora and other RPM-based distributions, WatDiv needs `sudo dnf install gcc-c++ boost-devel words`. QLever has no package there, nor for arm64: build it from source and set `QLEVER_BIN`, or leave it out with `--engines tripatha,oxigraph`.
+On Fedora and other RPM-based distributions: `sudo dnf install gcc gcc-c++ glibc-devel zlib-devel boost-devel words`. QLever has no package there, nor for arm64: build it from source and set `QLEVER_BIN`, or leave it out with `--engines tripatha,oxigraph`.
 
 Check with `qlever-server --version`, and see [QLever's quickstart](https://docs.qlever.dev/quickstart/) for updates.
 
@@ -60,15 +75,20 @@ tripatha.loader/bench.sh --build
 
 # the engine comparison on WatDiv, at scale factor 100 (about 10M triples), 5 queries per template
 tripatha.loader/compare.sh --build
+
+# only check that everything it needs is installed
+tripatha.loader/compare.sh --check
 ```
 
-Use `--build` after changing code, so the benchmarks run the change. The first comparison run at a scale prepares its data and the engines' stores; later runs reuse them:
+Use `--build` after changing code, so the benchmarks run the change. For the comparison it rebuilds the modules and Tripatha's native executable, `tripatha.standalone/target/tripatha` (the `-Pnative` build, as in CI); without it, the executable is built only if it is missing. The first comparison run at a scale prepares its data and the engines' stores; later runs reuse them:
 
 - `compare.sh` downloads WatDiv's source from the University of Waterloo, checks it against its SHA-256 and builds it in `~/.m2/repository/.cache/tripatha-compare`. WatDiv writes the data and the queries.
 - Tripatha loads the data into a RocksDB store of its own (`RdfFileLoad`, through the same DAO as a live store, with its statistics counters and the entity index). QLever builds its index and Oxigraph loads and optimizes its store, from the same file.
 - Tripatha's endpoint serves a copy of its store, so nothing it writes reaches the original. On macOS the copy is an APFS clone: instant, and sharing the store's blocks. On Linux it is a reflink copy where the file system has them (Btrfs, XFS), and otherwise a full copy, which needs as much free disk as the store.
 
-Everything goes under `tripatha.loader/target/compare` (`COMPARE_DIR` names another directory): one directory per scale factor (`watdiv-sf100`) holding the data, the queries and every engine's store, plus the logs and the reports. Delete a scale's directory to start it afresh.
+Then the engines are measured one at a time: each one's server is started, measured alone on the machine, and stopped before the next starts. A last step compares their results and writes the report.
+
+Everything goes under `tripatha.loader/target/compare` (`COMPARE_DIR` names another directory): one directory per scale factor (`watdiv-sf100`) holding the data, the queries and every engine's store, each engine's results of a run (`runs/<date>`), the logs and the reports. Delete a scale's directory to start it afresh.
 
 | Option | Default | |
 |---|---|---|
@@ -82,14 +102,14 @@ Everything goes under `tripatha.loader/target/compare` (`COMPARE_DIR` names anot
 
 | Environment variable | |
 |---|---|
-| `TRIPATHA_HEAP` | the endpoint's Java heap (`6g`) |
+| `TRIPATHA_HEAP` | the heap of Tripatha's native executable (`-Xmx`, `6g`) |
 | `QLEVER_MEMORY` | QLever's memory for queries (`6G`) |
 | `QLEVER_SERVER_ARGS` | more options for `qlever-server`, for example `--enable-prefilter-on-index-scans false` |
 | `QLEVER_BIN` | the directory of `qlever-index` and `qlever-server`, if they aren't on the `PATH` |
 | `OXIGRAPH` | another Oxigraph binary than the pinned release |
 | `BOOST_HOME` | Boost's prefix, for building WatDiv (on macOS, Homebrew's by default) |
 
-The servers listen on 127.0.0.1 only, on ports 7101 (Tripatha), 7102 (QLever) and 7103 (Oxigraph), and stop when the script ends.
+The servers listen on 127.0.0.1 only, on ports 7101 (Tripatha), 7102 (QLever) and 7103 (Oxigraph), and only one runs at a time.
 
 ## Reading the comparison
 
@@ -97,11 +117,13 @@ The report (Markdown and CSV, `compare-<date>`) starts with each engine's versio
 
 - **The engines must hold the same data.** The report first compares their statement counts.
 - **They must return the same rows.** A query whose row count differs between engines, or that fails on one, is marked and left out of the summary.
-- **How a query is timed:** a SPARQL protocol POST, its whole result read as TSV, uncompressed, to the last byte. Each engine runs each query a few times first, then the engines take turns, so a slow phase of the machine doesn't land on one engine. QLever keeps a cache of results, which would answer the timed runs from the warm-up, so it is emptied before each of its runs.
+- **How a query is timed:** a SPARQL protocol POST, its whole result read as TSV, uncompressed, to the last byte. QLever keeps a cache of results, which would answer the timed runs from the warm-up, so it is emptied before each of its runs.
+- **One engine at a time:** the engine being measured is the only one running, so the others take none of its processors, memory or disk. It first runs every query once, so it starts warm (a JVM's compiler, say), then each query's warm-up and timed runs.
 - **The summary** is the geometric mean of the p50s over the queries every engine answered with the same rows, overall and per query shape.
 - **Warm cache only:** a cold-cache run needs the operating system's caches dropped (`sudo purge` on macOS), which the script doesn't do.
+- Tripatha runs as its native executable, which has no JIT compiler and, as built, the Serial garbage collector: it starts at full speed but is slower than on the JVM on queries with large results.
 - Tripatha's store size includes its statistics counters and its entity index, which the other engines don't build.
-- Everything runs on one machine, the engines side by side: keep other heavy programs closed while it runs. Absolute times move between runs; the ratios within a run, where the engines take turns, hold better.
+- The engines run one after the other, so anything else busy on the machine moves one engine's figures and not the others': keep other heavy programs closed while it runs.
 
 ## WatDiv
 

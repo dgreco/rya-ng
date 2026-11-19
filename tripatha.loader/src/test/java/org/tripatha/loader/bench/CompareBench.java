@@ -40,25 +40,30 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Runs a standard benchmark's queries against several SPARQL endpoints and compares them
- * (SCALE-STUDY.md M11): WatDiv's, on Tripatha's endpoint over RocksDB and on other engines loaded
- * with the same data. Run it with {@code tripatha.loader/compare.sh}, which generates the data and
- * the queries, loads the engines and starts their servers.
+ * Runs a standard benchmark's queries against SPARQL endpoints and compares them (SCALE-STUDY.md
+ * M11): WatDiv's, on Tripatha's endpoint over RocksDB and on other engines loaded with the same
+ * data. Run it with {@code tripatha.loader/compare.sh}, which generates the data and the queries,
+ * loads the engines and serves them one at a time.
+ *
+ * <p>It has two modes. With {@code --endpoint} and {@code --raw FILE} it measures one engine, the
+ * only one running, and writes its results to the file. With {@code --result FILE}, once per
+ * engine, it compares those results and writes the report. So no engine runs while another is
+ * measured.
  *
  * <p>The queries are the {@code .rq} files of a directory. Files named after WatDiv's templates
  * ({@code S1-03.rq}) come in its order (linear, star, snowflake, complex), and the report adds a
  * summary per query shape.
  *
  * <p>Every query goes over HTTP as a SPARQL protocol POST, and its whole result is read as TSV
- * (one line per row, uncompressed); its time is the time to the last byte. Every engine runs each
- * query a few times before timing, then the engines take turns, each run starting with a
- * different one. An engine's result cache would answer the timed runs from the warm-up, so a
- * {@code --clear} URL is called before every run of that engine.
+ * (one line per row, uncompressed); its time is the time to the last byte. Every query is run
+ * once first, so the engine starts warm, then each query has its warm-up and timed runs. An
+ * engine's result cache would answer the timed runs from the warm-up, so a {@code --clear} URL is
+ * called before every run.
  *
- * <p>Numbers mean something only if the engines hold and return the same data, so it checks
- * first: the statement count overall and per graph, and then every query's row count. A query
- * whose row count differs between engines, or that fails on one, is reported but left out of the
- * summary.
+ * <p>Numbers mean something only if the engines hold and return the same data, so each engine's
+ * results include its statement count, overall and per graph, and every query's row count. A
+ * query whose row count differs between engines, or that fails on one, is reported but left out
+ * of the summary.
  */
 public final class CompareBench {
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT);
@@ -83,6 +88,14 @@ public final class CompareBench {
         }
     }
 
+    /** One run of a query: its rows and milliseconds, or an error. */
+    private record Run(long rows, double ms, String error) {
+    }
+
+    /** One engine's results, as {@code --raw} writes them: its checks and each query's outcome, in order. */
+    record EngineResults(String engine, int warmup, int runs, Map<String, String> checks, Map<String, Outcome> outcomes) {
+    }
+
     private final Settings settings;
     private final HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(Duration.ofSeconds(10)).build();
@@ -105,26 +118,148 @@ public final class CompareBench {
             System.exit(2);
             return;
         }
-        new CompareBench(settings).run();
+        final CompareBench bench = new CompareBench(settings);
+        if (settings.raw != null) {
+            bench.measure();
+        } else {
+            bench.report();
+        }
     }
 
-    private void run() throws Exception {
-        Files.createDirectories(settings.out);
+    // ---- measuring one engine ----
+
+    private void measure() throws Exception {
+        final Endpoint e = settings.endpoint;
         final List<Query> suite = readQueries(settings.queries).stream()
                 .filter(q -> settings.only.isEmpty() || settings.only.contains(q.name())).toList();
-        System.out.printf(Locale.ROOT, "Comparing %s on %d queries.%n", settings.endpoints.stream().map(Endpoint::name).toList(),
-                suite.size());
-        final Map<String, Map<String, String>> checks = checks();
-        final Map<String, Map<String, Outcome>> results = new LinkedHashMap<>();
+        System.out.printf(Locale.ROOT, "Measuring %s on %d queries.%n", e.name(), suite.size());
+        final Map<String, String> checks = checks(e);
+        checks.forEach((k, v) -> System.out.printf(Locale.ROOT, "Check %-60s %s%n", k, v));
+        // One pass over every query first, so no query meets a cold engine (a JVM's compiler, say).
         for (final Query q : suite) {
-            final Map<String, Outcome> byEngine = measure(q);
-            results.put(q.name(), byEngine);
-            final StringBuilder line = new StringBuilder(String.format(Locale.ROOT, "%-10s", q.name()));
-            byEngine.forEach((e, o) -> line.append(String.format(Locale.ROOT, "  %s %s", e,
-                    o.ok() ? String.format(Locale.ROOT, "%,d rows %.1f ms", o.rows(), o.p50()) : o.error())));
-            System.out.println(line);
+            run(e, q);
         }
-        report(suite, checks, results);
+        final Map<String, Outcome> outcomes = new LinkedHashMap<>();
+        for (final Query q : suite) {
+            final Outcome o = measure(e, q);
+            outcomes.put(q.name(), o);
+            System.out.printf(Locale.ROOT, "%-10s %s%n", q.name(),
+                    o.ok() ? String.format(Locale.ROOT, "%,d rows %.1f ms", o.rows(), o.p50()) : o.error());
+        }
+        writeResults(settings.raw, new EngineResults(e.name(), settings.warmup, settings.runs, checks, outcomes));
+    }
+
+    private Outcome measure(final Endpoint e, final Query q) {
+        final List<Double> times = new ArrayList<>();
+        long rows = -1;
+        for (int i = 0; i < settings.warmup + settings.runs; i++) {
+            final Run run = run(e, q);
+            if (run.error() != null) {
+                return new Outcome(-1, 0, 0, run.error());
+            }
+            if (rows >= 0 && rows != run.rows()) {
+                return new Outcome(-1, 0, 0, "rows changed between runs: " + rows + ", then " + run.rows());
+            }
+            rows = run.rows();
+            if (i >= settings.warmup) {
+                times.add(run.ms());
+            }
+        }
+        return new Outcome(rows, percentile(times, 0.5), percentile(times, 0.9), null);
+    }
+
+    /** One run: empties the engine's result cache, then sends the query and reads the whole result. */
+    private Run run(final Endpoint e, final Query q) {
+        try {
+            if (e.clear() != null) {
+                final HttpResponse<Void> cleared = http.send(HttpRequest.newBuilder(e.clear()).timeout(Duration.ofSeconds(30)).GET().build(),
+                        HttpResponse.BodyHandlers.discarding());
+                if (cleared.statusCode() != 200) {
+                    throw new IllegalStateException("clearing the cache answered " + cleared.statusCode());
+                }
+            }
+            final long t0 = System.nanoTime();
+            final HttpResponse<InputStream> response = http.send(request(e, q.sparql()), HttpResponse.BodyHandlers.ofInputStream());
+            try (InputStream body = response.body()) {
+                if (response.statusCode() != 200) {
+                    return new Run(-1, 0, "HTTP " + response.statusCode() + ": "
+                            + abbreviate(new String(body.readNBytes(400), StandardCharsets.UTF_8)));
+                }
+                final long count = countRows(body);
+                return new Run(count, (System.nanoTime() - t0) / 1e6, null);
+            }
+        } catch (final HttpTimeoutException ex) {
+            return new Run(-1, 0, "timeout (" + settings.timeoutSeconds + " s)");
+        } catch (final IOException | RuntimeException ex) {
+            return new Run(-1, 0, "error: " + abbreviate(String.valueOf(ex.getMessage())));
+        } catch (final InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    private HttpRequest request(final Endpoint e, final String sparql) {
+        return HttpRequest.newBuilder(e.query()).timeout(Duration.ofSeconds(settings.timeoutSeconds))
+                .header("Content-Type", "application/sparql-query; charset=utf-8").header("Accept", "text/tab-separated-values")
+                .POST(HttpRequest.BodyPublishers.ofString(sparql, StandardCharsets.UTF_8)).build();
+    }
+
+    /**
+     * The statement count overall and per named graph: the data must have reached each engine
+     * whole. A query without {@code GRAPH} reads every graph on all of them (Oxigraph with
+     * {@code --union-default-graph}).
+     */
+    private Map<String, String> checks(final Endpoint e) throws Exception {
+        final Map<String, String> checks = new LinkedHashMap<>();
+        final List<String> total = select(e, "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }");
+        checks.put("statements", total.isEmpty() ? "none" : total.get(0));
+        for (final String line : select(e, "SELECT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g")) {
+            final String[] f = line.split("\t", -1);
+            checks.put("graph " + f[0], f.length > 1 ? f[1] : "");
+        }
+        return checks;
+    }
+
+    /** A query's result lines, without the header, with integers written alike whatever the engine. */
+    private List<String> select(final Endpoint e, final String sparql) throws Exception {
+        final HttpResponse<String> response = http.send(request(e, sparql), HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new IllegalStateException(e.name() + " answered " + response.statusCode() + ": " + abbreviate(response.body()));
+        }
+        final List<String> lines = new ArrayList<>(response.body().lines().skip(1).filter(l -> !l.isEmpty()).toList());
+        lines.replaceAll(CompareBench::normalize);
+        lines.sort(null);
+        return lines;
+    }
+
+    /** SPARQL TSV may write an integer bare or as a typed literal. */
+    static String normalize(final String line) {
+        final String[] fields = line.split("\t", -1);
+        for (int i = 0; i < fields.length; i++) {
+            final Matcher m = INTEGER.matcher(fields[i]);
+            if (m.matches()) {
+                fields[i] = m.group(1);
+            }
+        }
+        return String.join("\t", fields);
+    }
+
+    /** The rows of a TSV result: its lines, less the header. A literal's line breaks are escaped in TSV. */
+    static long countRows(final InputStream body) throws IOException {
+        final byte[] buffer = new byte[1 << 16];
+        long lines = 0;
+        boolean open = false;
+        for (int n; (n = body.read(buffer)) > 0;) {
+            for (int i = 0; i < n; i++) {
+                if (buffer[i] == '\n') {
+                    lines++;
+                    open = false;
+                } else {
+                    open = true;
+                }
+            }
+        }
+        return Math.max(0, lines + (open ? 1 : 0) - 1);
     }
 
     /** The {@code .rq} files of a directory, in WatDiv's order when they are named after its templates. */
@@ -153,162 +288,6 @@ public final class CompareBench {
         return x.matches() != y.matches() ? (x.matches() ? -1 : 1) : a.name().compareTo(b.name());
     }
 
-    // ---- checks ----
-
-    /**
-     * The statement count overall and per named graph, from each engine: the data must have
-     * reached each one whole. A query without {@code GRAPH} reads every graph on all of them
-     * (Oxigraph with {@code --union-default-graph}).
-     */
-    private Map<String, Map<String, String>> checks() throws Exception {
-        final Map<String, Map<String, String>> rows = new LinkedHashMap<>();
-        for (final Endpoint e : settings.endpoints) {
-            final List<String> total = select(e, "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }");
-            rows.computeIfAbsent("statements", k -> new LinkedHashMap<>()).put(e.name(), total.isEmpty() ? "none" : total.get(0));
-            for (final String line : select(e, "SELECT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g")) {
-                final String[] f = line.split("\t", -1);
-                rows.computeIfAbsent("graph " + f[0], k -> new LinkedHashMap<>()).put(e.name(), f.length > 1 ? f[1] : "");
-            }
-        }
-        final List<String> engines = settings.endpoints.stream().map(Endpoint::name).toList();
-        boolean same = true;
-        for (final Map.Entry<String, Map<String, String>> r : rows.entrySet()) {
-            final List<String> values = engines.stream().map(n -> r.getValue().getOrDefault(n, "missing")).toList();
-            same &= values.stream().distinct().count() == 1;
-            System.out.printf(Locale.ROOT, "Check %-60s %s%n", r.getKey(), values);
-        }
-        if (!same) {
-            System.out.println("The engines don't hold the same statements: their latencies are not comparable.");
-        }
-        return rows;
-    }
-
-    /** A query's result lines, without the header, with integers written alike whatever the engine. */
-    private List<String> select(final Endpoint e, final String sparql) throws Exception {
-        final HttpResponse<String> response = http.send(request(e, sparql), HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() != 200) {
-            throw new IllegalStateException(e.name() + " answered " + response.statusCode() + ": " + abbreviate(response.body()));
-        }
-        final List<String> lines = new ArrayList<>(response.body().lines().skip(1).filter(l -> !l.isEmpty()).toList());
-        lines.replaceAll(CompareBench::normalize);
-        lines.sort(null);
-        return lines;
-    }
-
-    /** SPARQL TSV may write an integer bare or as a typed literal. */
-    static String normalize(final String line) {
-        final String[] fields = line.split("\t", -1);
-        for (int i = 0; i < fields.length; i++) {
-            final Matcher m = INTEGER.matcher(fields[i]);
-            if (m.matches()) {
-                fields[i] = m.group(1);
-            }
-        }
-        return String.join("\t", fields);
-    }
-
-    // ---- queries ----
-
-    private Map<String, Outcome> measure(final Query q) {
-        final int n = settings.endpoints.size();
-        final Map<String, List<Double>> times = new LinkedHashMap<>();
-        final Map<String, Long> rows = new LinkedHashMap<>();
-        final Map<String, String> errors = new LinkedHashMap<>();
-        for (final Endpoint e : settings.endpoints) {
-            times.put(e.name(), new ArrayList<>());
-            for (int i = 0; i < settings.warmup && !errors.containsKey(e.name()); i++) {
-                timed(e, q, rows, errors);
-            }
-        }
-        for (int r = 0; r < settings.runs; r++) {
-            for (int k = 0; k < n; k++) {
-                final Endpoint e = settings.endpoints.get((r + k) % n);
-                if (!errors.containsKey(e.name())) {
-                    final double ms = timed(e, q, rows, errors);
-                    if (ms >= 0) {
-                        times.get(e.name()).add(ms);
-                    }
-                }
-            }
-        }
-        final Map<String, Outcome> out = new LinkedHashMap<>();
-        for (final Endpoint e : settings.endpoints) {
-            final String error = errors.get(e.name());
-            final List<Double> t = times.get(e.name());
-            out.put(e.name(), error != null || t.isEmpty() ? new Outcome(-1, 0, 0, error == null ? "no runs" : error)
-                    : new Outcome(rows.get(e.name()), percentile(t, 0.5), percentile(t, 0.9), null));
-        }
-        return out;
-    }
-
-    /**
-     * One run: empties the engine's result cache, then sends the query and reads the whole result.
-     * Returns the milliseconds to the last byte, or -1 after recording an error (or a row count
-     * that changed between runs).
-     */
-    private double timed(final Endpoint e, final Query q, final Map<String, Long> rows, final Map<String, String> errors) {
-        try {
-            if (e.clear() != null) {
-                final HttpResponse<Void> cleared = http.send(HttpRequest.newBuilder(e.clear()).timeout(Duration.ofSeconds(30)).GET().build(),
-                        HttpResponse.BodyHandlers.discarding());
-                if (cleared.statusCode() != 200) {
-                    throw new IllegalStateException("clearing the cache answered " + cleared.statusCode());
-                }
-            }
-            final long t0 = System.nanoTime();
-            final HttpResponse<InputStream> response = http.send(request(e, q.sparql()), HttpResponse.BodyHandlers.ofInputStream());
-            final long count;
-            try (InputStream body = response.body()) {
-                if (response.statusCode() != 200) {
-                    errors.put(e.name(), "HTTP " + response.statusCode() + ": "
-                            + abbreviate(new String(body.readNBytes(400), StandardCharsets.UTF_8)));
-                    return -1;
-                }
-                count = countRows(body);
-            }
-            final double ms = (System.nanoTime() - t0) / 1e6;
-            final Long before = rows.putIfAbsent(e.name(), count);
-            if (before != null && before != count) {
-                errors.put(e.name(), "rows changed between runs: " + before + ", then " + count);
-                return -1;
-            }
-            return ms;
-        } catch (final HttpTimeoutException ex) {
-            errors.put(e.name(), "timeout (" + settings.timeoutSeconds + " s)");
-            return -1;
-        } catch (final IOException | RuntimeException ex) {
-            errors.put(e.name(), "error: " + abbreviate(String.valueOf(ex.getMessage())));
-            return -1;
-        } catch (final InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException(ex);
-        }
-    }
-
-    private HttpRequest request(final Endpoint e, final String sparql) {
-        return HttpRequest.newBuilder(e.query()).timeout(Duration.ofSeconds(settings.timeoutSeconds))
-                .header("Content-Type", "application/sparql-query; charset=utf-8").header("Accept", "text/tab-separated-values")
-                .POST(HttpRequest.BodyPublishers.ofString(sparql, StandardCharsets.UTF_8)).build();
-    }
-
-    /** The rows of a TSV result: its lines, less the header. A literal's line breaks are escaped in TSV. */
-    static long countRows(final InputStream body) throws IOException {
-        final byte[] buffer = new byte[1 << 16];
-        long lines = 0;
-        boolean open = false;
-        for (int n; (n = body.read(buffer)) > 0;) {
-            for (int i = 0; i < n; i++) {
-                if (buffer[i] == '\n') {
-                    lines++;
-                    open = false;
-                } else {
-                    open = true;
-                }
-            }
-        }
-        return Math.max(0, lines + (open ? 1 : 0) - 1);
-    }
-
     private static double percentile(final List<Double> values, final double p) {
         final List<Double> sorted = values.stream().sorted().toList();
         return sorted.get((int) Math.min(sorted.size() - 1, Math.floor(p * sorted.size())));
@@ -319,24 +298,78 @@ public final class CompareBench {
         return one.length() > 200 ? one.substring(0, 200) + "…" : one;
     }
 
+    // ---- one engine's results, in a file ----
+
+    /** Tab-separated lines: the engine, its settings, its checks, then one line per query. */
+    static void writeResults(final Path file, final EngineResults r) throws IOException {
+        final StringBuilder s = new StringBuilder();
+        s.append("engine\t").append(r.engine()).append('\n');
+        s.append("runs\t").append(r.warmup()).append('\t').append(r.runs()).append('\n');
+        r.checks().forEach((k, v) -> s.append("check\t").append(k).append('\t').append(v).append('\n'));
+        r.outcomes().forEach((q, o) -> s.append(String.format(Locale.ROOT, "query\t%s\t%d\t%.3f\t%.3f\t%s%n", q, o.rows(), o.p50(), o.p90(),
+                o.ok() ? "" : o.error().replace('\t', ' '))));
+        Files.createDirectories(file.toAbsolutePath().getParent());
+        Files.writeString(file, s, StandardCharsets.UTF_8);
+    }
+
+    static EngineResults readResults(final Path file) throws IOException {
+        String engine = null;
+        int warmup = 0;
+        int runs = 0;
+        final Map<String, String> checks = new LinkedHashMap<>();
+        final Map<String, Outcome> outcomes = new LinkedHashMap<>();
+        for (final String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+            final String[] f = line.split("\t", -1);
+            switch (f[0]) {
+                case "engine" -> engine = f[1];
+                case "runs" -> {
+                    warmup = Integer.parseInt(f[1]);
+                    runs = Integer.parseInt(f[2]);
+                }
+                case "check" -> checks.put(f[1], f[2]);
+                case "query" -> outcomes.put(f[1], new Outcome(Long.parseLong(f[2]), Double.parseDouble(f[3]), Double.parseDouble(f[4]),
+                        f[5].isEmpty() ? null : f[5]));
+                default -> throw new IOException("unexpected line in " + file + ": " + line);
+            }
+        }
+        if (engine == null) {
+            throw new IOException("no engine in " + file);
+        }
+        return new EngineResults(engine, warmup, runs, checks, outcomes);
+    }
+
     // ---- the report ----
 
-    private void report(final List<Query> suite, final Map<String, Map<String, String>> checks,
-            final Map<String, Map<String, Outcome>> results) throws IOException {
-        final List<String> engines = settings.endpoints.stream().map(Endpoint::name).toList();
+    private void report() throws IOException {
+        Files.createDirectories(settings.out);
+        final List<EngineResults> all = new ArrayList<>();
+        for (final Path f : settings.results) {
+            all.add(readResults(f));
+        }
+        final List<String> engines = all.stream().map(EngineResults::engine).toList();
         final String reference = engines.get(0);
+        final List<String> suite = new ArrayList<>(all.get(0).outcomes().keySet());
+        final Map<String, Map<String, String>> checks = new LinkedHashMap<>();
+        all.forEach(r -> r.checks().forEach((k, v) -> checks.computeIfAbsent(k, x -> new LinkedHashMap<>()).put(r.engine(), v)));
+        final boolean sameData = checks.values().stream()
+                .allMatch(byEngine -> engines.stream().map(e -> byEngine.getOrDefault(e, "missing")).distinct().count() == 1);
+
         final String name = "compare-" + LocalDateTime.now().format(STAMP);
         final StringBuilder md = new StringBuilder("# Engine comparison\n\n");
         md.append(String.format(Locale.ROOT, "- %d processors, %d GB of memory, %s.%n", Runtime.getRuntime().availableProcessors(),
                 Math.round(memoryBytes() / 1e9), System.getProperty("os.name") + " " + System.getProperty("os.version")));
-        md.append(String.format(Locale.ROOT, "- Warm cache: %d warm-up and %d timed runs of each query per engine, the engines taking "
-                + "turns. Times are p50 to the last byte of a TSV result over HTTP, in milliseconds.%n", settings.warmup, settings.runs));
+        md.append(String.format(Locale.ROOT, "- One engine at a time, alone on the machine: every query run once, then %d warm-up and %d "
+                + "timed runs of each. Times are p50 to the last byte of a TSV result over HTTP, in milliseconds.%n",
+                all.get(0).warmup(), all.get(0).runs()));
         settings.info.forEach(i -> md.append("- ").append(i).append('\n'));
 
         md.append("\n## Load checks\n\n| Check | ").append(String.join(" | ", engines)).append(" |\n|---|")
                 .append("---|".repeat(engines.size())).append('\n');
         checks.forEach((check, byEngine) -> md.append("| ").append(check).append(" | ")
                 .append(String.join(" | ", engines.stream().map(e -> byEngine.getOrDefault(e, "missing")).toList())).append(" |\n"));
+        if (!sameData) {
+            md.append("\nThe engines don't hold the same statements: their latencies are not comparable.\n");
+        }
 
         md.append("\n## Queries\n\n| Query | Rows | ").append(String.join(" | ", engines));
         engines.stream().skip(1).forEach(e -> md.append(" | ").append(e).append(" / ").append(reference));
@@ -345,23 +378,24 @@ public final class CompareBench {
         final Map<String, List<Double>> comparable = new LinkedHashMap<>();
         engines.forEach(e -> comparable.put(e, new ArrayList<>()));
         final Map<String, Map<String, List<Double>>> byShape = new TreeMap<>(Comparator.comparingInt(SHAPES::indexOf));
-        for (final Query q : suite) {
-            final Map<String, Outcome> byEngine = results.get(q.name());
+        for (final String q : suite) {
+            final Map<String, Outcome> byEngine = new LinkedHashMap<>();
+            all.forEach(r -> byEngine.put(r.engine(), r.outcomes().getOrDefault(q, new Outcome(-1, 0, 0, "not run"))));
             final List<Long> counts = byEngine.values().stream().filter(Outcome::ok).map(Outcome::rows).distinct().toList();
             final boolean allOk = byEngine.values().stream().allMatch(Outcome::ok);
             final boolean same = allOk && counts.size() == 1;
             final String rows = same ? String.format(Locale.ROOT, "%,d", counts.get(0))
                     : (allOk ? "differ: " : "not comparable: ") + String.join(", ", engines.stream().map(e -> e + " "
                             + (byEngine.get(e).ok() ? String.format(Locale.ROOT, "%,d", byEngine.get(e).rows()) : "failed")).toList());
-            md.append("| ").append(q.name()).append(" | ").append(rows);
+            md.append("| ").append(q).append(" | ").append(rows);
             for (final String e : engines) {
                 final Outcome o = byEngine.get(e);
                 md.append(" | ").append(o.ok() ? String.format(Locale.ROOT, "%.1f", o.p50()) : o.error().replace("|", "\\|"));
-                csv.append(String.format(Locale.ROOT, "%s,%s,%d,%.3f,%.3f,%s,%s%n", q.name(), e, o.rows(), o.p50(), o.p90(), same,
+                csv.append(String.format(Locale.ROOT, "%s,%s,%d,%.3f,%.3f,%s,%s%n", q, e, o.rows(), o.p50(), o.p90(), same,
                         o.ok() ? "" : '"' + o.error().replace("\"", "'") + '"'));
                 if (same) {
                     comparable.get(e).add(o.p50());
-                    final Matcher m = TEMPLATE.matcher(q.name());
+                    final Matcher m = TEMPLATE.matcher(q);
                     if (m.matches()) {
                         byShape.computeIfAbsent(m.group(1), k -> new LinkedHashMap<>()).computeIfAbsent(e, k -> new ArrayList<>())
                                 .add(o.p50());
@@ -411,24 +445,30 @@ public final class CompareBench {
 
     // ---- settings ----
 
-    record Settings(Path queries, List<Endpoint> endpoints, int warmup, int runs, int timeoutSeconds, List<String> only, Path out,
-            List<String> info) {
+    record Settings(Path queries, Endpoint endpoint, Path raw, List<Path> results, int warmup, int runs, int timeoutSeconds,
+            List<String> only, Path out, List<String> info) {
         static final String USAGE = """
-                Usage: CompareBench --queries DIR --endpoint NAME=URL [--endpoint NAME=URL ...] [options]   (run it with compare.sh)
+                Usage (run it with compare.sh):
+                  CompareBench --queries DIR --endpoint NAME=URL [--clear URL] --raw FILE [options]   measures one engine
+                  CompareBench --result FILE [--result FILE ...] [--info TEXT ...] [--out DIR]          compares them
                   --queries DIR        the .rq files to run
-                  --endpoint NAME=URL  an engine's SPARQL query URL; the first is the reference of the ratios
-                  --clear NAME=URL     a URL to GET before every run of that engine, to empty its result cache
-                  --warmup 3 --runs 10 runs per query and engine, before and while timing
+                  --endpoint NAME=URL  the engine's SPARQL query URL
+                  --clear URL          a URL to GET before every run, to empty the engine's result cache
+                  --raw FILE           where the engine's results go
+                  --warmup 3 --runs 10 runs per query, before and while timing
                   --timeout 120        seconds per query run
                   --only a,b           run only these queries
+                  --result FILE        an engine's results; the first is the reference of the ratios
                   --info TEXT          a line for the report's header (repeat it)
                   --out DIR            where reports go (default target/compare)
                 """;
 
         static Settings parse(final String[] args) {
             Path queries = null;
-            final Map<String, URI> endpoints = new LinkedHashMap<>();
-            final Map<String, URI> clears = new LinkedHashMap<>();
+            Endpoint endpoint = null;
+            URI clear = null;
+            Path raw = null;
+            final List<Path> results = new ArrayList<>();
             int warmup = 3;
             int runs = 10;
             int timeout = 120;
@@ -443,8 +483,16 @@ public final class CompareBench {
                 final String v = args[++i];
                 switch (a) {
                     case "--queries" -> queries = Path.of(v);
-                    case "--endpoint" -> endpoints.put(name(v), URI.create(v.substring(v.indexOf('=') + 1)));
-                    case "--clear" -> clears.put(name(v), URI.create(v.substring(v.indexOf('=') + 1)));
+                    case "--endpoint" -> {
+                        final int eq = v.indexOf('=');
+                        if (eq <= 0) {
+                            throw new IllegalArgumentException("--endpoint takes NAME=URL (got '" + v + "')");
+                        }
+                        endpoint = new Endpoint(v.substring(0, eq), URI.create(v.substring(eq + 1)), null);
+                    }
+                    case "--clear" -> clear = URI.create(v);
+                    case "--raw" -> raw = Path.of(v);
+                    case "--result" -> results.add(Path.of(v));
                     case "--warmup" -> warmup = Integer.parseInt(v);
                     case "--runs" -> runs = Math.max(1, Integer.parseInt(v));
                     case "--timeout" -> timeout = Integer.parseInt(v);
@@ -454,28 +502,15 @@ public final class CompareBench {
                     default -> throw new IllegalArgumentException("unknown option " + a);
                 }
             }
-            if (queries == null) {
-                throw new IllegalArgumentException("give the queries with --queries DIR");
-            }
-            if (endpoints.isEmpty()) {
-                throw new IllegalArgumentException("give at least one --endpoint");
-            }
-            for (final String c : clears.keySet()) {
-                if (!endpoints.containsKey(c)) {
-                    throw new IllegalArgumentException("--clear names no endpoint: " + c);
+            if (raw != null) {
+                if (queries == null || endpoint == null) {
+                    throw new IllegalArgumentException("measuring needs --queries and --endpoint");
                 }
+                endpoint = new Endpoint(endpoint.name(), endpoint.query(), clear);
+            } else if (results.isEmpty()) {
+                throw new IllegalArgumentException("give --raw FILE to measure one engine, or --result FILE for each engine to compare");
             }
-            final List<Endpoint> list = endpoints.entrySet().stream()
-                    .map(e -> new Endpoint(e.getKey(), e.getValue(), clears.get(e.getKey()))).toList();
-            return new Settings(queries, list, warmup, runs, timeout, only, out, List.copyOf(info));
-        }
-
-        private static String name(final String v) {
-            final int eq = v.indexOf('=');
-            if (eq <= 0) {
-                throw new IllegalArgumentException("takes NAME=URL (got '" + v + "')");
-            }
-            return v.substring(0, eq);
+            return new Settings(queries, endpoint, raw, List.copyOf(results), warmup, runs, timeout, only, out, List.copyOf(info));
         }
     }
 }

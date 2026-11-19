@@ -17,27 +17,33 @@
 # Compares Tripatha's endpoint on RocksDB with QLever and Oxigraph on a standard benchmark, WatDiv
 # (SCALE-STUDY.md M11). See tripatha.loader/README.md for the installation on macOS and Linux.
 #
-#   tripatha.loader/compare.sh [--build] [--scale 100] [--per-template 5] [--engines tripatha,qlever,oxigraph]
+#   tripatha.loader/compare.sh [--check] [--build] [--scale 100] [--per-template 5] [--engines tripatha,qlever,oxigraph]
 #                              [--only a,b] [--warmup 3] [--runs 10] [--timeout 120] [--out DIR]
+#
+# --check only checks that everything it needs is installed, and says how to install what isn't;
+# every run starts with the same check.
 #
 # --scale is WatDiv's scale factor (100: about 10M triples), --per-template the queries generated
 # from each of its 20 basic templates. Each scale lives in a directory of its own under
 # tripatha.loader/target/compare (COMPARE_DIR names another), with the data, the queries and every
 # engine's store; they are built once and reused. The reports go there too, unless --out says
-# otherwise. --build installs the modules first, as for bench.sh.
+# otherwise. --build rebuilds Tripatha first: the modules, and the endpoint's native executable.
 #
 # - The WatDiv generator is downloaded from the University of Waterloo, checked against its SHA-256
 #   and built (it needs Boost and a C++ compiler); it writes the data and the queries once.
 # - Tripatha loads the data into a RocksDB store (RdfFileLoad), QLever builds its index and
 #   Oxigraph loads and optimizes a store, from the same file.
-# - Tripatha's endpoint (tripatha.standalone) serves a clone of its store, so nothing it writes
-#   reaches the original; QLever and Oxigraph serve theirs read-only. All listen on 127.0.0.1.
-# - CompareBench checks that the engines hold the same statements, sends them every query in turn,
-#   and writes a Markdown and a CSV report.
+# - One engine at a time is served and measured, alone on the machine, then stopped. Tripatha is
+#   the endpoint's native executable (tripatha.standalone, GraalVM native-image, RocksDB inside); it
+#   serves a clone of its store, so nothing it writes reaches the original. QLever and Oxigraph
+#   serve theirs read-only. All listen on 127.0.0.1.
+# - CompareBench measures each one (its results go to target/compare/runs), then compares them:
+#   the same statements, the same rows, and a Markdown and a CSV report.
 #
 # QLever: qlever-index and qlever-server on the PATH, or QLEVER_BIN naming their directory.
 # Oxigraph: a pinned release, downloaded to ~/.m2/repository/.cache/tripatha-compare (OXIGRAPH names
 # another binary). Boost for WatDiv: BOOST_HOME, else Homebrew's on macOS, else the system's.
+# Tripatha's native executable needs GraalVM for JDK 25 (JAVA_HOME) to build.
 # Memory: TRIPATHA_HEAP (6g) and QLEVER_MEMORY (6G). QLEVER_SERVER_ARGS adds options to qlever-server.
 set -euo pipefail
 
@@ -60,6 +66,7 @@ PORT_QLEVER=7102
 PORT_OXIGRAPH=7103
 
 build=false
+check_only=false
 scale=100
 per_template=5
 engines=tripatha,qlever,oxigraph
@@ -71,6 +78,7 @@ out=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --build) build=true ;;
+    --check) check_only=true ;;
     --help|-h)
       awk 'NR > 16 && /^set -euo/ { exit } NR > 16 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"
       exit 0 ;;
@@ -169,15 +177,19 @@ oxigraph_binary() {
   printf '%s' "$file"
 }
 
-qlever_tool() { # NAME
+qlever_tool() { # NAME: its path, or nothing (and a failure) if it isn't installed
   if [ -n "${QLEVER_BIN:-}" ]; then
-    printf '%s' "$QLEVER_BIN/$1"
-  elif command -v "$1" >/dev/null 2>&1; then
-    command -v "$1"
+    [ -x "$QLEVER_BIN/$1" ] && printf '%s' "$QLEVER_BIN/$1"
   else
-    echo "QLever's $1 isn't installed: see tripatha.loader/README.md, set QLEVER_BIN, or leave QLever out" >&2
-    echo "with --engines tripatha,oxigraph" >&2
-    exit 2
+    command -v "$1"
+  fi
+}
+
+boost_prefix() { # BOOST_HOME, else Homebrew's on macOS, else nothing (the system's paths)
+  if [ -n "${BOOST_HOME:-}" ]; then
+    printf '%s' "$BOOST_HOME"
+  elif [ "$(uname -s)" = Darwin ] && command -v brew >/dev/null 2>&1; then
+    brew --prefix boost 2>/dev/null || true
   fi
 }
 
@@ -195,10 +207,8 @@ watdiv_binary() {
     exit 2
   fi
   fetch "https://dsg.uwaterloo.ca/watdiv/$WATDIV_TAR" "$cache/$WATDIV_TAR" "$WATDIV_SHA256"
-  local boost="${BOOST_HOME:-}"
-  if [ -z "$boost" ] && [ "$(uname -s)" = Darwin ] && command -v brew >/dev/null 2>&1; then
-    boost="$(brew --prefix boost 2>/dev/null || true)"
-  fi
+  local boost
+  boost="$(boost_prefix)"
   local flags=()
   if [ -n "$boost" ]; then
     flags=(-I"$boost/include" -L"$boost/lib")
@@ -215,6 +225,95 @@ watdiv_binary() {
   printf '%s' "$bin"
 }
 
+# ---- what it needs ----
+
+native="$ROOT/tripatha.standalone/target/tripatha"
+native_image=""
+if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/native-image" ]; then
+  native_image="$JAVA_HOME/bin/native-image"
+elif command -v native-image >/dev/null 2>&1; then
+  native_image="$(command -v native-image)"
+fi
+
+# Every missing piece at once, with how to install it here.
+preflight() {
+  local missing=()
+  local mac=false
+  if [ "$(uname -s)" = Darwin ]; then
+    mac=true
+  fi
+  local v
+  v="$("$java_bin" -version 2>&1 | head -1 | sed -E 's/.*version "([0-9]+).*/\1/')" || true
+  case "$v" in
+    ''|*[!0-9]*) missing+=("a JDK 25, with JAVA_HOME set: GraalVM for JDK 25 (https://www.graalvm.org/downloads/)") ;;
+    *) if [ "$v" -lt 25 ]; then missing+=("Java 25 or later; JAVA_HOME has Java $v"); fi ;;
+  esac
+  if $build || [ ! -x "$native" ] || [ ! -f "$HERE/target/bench.classpath" ]; then
+    if ! command -v mvn >/dev/null 2>&1; then
+      if $mac; then missing+=("Maven: brew install maven"); else missing+=("Maven: sudo apt install maven (or sudo dnf install maven)"); fi
+    fi
+  fi
+  if $build || [ ! -x "$native" ]; then
+    if [ -z "$native_image" ]; then
+      missing+=("GraalVM's native-image, to build Tripatha's native executable: set JAVA_HOME to GraalVM for JDK 25 (https://www.graalvm.org/downloads/)")
+    fi
+    if ! $mac && [ ! -f /usr/include/zlib.h ]; then
+      missing+=("a C compiler and zlib's headers, for native-image: sudo apt install build-essential zlib1g-dev (or sudo dnf install gcc glibc-devel zlib-devel)")
+    fi
+  fi
+  if [ ! -f "$work/watdiv-sf$scale/ready" ] && [ ! -x "$cache/watdiv-v06/watdiv/bin/Release/watdiv" ]; then
+    if ! command -v "${CXX:-c++}" >/dev/null 2>&1; then
+      if $mac; then missing+=("a C++ compiler, for WatDiv: xcode-select --install"); else missing+=("a C++ compiler, for WatDiv: sudo apt install build-essential (or sudo dnf install gcc-c++)"); fi
+    fi
+    local boost found=false d
+    boost="$(boost_prefix)"
+    for d in ${boost:+"$boost/include"} /usr/include /usr/local/include; do
+      if [ -f "$d/boost/date_time/posix_time/posix_time.hpp" ]; then
+        found=true
+      fi
+    done
+    if ! $found; then
+      if $mac; then missing+=("Boost, for WatDiv: brew install boost"); else missing+=("Boost, for WatDiv: sudo apt install libboost-date-time-dev (or sudo dnf install boost-devel)"); fi
+    fi
+    if [ ! -f /usr/share/dict/words ]; then
+      missing+=("the word list /usr/share/dict/words, for WatDiv: sudo apt install wamerican (or sudo dnf install words)")
+    fi
+  fi
+  if has qlever; then
+    local t
+    for t in qlever-index qlever-server; do
+      if ! qlever_tool "$t" >/dev/null 2>&1; then
+        if $mac; then
+          missing+=("QLever's $t: brew tap qlever-dev/qlever && brew trust qlever-dev/qlever && brew install qlever (or leave QLever out: --engines tripatha,oxigraph)")
+        else
+          missing+=("QLever's $t: its apt repository, see tripatha.loader/README.md (or leave QLever out: --engines tripatha,oxigraph)")
+        fi
+      fi
+    done
+  fi
+  local t
+  for t in curl gzip awk; do
+    if ! command -v "$t" >/dev/null 2>&1; then
+      missing+=("$t")
+    fi
+  done
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    missing+=("sha256sum or shasum")
+  fi
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo "Missing (tripatha.loader/README.md has the details):" >&2
+    for t in "${missing[@]}"; do
+      echo "  - $t" >&2
+    done
+    exit 2
+  fi
+}
+preflight
+if $check_only; then
+  echo "Everything compare.sh needs is installed."
+  exit 0
+fi
+
 if has qlever; then
   qindex="$(qlever_tool qlever-index)"
   qserver="$(qlever_tool qlever-server)"
@@ -225,14 +324,14 @@ fi
 
 # ---- the programs of this repository ----
 
-jar="$ROOT/tripatha.standalone/target/tripatha-1.0.0-SNAPSHOT.jar"
-if $build || [ ! -f "$jar" ]; then
-  echo "Building the endpoint..." >&2
-  (cd "$ROOT" && mvn -B -q -pl tripatha.standalone -am install -DskipTests -DskipITs)
-fi
 if $build || [ ! -f "$HERE/target/bench.classpath" ]; then
   # bench.sh builds the modules and the benchmark classes; --help then only prints its usage.
   "$HERE/bench.sh" --build --help > /dev/null
+fi
+if $build || [ ! -x "$native" ]; then
+  echo "Building the endpoint's native executable (a few minutes)..." >&2
+  (cd "$ROOT" && mvn -B -q -Pnative -pl tripatha.standalone -am package -DskipTests -DskipITs) > "$work/logs/native-build.log" 2>&1 ||
+    { echo "the native build failed: see $work/logs/native-build.log" >&2; exit 1; }
 fi
 bench_cp="$HERE/target/test-classes:$HERE/target/classes:$(cat "$HERE/target/bench.classpath")"
 
@@ -307,15 +406,15 @@ if has oxigraph && [ ! -f "$odir/ready" ]; then
   touch "$odir/ready"
 fi
 
-# ---- the servers ----
+# ---- the engines, one at a time ----
 
 clone="$work/tripatha-store"
-pids=()
+pid=""
 cleanup() {
-  for p in ${pids[@]+"${pids[@]}"}; do
-    kill "$p" 2>/dev/null || true
-  done
-  wait 2>/dev/null || true
+  if [ -n "$pid" ]; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  fi
   rm -rf "$clone"
 }
 trap cleanup EXIT
@@ -327,11 +426,51 @@ for port in $PORT_TRIPATHA $PORT_QLEVER $PORT_OXIGRAPH; do
   fi
 done
 
+wait_ready() { # NAME URL
+  local i
+  for i in $(seq 1 180); do
+    if curl -sf -o /dev/null -X POST -H 'Content-Type: application/sparql-query' -H 'Accept: text/tab-separated-values' \
+        --data-binary 'SELECT ?x WHERE { BIND(1 AS ?x) }' "$2"; then
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "$1 stopped: see $work/logs/$1.log" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+  echo "$1 didn't answer within 180 s: see $work/logs/$1.log" >&2
+  exit 1
+}
+
+stop() {
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  pid=""
+}
+
+suite_args=(--warmup "$warmup" --runs "$runs" --timeout "$timeout")
+if [ -n "$only" ]; then
+  suite_args+=(--only "$only")
+fi
+results="$work/runs/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$results"
+
+measure() { # NAME URL [CLEAR-URL]: the engine's server is the only one running
+  wait_ready "$1" "$2"
+  echo "Measuring $1..." >&2
+  "$java_bin" -cp "$bench_cp" org.tripatha.loader.bench.CompareBench --queries "$dir/queries" --endpoint "$1=$2" \
+    ${3:+--clear "$3"} "${suite_args[@]}" --raw "$results/$1.tsv" > "$work/logs/measure-$1.log" 2>&1 ||
+    { echo "measuring $1 failed: see $work/logs/measure-$1.log" >&2; exit 1; }
+  stop
+}
+
 info=(--info "WatDiv v0.6 (G. Aluç, O. Hartig, M. T. Özsu and K. Daudjee, Diversified stress testing of RDF data management \
 systems, ISWC 2014), scale factor $scale: $(cat "$dir/statements") statements generated on $(cat "$dir/generated"), and \
 $per_template queries from each of its 20 basic templates.")
+reports=()
 
-# A clone shares the store's blocks until something writes (APFS, or a reflink elsewhere).
+# Tripatha. A clone shares the store's blocks until something writes (APFS, or a reflink elsewhere).
 rm -rf "$clone"
 if [ "$(uname -s)" = Darwin ]; then
   cp -cR "$store" "$clone"
@@ -339,14 +478,15 @@ else
   cp -R --reflink=auto "$store" "$clone"
 fi
 heap="${TRIPATHA_HEAP:-6g}"
-"$java_bin" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED "-Xmx$heap" -jar "$jar" \
-  --server.address=127.0.0.1 --server.port=$PORT_TRIPATHA --logging.level.root=warn \
+"$native" "-Xmx$heap" --server.address=127.0.0.1 --server.port=$PORT_TRIPATHA --logging.level.root=warn \
   --tripatha.backend=rocksdb "--tripatha.rocksdb.path=$clone" "--tripatha.table-prefix=$prefix" --tripatha.entity-index=true \
   "--tripatha.sparql.query-timeout=${timeout}s" > "$work/logs/tripatha.log" 2>&1 &
-pids+=($!)
-tripatha_pid=$!
-endpoints=(--endpoint "tripatha=http://127.0.0.1:$PORT_TRIPATHA/sparql")
-info+=(--info "Tripatha $(git -C "$ROOT" rev-parse --short HEAD): tripatha.standalone on $("$java_bin" -version 2>&1 | head -1 | tr -d '"'), \
+pid=$!
+measure tripatha "http://127.0.0.1:$PORT_TRIPATHA/sparql"
+rm -rf "$clone"
+reports+=(--result "$results/tripatha.tsv")
+info+=(--info "Tripatha $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "(no git)"): the native executable of \
+tripatha.standalone, $(if [ -n "$native_image" ]; then "$native_image" --version 2>/dev/null | head -1; else echo "native-image"; fi), \
 -Xmx$heap, over a clone of its store with the entity index, loaded in $(cat "$dir/tripatha-load-seconds" 2>/dev/null || echo "?") s \
 ($(gigabytes "$store") on disk, counters and index included).")
 
@@ -356,9 +496,9 @@ if has qlever; then
   read -r -a qextra <<< "${QLEVER_SERVER_ARGS:-}"
   (cd "$qdir" && exec "$qserver" -i index -p $PORT_QLEVER -m "$qmemory" -s "${timeout}s" ${qextra[@]+"${qextra[@]}"}) \
     > "$work/logs/qlever.log" 2>&1 &
-  pids+=($!)
-  qlever_pid=$!
-  endpoints+=(--endpoint "qlever=http://127.0.0.1:$PORT_QLEVER/" --clear "qlever=http://127.0.0.1:$PORT_QLEVER/?cmd=clear-cache")
+  pid=$!
+  measure qlever "http://127.0.0.1:$PORT_QLEVER/" "http://127.0.0.1:$PORT_QLEVER/?cmd=clear-cache"
+  reports+=(--result "$results/qlever.tsv")
   info+=(--info "QLever $("$qserver" --version 2>&1 | head -1 | awk '{ print $NF }'): qlever-server -m $qmemory${QLEVER_SERVER_ARGS:+ $QLEVER_SERVER_ARGS}, \
 its result cache emptied before every run; index built in $(cat "$qdir/load-seconds") s ($(gigabytes "$qdir") on disk).")
 fi
@@ -366,42 +506,13 @@ fi
 if has oxigraph; then
   "$oxigraph" serve-read-only --location "$odir/store" --bind "127.0.0.1:$PORT_OXIGRAPH" --union-default-graph \
     --timeout-s "$timeout" > "$work/logs/oxigraph.log" 2>&1 &
-  pids+=($!)
-  oxigraph_pid=$!
-  endpoints+=(--endpoint "oxigraph=http://127.0.0.1:$PORT_OXIGRAPH/query")
+  pid=$!
+  measure oxigraph "http://127.0.0.1:$PORT_OXIGRAPH/query"
+  reports+=(--result "$results/oxigraph.tsv")
   info+=(--info "Oxigraph $OXIGRAPH_VERSION: serve-read-only --union-default-graph; loaded and optimized in \
 $(cat "$odir/load-seconds") s ($(gigabytes "$odir/store") on disk).")
 fi
 
-wait_ready() { # NAME PID URL
-  local i
-  for i in $(seq 1 180); do
-    if curl -sf -o /dev/null -X POST -H 'Content-Type: application/sparql-query' -H 'Accept: text/tab-separated-values' \
-        --data-binary 'SELECT ?x WHERE { BIND(1 AS ?x) }' "$3"; then
-      return 0
-    fi
-    if ! kill -0 "$2" 2>/dev/null; then
-      echo "$1 stopped: see $work/logs/$1.log" >&2
-      exit 1
-    fi
-    sleep 1
-  done
-  echo "$1 didn't answer within 180 s: see $work/logs/$1.log" >&2
-  exit 1
-}
-wait_ready tripatha "$tripatha_pid" "http://127.0.0.1:$PORT_TRIPATHA/sparql"
-if has qlever; then
-  wait_ready qlever "$qlever_pid" "http://127.0.0.1:$PORT_QLEVER/"
-fi
-if has oxigraph; then
-  wait_ready oxigraph "$oxigraph_pid" "http://127.0.0.1:$PORT_OXIGRAPH/query"
-fi
-
-suite_args=(--warmup "$warmup" --runs "$runs" --timeout "$timeout")
-if [ -n "$only" ]; then
-  suite_args+=(--only "$only")
-fi
-echo "Comparing..." >&2
 cd "$HERE"
-"$java_bin" -cp "$bench_cp" org.tripatha.loader.bench.CompareBench --queries "$dir/queries" "${endpoints[@]}" "${suite_args[@]}" \
-  "${info[@]}" --out "$out"
+"$java_bin" -cp "$bench_cp" org.tripatha.loader.bench.CompareBench "${reports[@]}" "${info[@]}" \
+  --info "Each engine's results: $results." --out "$out"
