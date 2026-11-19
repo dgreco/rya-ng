@@ -157,7 +157,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O14 | **Comparisons as value ranges:** `<`, `<=`, `>`, `>=` on a pattern's numeric or date object narrow its scan to the value range, one range per stored type; the filter stays. Needs a record of the datatypes each predicate's objects use (section 6.7) | R2 | the same, for numbers and dates | M8 | 1 | Done: datatype markers, storage version 1.1.0 with a write check, `ValueRangeOptimizer`; on by default (`query.valueranges`). Range queries 5 to 36 times faster on Accumulo, `class-value` 26 times; a condition most values pass is 4 to 8 times slower in a star (section 4.8, O25) |
 | O15 | **Adaptive batch windows in batched joins:** the first window is 64 left rows, doubling up to `query.join.batchsize`, as entity prefetch does (section 6.8) | R2 | measured (M8, section 4.6): `chain-limit` 114 → 19 ms on Accumulo and 6.9 → 0.7 ms on RocksDB (1,003 → 67 ranges); `type-limit` 164 → 40 ms and 22.6 → 1.6 ms (2,004 → 260 ranges). No cost on large joins: `chain` −7 % with 16 batch scans instead of 13 | M8 | 1 | Done (PR #15) |
 | O16 | **More lookups in flight:** batched joins and entity prefetch keep the next window's fetch running while the current one is joined, and more than one when the store has several servers (section 6.8) | R2 | the tablet server is the limit on the test cluster (4.6), so overlapping with client work gains nothing. More server parallelism (more tablets, concurrent batch scans) is the open question, for a cluster (M3) | M8 | 1 | Not started. On RocksDB the client is the limit (section 4.14: C3's query thread is busy 95 % of its wall time), so decoding windows on more threads is the open question there |
-| O17 | **Less work per looked-up row:** `BatchLookup` matches on the row's encoded object instead of encoding every result again, and allocates less per row (section 6.8) | R2 | dropped for joins: on Accumulo the query thread's CPU is 2 to 3 % of a join's wall time (4.6). It could matter for range scans, which are client-bound | M8 | 1 | Not started. Measured on RocksDB (section 4.14): matching cells to lookups, building lookup keys and decoding RocksDB keys take about half of the CPU of WatDiv's C2 and C3, so it matters for joins there |
+| O17 | **Less work per looked-up row:** `BatchLookup` matches on the row's encoded object instead of encoding every result again, and allocates less per row (section 6.8) | R2 | dropped for joins: on Accumulo the query thread's CPU is 2 to 3 % of a join's wall time (4.6). It could matter for range scans, which are client-bound | M8 | 1 | Done for the lookup path's CPU (2026-11-19, section 4.14): entity chains skip the cell check and the objects' re-encoding, statement rows and RocksDB keys are decoded in one pass. WatDiv on the native executable: C3 3,872 → 2,268 ms (−41 %), the complex queries −24 %, all 100 queries −11 %; the join benchmark within noise. |
 | O18 | **IRI prefix codes**, only if M9 says go (section 6.9) | R1 | measured (M9): −4 to −5 % on disk, −25 to −35 % in the block cache, −44 to −57 % of the key bytes a writer sends, no clear change in scan and decode time | M9, D11 | 2 | Deferred (2026-11-16: below the bar on disk; revisit after M3, see 6.9) |
 | O19 | **RocksDB key decoding:** `RocksCodec` encodes and decodes keys by copying the runs between escapes in bulk, instead of a byte at a time through a synchronized `ByteArrayOutputStream` | — | measured with O20 on RocksDB (M8, against `rocksdb-20261116-204243`): `count-class` 71 → 25 ms, range scans −23 to −31 %, joins −13 to −19 % | — | 1 | Done (PR #15) |
 | O20 | **The object-type check as a row suffix:** `ScanSpec.rowSuffix`, set by the query engine when the type is the only row condition. RocksDB compares bytes. Accumulo and HBase filter with the equivalent linear `[\s\S]*` and the quoted suffix, instead of three open groups. It also fixes datatype IRIs being pasted into the expression unquoted, which let a `.` in a custom datatype IRI match any character | R2 | measured with O19, above. On Accumulo it means less tablet-server CPU per type-checked cell, not measured separately | — | 1 | Done (PR #15) |
@@ -751,6 +751,27 @@ Measured on 2026-11-19 with `QueryProfile`: one query in-process on the JVM, thr
 - A dictionary (O11) would shorten the keys but keep the 200,505 lookups, and the 444,070 rows built one binding set at a time. QLever's advantage is merging whole subject-sorted lists of IDs: it keeps a predicate-subject order, which Tripatha doesn't have, so stars of variable-object patterns can't be merged here.
 - **So the cheaper steps come first:** the lookup path's constant factors (O17, no format change), then decoding windows on more threads (O16), each measured with `QueryProfile` and the join benchmark. The dictionary stays M5's decision.
 - **Reports:** the profiles in the scratch run of 2026-11-19, reproducible with `QueryProfile --rocksdb-path <copy of watdiv-sf100/tripatha> --query watdiv-sf100/queries/C3-01.rq`.
+
+**After O17** (the same day), three changes to the lookup path, with no change to the stored format:
+- `BatchLookup` skips its check for cells it has seen, and the objects' re-encoding that check needs, when the keys of a group share one shape and leave the object free. An entity chain's links `(s, p, ?)` are such keys: their ranges are prefixes ending at a delimiter, so they can't overlap.
+- `WholeRowTripleResolver` finds a row's delimiters in one pass and reads its parts in place. An `spo` row's object and type are already one run.
+- `RocksCodec.cell` remembers where a key's escaped `00` bytes are, and doesn't scan the key twice.
+
+| | Before | After |
+|---|---|---|
+| C3-01 in-process, JVM (`QueryProfile`) | 2,042 ms | 1,378 ms (−33 %) |
+| C2-01 in-process, JVM | 115 ms | 107 ms (within noise) |
+| WatDiv C3, the native executable alone (`compare.sh`) | 3,872 ms | 2,268 ms (−41 %) |
+| WatDiv's complex queries, geometric mean | 263.6 ms | 200.9 ms (−24 %) |
+| All 100 WatDiv queries, geometric mean | 3.8 ms | 3.4 ms (−11 %) |
+
+- **WatDiv:** 19 of the 20 templates are 2 to 41 % faster; S5 is 0.4 ms either way.
+- **C2** stays at about 110 ms. Its lookups bind objects, so they keep the cell check. Its time is in building the lookups' keys and in RDF4J.
+- **Two more changes were tried and dropped,** as no faster:
+  - escaping a prefix range's start once for both of its bounds;
+  - hashing `KeyRange` without `Objects.hash`.
+- **The join benchmark,** two before/after pairs on the same store (`main` and this change, built in turn): within noise. The larger queries moved −3 to −19 % in one pair and −6 to +2 % in the other; the sub-millisecond ones ±30 % either way. Rows were identical.
+- **Next:** C2's remaining cost is per lookup (building keys, grouping them) and RDF4J's binding sets. O16 (more threads) is the other half of section 4.14's conclusion.
 
 ---
 
