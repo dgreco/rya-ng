@@ -136,6 +136,9 @@ public class RyaStoreConfiguration {
         if (props.joinLookupThreads() != null) {
             conf.setJoinLookupThreads(props.joinLookupThreads());
         }
+        if (props.joinPrefetchAhead() != null) {
+            conf.setJoinPrefetchAhead(props.joinPrefetchAhead());
+        }
         if (props.joinMergeSingle() != null) {
             conf.setJoinMergeSingle(props.joinMergeSingle());
         }

@@ -21,14 +21,23 @@ import java.util.Deque;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
 
 import org.tripatha.rdftriplestore.RdfCloudTripleStoreConnection.StoreTripleSource;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.common.iteration.LookAheadIteration;
+import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.query.BindingSet;
+import org.eclipse.rdf4j.query.QueryEvaluationException;
 import org.eclipse.rdf4j.query.algebra.StatementPattern;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryEvaluationStep;
+import org.tripatha.store.trace.StoreTrace;
+import org.tripatha.store.trace.Trace;
 
 /**
  * Feeds the driver rows of an {@link EntityChain}: before handing on a window of rows, it
@@ -44,9 +53,23 @@ import org.eclipse.rdf4j.query.algebra.evaluation.QueryEvaluationStep;
  * <p>Windows start small, so a query that stops early fetches little, and double up to the join
  * batch size. A window whose statements would pass {@code query.join.prefetchlimit} is halved
  * and fetched again; a single row that is still too large is left to the store.
+ *
+ * <p>With {@code query.join.prefetchahead} (SCALE-STUDY.md O16), from the second window on, the
+ * next window's rows are read from the driver as soon as the current window is handed on, and
+ * their keys are built and their lookups fetched on another thread while the current window is
+ * joined. Only the query thread holds a batch: it takes the next window's statements when the
+ * current one is used up, and a fetch too large to hold falls back to the halving above. A query
+ * that stops in its first window fetches no more than before; at most two windows are in memory.
+ * Closing the step waits for a fetch still running, so none outlives the query.
  */
 final class EntityPrefetchStep implements QueryEvaluationStep {
     static final int FIRST_WINDOW = 64;
+    /** Threads fetching windows ahead: daemons, kept a minute when idle. */
+    private static final ExecutorService AHEAD_THREADS = Executors.newCachedThreadPool(r -> {
+        final Thread t = new Thread(r, "tripatha-prefetch-ahead");
+        t.setDaemon(true);
+        return t;
+    });
 
     private final QueryEvaluationStep driver;
     private final List<StatementPattern> patterns;
@@ -74,6 +97,11 @@ final class EntityPrefetchStep implements QueryEvaluationStep {
         private final Deque<BindingSet> ready = new ArrayDeque<>();
         private int window = Math.min(FIRST_WINDOW, batchSize);
         private StoreTripleSource<?>.Prefetch prefetch;
+        private final boolean fetchAheadOn = source.getConf().isJoinPrefetchAhead();
+        /** Windows handed on so far: fetching ahead starts once the first one is used up. */
+        private int windows;
+        /** The next window, being fetched on another thread; null when none is. */
+        private Ahead ahead;
 
         PrefetchingIteration(final CloseableIteration<BindingSet> rows) {
             this.rows = rows;
@@ -83,15 +111,68 @@ final class EntityPrefetchStep implements QueryEvaluationStep {
         protected BindingSet getNextElement() {
             if (ready.isEmpty()) {
                 release();
-                while (pending.size() < window && rows.hasNext()) {
-                    pending.add(rows.next());
+                if (ahead != null) {
+                    takeAhead();
+                } else {
+                    while (pending.size() < window && rows.hasNext()) {
+                        pending.add(rows.next());
+                    }
+                    if (pending.isEmpty()) {
+                        return null;
+                    }
+                    fetchAhead();
                 }
-                if (pending.isEmpty()) {
-                    return null;
+                windows++;
+                if (fetchAheadOn && windows >= 2 && pending.isEmpty()) {
+                    startAhead();
                 }
-                fetchAhead();
             }
             return ready.poll();
+        }
+
+        /**
+         * Reads the next window's rows from the driver, here, and fetches their lookups on another
+         * thread, under this query's trace. Its result is held only when this window is used up.
+         */
+        private void startAhead() {
+            final List<BindingSet> next = new ArrayList<>(window);
+            while (next.size() < window && rows.hasNext()) {
+                next.add(rows.next());
+            }
+            if (next.isEmpty()) {
+                return;
+            }
+            final Trace trace = StoreTrace.current();
+            final String why = trace == null ? "" : trace.reason();
+            final String reason = (why.isEmpty() ? "" : why + " › ") + "the next window, fetched on a thread of its own";
+            final FutureTask<Fetched> task = new FutureTask<>(() -> {
+                try (StoreTrace.Scope joined = StoreTrace.join(trace, reason)) {
+                    final Set<LookupKey> keys = keysFor(next);
+                    if (keys.size() < 2) {
+                        return new Fetched(null, false);
+                    }
+                    final Map<LookupKey, List<Statement>> fetched = source.fetch(keys, () -> "entity prefetch: " + keys.size()
+                            + " lookups for " + next.size() + " row" + (next.size() == 1 ? "" : "s") + " fetched together");
+                    return new Fetched(fetched, fetched == null);
+                }
+            });
+            ahead = new Ahead(next, task);
+            AHEAD_THREADS.execute(task);
+        }
+
+        /** Hands on the next window fetched ahead: its statements held, or its rows fetched here if they were too many to hold. */
+        private void takeAhead() {
+            final Ahead a = ahead;
+            ahead = null;
+            final Fetched result = a.await();
+            if (result.overflow()) {
+                pending.addAll(a.rows());
+                fetchAhead();
+                return;
+            }
+            prefetch = result.statements() == null ? null : source.hold(result.statements());
+            ready.addAll(a.rows());
+            window = Math.min(a.rows().size() * 2, batchSize);
         }
 
         /** Fetches for all pending rows, or for as large a first part of them as fits, and readies those rows. */
@@ -148,9 +229,57 @@ final class EntityPrefetchStep implements QueryEvaluationStep {
         @Override
         protected void handleClose() {
             try {
+                if (ahead != null) {
+                    // Its scans must end before the query does, and with it the connection's store.
+                    ahead.awaitQuietly();
+                    ahead = null;
+                }
                 release();
             } finally {
                 rows.close();
+            }
+        }
+    }
+
+    /** What a fetch ahead found: the statements per lookup (null when the window had one lookup or none), or that they were too many to hold. */
+    private record Fetched(Map<LookupKey, List<Statement>> statements, boolean overflow) {
+    }
+
+    /** A window's rows and their fetch, running on another thread. */
+    private record Ahead(List<BindingSet> rows, FutureTask<Fetched> task) {
+        /** The fetch's result, waited for even if this thread is interrupted (the interrupt is kept); its failure, rethrown. */
+        Fetched await() {
+            boolean interrupted = false;
+            try {
+                while (true) {
+                    try {
+                        return task.get();
+                    } catch (final InterruptedException e) {
+                        interrupted = true;
+                    } catch (final ExecutionException e) {
+                        final Throwable cause = e.getCause();
+                        if (cause instanceof RuntimeException re) {
+                            throw re;
+                        }
+                        if (cause instanceof Error err) {
+                            throw err;
+                        }
+                        throw new QueryEvaluationException(cause);
+                    }
+                }
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
+        /** Waits for the fetch to end, whatever its result. */
+        void awaitQuietly() {
+            try {
+                await();
+            } catch (final RuntimeException | Error e) {
+                // Closing: the query no longer wants its statements.
             }
         }
     }

@@ -47,7 +47,8 @@ public abstract class RyaSailITBase extends StoreITBase {
      *         (O22), whatever their lengths, {@code -Dtripatha.test.mergeSingle=1} reads every
      *         star pattern on its own as a merge of one list (O7a), and
      *         {@code -Dtripatha.test.lookupThreads=3} reads every batch of disjoint lookups on
-     *         three threads, one lookup each at least (O16).
+     *         three threads, one lookup each at least, and {@code -Dtripatha.test.prefetchAhead=true}
+     *         fetches an entity prefetch's next window while the current one is joined (O16).
      */
     protected StoreRdfConfiguration newConf() {
         final StoreRdfConfiguration conf = new StoreRdfConfiguration();
@@ -65,6 +66,10 @@ public abstract class RyaSailITBase extends StoreITBase {
         if (lookupThreads != null && !lookupThreads.isBlank()) {
             conf.setJoinLookupThreads(Integer.parseInt(lookupThreads.trim()));
             conf.setJoinLookupThreadKeys(1);
+        }
+        final String prefetchAhead = System.getProperty("tripatha.test.prefetchAhead");
+        if (prefetchAhead != null && !prefetchAhead.isBlank()) {
+            conf.setJoinPrefetchAhead(Boolean.parseBoolean(prefetchAhead.trim()));
         }
         final String mergeSingle = System.getProperty("tripatha.test.mergeSingle");
         if (mergeSingle != null && !mergeSingle.isBlank()) {
