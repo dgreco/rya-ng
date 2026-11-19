@@ -131,6 +131,10 @@ The storage SPI (`store.spi`) is cell-shaped: `Store` (`scan`, `batchScan`, `del
   - **Counters:** RocksDB's `uint64add` merge operator, 8-byte little-endian, summed on reads and compactions. Merging onto a value that isn't 8 bytes silently restarts the count, so counter tables refuse PUT and other tables refuse counter deltas.
   - **Writes:** one `WriteBatch` per `CellWriter`, across families; a flush is one atomic write. A timestamped delete first writes the batch, then reads the cell and deletes it only if its timestamp is at or before the delete's.
   - **One database per directory and process** (`RocksDatabase`): stores and scanners of a directory in one JVM share the open database and count their uses; the last release closes it. Scanners hold native memory: close them (they close themselves when exhausted).
+- **Bulk imports (M6, SCALE-STUDY.md 4.17):** `AccumuloBulkSpikeIT` and `HBaseBulkSpikeIT` (`tripatha.test`, each on its own backend) and `RocksBulkSpikeTest` (`tripatha.rocksdb`) write files in the backend's native format with its own codec (RFiles, SST files with `merge` entries for counters, HFiles whose visibility tags hold label ordinals from `hbase:labels`), import them into tables that hold data, and read them back under labels. They pin what the bulk build (O3, O10) relies on:
+  - Accumulo and RocksDB add imported counters to what is there;
+  - HBase adds them only with a timestamp per import in coprocessor mode, and replaces or hides them in increment mode;
+  - importing again counts again, or not at all.
 - **Trace:** `StoreTrace` (scope, reasons, `Trace`) is neutral, and every backend reports the same way: reads through `TracedScans.open`, visible-cell deletes through `TracedScans.started`, writers with `trace.wrote` and `trace.flushed`. Only the operation names and the filter list are a backend's own. Accumulo lists the scan iterators it attaches (`AccumuloStore.iterators` builds them, `describe` renders them), so add a new server-side filter there and it shows in traces. What is done directly with `AccumuloStore.client()` is not traced.
 
 ### Loader (`tripatha.loader`)
