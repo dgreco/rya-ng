@@ -71,6 +71,11 @@ public abstract class RyaSailITBase extends StoreITBase {
         if (prefetchAhead != null && !prefetchAhead.isBlank()) {
             conf.setJoinPrefetchAhead(Boolean.parseBoolean(prefetchAhead.trim()));
         }
+        // query.join.countunused (SCALE-STUDY.md O26), on by default: false runs every test without counts.
+        final String countUnused = System.getProperty("tripatha.test.countUnused");
+        if (countUnused != null && !countUnused.isBlank()) {
+            conf.setJoinCountUnused(Boolean.parseBoolean(countUnused.trim()));
+        }
         final String mergeSingle = System.getProperty("tripatha.test.mergeSingle");
         if (mergeSingle != null && !mergeSingle.isBlank()) {
             conf.setJoinMergeSingle(Long.parseLong(mergeSingle.trim()));

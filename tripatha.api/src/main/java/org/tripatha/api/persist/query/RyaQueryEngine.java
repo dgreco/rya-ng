@@ -48,4 +48,15 @@ public interface RyaQueryEngine<C extends RdfCloudTripleStoreConfiguration> exte
      */
     public CloseableIteration<RyaStatement> batchQuery(Collection<RyaStatement> stmts, C conf) throws RyaDAOException;
 
+    /**
+     * How many statements a lookup of each pattern would return, counted by the store instead of
+     * read (SCALE-STUDY.md O26). The patterns must resolve to one table and context, and their
+     * ranges must not overlap.
+     *
+     * @return the counts, in the patterns' order; null if this engine can't count
+     */
+    default long[] countBatch(final java.util.List<RyaStatement> stmts, final C conf) throws RyaDAOException {
+        return null;
+    }
+
 }

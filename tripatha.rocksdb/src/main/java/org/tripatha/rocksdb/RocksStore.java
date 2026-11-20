@@ -128,6 +128,29 @@ public final class RocksStore implements Store {
         return TracedScans.open("Scan", table, ranges, spec, describe(spec), () -> new RocksScan(database, table, ranges, spec));
     }
 
+    /**
+     * Native iteration over each range's keys (SCALE-STUDY.md O26, {@link RocksCount}): no cell is
+     * built, and no value read without a time range. A spec with row or qualifier filters is
+     * counted by scanning.
+     */
+    /** In this process: nothing crosses a network, and the count builds no cell. */
+    @Override
+    public boolean countsWithoutReading(final String table) {
+        return true;
+    }
+
+    @Override
+    public long[] countRanges(final String table, final List<KeyRange> ranges, final ScanSpec spec) {
+        checkSpec(spec);
+        if (!RocksCount.handles(spec)) {
+            return Store.super.countRanges(table, ranges, spec);
+        }
+        final java.util.function.LongConsumer done = TracedScans.counting("Count", table, ranges, spec, describe(spec));
+        final long[] counts = RocksCount.count(database, table, ranges, spec);
+        done.accept(counts.length);
+        return counts;
+    }
+
     @Override
     public CellScanner batchScan(final String table, final Collection<KeyRange> given, final ScanSpec spec) {
         checkSpec(spec);

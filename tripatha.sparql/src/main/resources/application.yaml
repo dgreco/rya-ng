@@ -58,6 +58,9 @@ tripatha:
   # An entity prefetch fetches its next window while the current one is joined. Unset, the
   # store's default: on for RocksDB, off for Accumulo and HBase.
   # join-prefetch-ahead: true
+  # A pattern whose object no other part of the query uses (?p :knows ?f, ?f nowhere else) has its
+  # lookups counted by the store, not read: each row is repeated that many times.
+  join-count-unused: true
   # Full-text index behind text:matches (string and language-tagged literals).
   text-index: false
   # Predicates whose literals are text-indexed. Empty: all of them.

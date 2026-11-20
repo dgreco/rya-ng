@@ -55,6 +55,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *        Accumulo and HBase), 1 reads every batch on the request's thread.
  * @param joinPrefetchAhead whether an entity prefetch fetches its next window while the current
  *        one is joined; unset takes the store's default (on for RocksDB, off for Accumulo and HBase).
+ * @param joinCountUnused whether a pattern whose object no other part of the query uses
+ *        ({@code ?p :knows ?f} with {@code ?f} nowhere else) has its lookups counted by the store
+ *        instead of read (SCALE-STUDY.md O26).
  * @param textIndex whether to keep the full-text index that speeds up {@code text:matches}.
  * @param textIndexPredicates the predicates whose text literals are indexed; empty for all.
  * @param geoIndex whether to keep the geospatial index that speeds up GeoSPARQL filters
@@ -82,6 +85,7 @@ public record RyaProperties(
         Long joinMergeSingle,
         Integer joinLookupThreads,
         Boolean joinPrefetchAhead,
+        @DefaultValue("true") boolean joinCountUnused,
         @DefaultValue("false") boolean textIndex,
         @DefaultValue List<String> textIndexPredicates,
         @DefaultValue("false") boolean geoIndex,

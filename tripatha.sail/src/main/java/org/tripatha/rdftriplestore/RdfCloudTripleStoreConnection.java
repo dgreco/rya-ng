@@ -464,8 +464,8 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
     public static class StoreTripleSource<C extends RdfCloudTripleStoreConfiguration> implements NativeTripleTermSource {
         private final C conf;
         private final RyaDAO<C> ryaDAO;
-        /** Statements fetched ahead of time by batched joins; consulted before the store. */
-        private final Deque<Map<LookupKey, List<Statement>>> prefetched = new ArrayDeque<>();
+        /** Statements and counts fetched ahead of time by batched joins; consulted before the store. */
+        private final Deque<Batch> prefetched = new ArrayDeque<>();
         private long prefetches;
         private long overflows;
         private long cacheHits;
@@ -492,8 +492,20 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
          *         cached and lookups go to the store).
          */
         public AutoCloseable prefetch(final Collection<LookupKey> keys) {
-            final Prefetch fetched = prefetch(keys, () -> "batched join: " + keys.size()
-                    + " right-hand lookup" + (keys.size() == 1 ? "" : "s") + " fetched together");
+            return prefetch(keys, List.of());
+        }
+
+        /**
+         * Fetches the statements for some lookups and counts the statements of others
+         * ({@link #count}, SCALE-STUDY.md O26), all at once, and serves them from memory until the
+         * returned handle is closed.
+         *
+         * @return the handle, or {@code null} if the batch was too large to hold.
+         */
+        public AutoCloseable prefetch(final Collection<LookupKey> keys, final Collection<LookupKey> counted) {
+            final int n = keys.size() + counted.size();
+            final Prefetch fetched = prefetch(keys, counted, () -> "batched join: " + n
+                    + " right-hand lookup" + (n == 1 ? "" : "s") + " fetched together");
             return fetched.isHeld() ? fetched : null;
         }
 
@@ -506,7 +518,12 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
          *         fetch, or when the batch was too large to hold ({@link Prefetch#isOverflow()}).
          */
         public Prefetch prefetch(final Collection<LookupKey> keys, final Supplier<String> reason) {
-            return hold(fetch(keys, reason));
+            return prefetch(keys, List.of(), reason);
+        }
+
+        /** {@link #prefetch(Collection, Supplier)}, with some lookups counted instead ({@link #count}). */
+        public Prefetch prefetch(final Collection<LookupKey> keys, final Collection<LookupKey> counted, final Supplier<String> reason) {
+            return hold(fetch(keys, counted, reason));
         }
 
         /**
@@ -516,10 +533,67 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
          *
          * @return the statements per lookup, or {@code null} if the batch was too large to hold
          */
-        public Map<LookupKey, List<Statement>> fetch(final Collection<LookupKey> keys, final Supplier<String> reason) {
+        public Batch fetch(final Collection<LookupKey> keys, final Collection<LookupKey> counted, final Supplier<String> reason) {
+            // A store that would send the cells to count them (Accumulo's and HBase's, until their
+            // servers count) reads the counted lookups with the others, in the same scans: a count
+            // of its own would be a second round trip for the same cells. Their lists' sizes are
+            // then the counts.
+            final boolean apart = !counted.isEmpty() && storeCounts();
+            final Collection<LookupKey> read = apart || counted.isEmpty() ? keys : union(keys, counted);
             try (StoreTrace.Reason why = StoreTrace.reason(reason)) {
-                return BatchLookup.fetch(ryaDAO, conf, keys, conf.getJoinPrefetchLimit());
+                final Map<LookupKey, List<Statement>> statements = read.isEmpty() ? Map.of()
+                        : BatchLookup.fetch(ryaDAO, conf, read, conf.getJoinPrefetchLimit());
+                if (statements == null) {
+                    return null;
+                }
+                // A count is a number: it never makes a batch too large to hold.
+                return new Batch(statements, apart ? BatchLookup.count(ryaDAO, conf, counted) : Map.of());
             }
+        }
+
+        private static Collection<LookupKey> union(final Collection<LookupKey> a, final Collection<LookupKey> b) {
+            final java.util.LinkedHashSet<LookupKey> all = new java.util.LinkedHashSet<>(a);
+            all.addAll(b);
+            return all;
+        }
+
+        /** Whether the store counts without reading ({@code Store.countsWithoutReading}), asked once. */
+        private Boolean storeCounts;
+
+        private boolean storeCounts() {
+            if (storeCounts == null) {
+                storeCounts = ryaDAO.getQueryEngine() instanceof org.tripatha.store.query.RyaStoreQueryEngine engine
+                        && conf instanceof StoreRdfConfiguration storeConf && engine.countsWithoutReading(storeConf);
+            }
+            return storeCounts;
+        }
+
+        /**
+         * How many statements {@code getStatements} would return for this lookup, without them
+         * (SCALE-STUDY.md O26): from a held batch's counts or statements, else counted by the store.
+         *
+         * @return the count, or -1 when the store can't count this lookup (the caller then looks it up)
+         */
+        public long count(final LookupKey key) {
+            for (final Batch batch : prefetched) {
+                final Long counted = batch.counts().get(key);
+                if (counted != null) {
+                    cacheHits++;
+                    return counted;
+                }
+                final List<Statement> found = batch.statements().get(key);
+                if (found != null) {
+                    cacheHits++;
+                    return found.size();
+                }
+            }
+            // A store that reads to count is no faster than the lookup.
+            final Long counted = storeCounts() ? BatchLookup.count(ryaDAO, conf, List.of(key)).get(key) : null;
+            if (counted == null) {
+                return -1;
+            }
+            storeLookups++;
+            return counted;
         }
 
         /**
@@ -528,12 +602,12 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
          *
          * @param fetched what {@link #fetch} returned: {@code null} for a batch too large to hold
          */
-        public Prefetch hold(final Map<LookupKey, List<Statement>> fetched) {
+        public Prefetch hold(final Batch fetched) {
             if (fetched == null) {
                 overflows++;
                 return new Prefetch(null, true);
             }
-            if (fetched.isEmpty()) {
+            if (fetched.statements().isEmpty() && fetched.counts().isEmpty()) {
                 return new Prefetch(null, false);
             }
             prefetches++;
@@ -566,8 +640,8 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                 final Value object, final Resource... contexts) throws QueryEvaluationException {
             if (!prefetched.isEmpty()) {
                 final LookupKey key = LookupKey.of(subject, predicate, object, contexts);
-                for (final Map<LookupKey, List<Statement>> batch : prefetched) {
-                    final List<Statement> found = batch.get(key);
+                for (final Batch batch : prefetched) {
+                    final List<Statement> found = batch.statements().get(key);
                     if (found != null) {
                         cacheHits++;
                         return new CloseableIteratorIteration<>(found.iterator());
@@ -863,12 +937,19 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
             return org.tripatha.api.RdfCloudTripleStoreConstants.VALUE_FACTORY;
         }
 
+        /**
+         * What a batch of lookups fetched: the statements of some, the counts of others
+         * (SCALE-STUDY.md O26).
+         */
+        public record Batch(Map<LookupKey, List<Statement>> statements, Map<LookupKey, Long> counts) {
+        }
+
         /** Statements fetched ahead for a batch of lookups; closing it sends those lookups to the store again. */
         public final class Prefetch implements AutoCloseable {
-            private final Map<LookupKey, List<Statement>> batch;
+            private final Batch batch;
             private final boolean overflow;
 
-            private Prefetch(final Map<LookupKey, List<Statement>> batch, final boolean overflow) {
+            private Prefetch(final Batch batch, final boolean overflow) {
                 this.batch = batch;
                 this.overflow = overflow;
             }

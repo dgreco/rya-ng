@@ -76,6 +76,23 @@ public final class TracedScans {
         return () -> trace.scanEnded(id, -1, System.nanoTime() - t0, "deleted");
     }
 
+    /**
+     * Reports a count the store makes without returning the cells (SCALE-STUDY.md O26): its start,
+     * then, through the consumer, how many counts came back, one per range. The cells counted stay
+     * in the store, so they aren't the read's cells.
+     */
+    public static java.util.function.LongConsumer counting(final String op, final String table, final Collection<KeyRange> ranges,
+            final ScanSpec spec, final List<String> filters) {
+        final Trace trace = StoreTrace.current();
+        if (trace == null) {
+            return n -> {
+            };
+        }
+        final int id = started(trace, op, table, ranges, spec, filters);
+        final long t0 = System.nanoTime();
+        return n -> trace.scanEnded(id, n, System.nanoTime() - t0, "counted");
+    }
+
     private static int started(final Trace trace, final String op, final String table, final Collection<KeyRange> ranges,
             final ScanSpec spec, final List<String> filters) {
         final List<String> shown = new ArrayList<>();

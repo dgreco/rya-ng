@@ -208,6 +208,9 @@ public class RyaEvaluationStrategy extends DefaultEvaluationStrategy {
     @Override
     protected QueryEvaluationStep prepare(final StatementPattern node, final QueryEvaluationContext context)
             throws QueryEvaluationException {
+        if (node instanceof CountedPattern counted && tripleSource instanceof StoreTripleSource<?> source) {
+            return new CountedPatternStep(counted, super.prepare(node, context), source);
+        }
         if (node instanceof IndexedStatementPattern indexed && IndexTripleSource.supports(tripleSource)) {
             return new StatementPatternQueryEvaluationStep(node, context,
                     new IndexTripleSource((StoreTripleSource<?>) tripleSource, indexed.getIndexQuery()));

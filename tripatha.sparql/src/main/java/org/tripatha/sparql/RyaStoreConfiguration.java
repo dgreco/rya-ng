@@ -127,6 +127,7 @@ public class RyaStoreConfiguration {
         conf.setMaintainStats(props.stats());
         conf.setJoinBatchSize(props.joinBatchSize());
         conf.setJoinEntityPrefetch(props.entityPrefetch());
+        conf.setJoinCountUnused(props.joinCountUnused());
         if (props.joinMergeRatio() != null) {
             conf.setJoinMergeRatio(props.joinMergeRatio());
         }

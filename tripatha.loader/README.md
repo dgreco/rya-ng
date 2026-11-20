@@ -2,7 +2,7 @@
 
 Two tools in this module measure Tripatha's query performance, on a laptop and without a cluster:
 
-- **The join benchmark** (`bench.sh`, `JoinBench`) runs a fixed suite of 25 queries over a generated store of 10M triples, in-process, on RocksDB, Accumulo or HBase. It was written to measure Tripatha's own optimizations ([SCALE-STUDY.md](../SCALE-STUDY.md), M8), so it is not used to compare Tripatha with other engines.
+- **The join benchmark** (`bench.sh`, `JoinBench`) runs a fixed suite of 27 queries over a generated store of 10M triples, in-process, on RocksDB, Accumulo or HBase. It was written to measure Tripatha's own optimizations ([SCALE-STUDY.md](../SCALE-STUDY.md), M8), so it is not used to compare Tripatha with other engines.
 - **The engine comparison** (`compare.sh`, `CompareBench`) runs a standard benchmark, [WatDiv](https://dsg.uwaterloo.ca/watdiv/) (the Waterloo SPARQL Diversity Test Suite), against Tripatha's SPARQL endpoint, as its native executable with RocksDB inside, and against two other open-source engines loaded with the same data, one after the other, over HTTP (SCALE-STUDY.md, M11):
   - [QLever](https://github.com/ad-freiburg/qlever) (Apache 2.0), a fast single-machine engine;
   - [Oxigraph](https://github.com/oxigraph/oxigraph) (MIT or Apache 2.0), an embedded store that, like Tripatha here, stores its data in RocksDB.

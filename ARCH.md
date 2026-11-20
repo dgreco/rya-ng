@@ -46,8 +46,9 @@ To use Tripatha rather than change it, start with the [README](README.md). [AGEN
 17. [The SPARQL endpoint](#17-the-sparql-endpoint)
 18. [The synthetic-data loader](#18-the-synthetic-data-loader)
 19. [Test infrastructure](#19-test-infrastructure)
-20. [Invariants](#20-invariants)
-21. [Glossary](#21-glossary)
+20. [Speed and scale: the optimizations](#20-speed-and-scale-the-optimizations)
+21. [Invariants](#21-invariants)
+22. [Glossary](#22-glossary)
 
 ---
 
@@ -705,7 +706,7 @@ sequenceDiagram
   - no contexts: every graph;
   - a `null` context: the default graph only, via the filter `st.getContext() == null`;
   - a named context: that graph.
-- **Index deletes** are computed from the stored statement. This is why an index's terms may depend only on what `spo` stores ([section 20](#20-invariants)).
+- **Index deletes** are computed from the stored statement. This is why an index's terms may depend only on what `spo` stores ([section 21](#21-invariants)).
 
 ### 10.2 Dropping graphs: `dropGraph`
 
@@ -912,7 +913,7 @@ Results are lazy: Accumulo is scanned as the result writer asks for rows, so `LI
 
 ### 12.3 The optimizer pipeline
 
-`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with nine Tripatha steps added (marked ★):
+`RyaQueryOptimizerPipeline` is RDF4J 6.1's standard pipeline with eleven Tripatha steps added (marked ★):
 
 ```mermaid
 flowchart TD
@@ -928,6 +929,8 @@ flowchart TD
     o6b --> o7["IterativeEvaluationOptimizer, FilterOptimizer,<br/>FilterInValuesOptimizer, FilterOptimizer,<br/>OrderLimitOptimizer"]
     o7 --> o8["★ LeftDeepJoinOptimizer<br/>right-nested joins become left-deep (section 13)"]
     o8 --> o9["★ SubjectMergeOptimizer<br/>a star's constant patterns become one merge join (section 13.6)"]
+    o9 --> o10["★ SubjectMergeCountOptimizer<br/>a star's COUNT asked of the store (section 13.7)<br/>only when the store intersects"]
+    o10 --> o11["★ CountedPatternOptimizer<br/>lookups of unused objects counted (section 13.8)"]
 ```
 
 **Where the Tripatha steps sit:**
@@ -938,11 +941,13 @@ flowchart TD
 
 ### 12.4 The evaluation strategy
 
-`RyaEvaluationStrategy` extends RDF4J's `DefaultEvaluationStrategy` and changes four `prepare` methods (`Join`, `LeftJoin`, `StatementPattern`, `TripleRef`). It also overrides `precompile`, for the one node type of its own, `SubjectMergeJoin`, which RDF4J's dispatch would refuse:
+`RyaEvaluationStrategy` extends RDF4J's `DefaultEvaluationStrategy` and changes four `prepare` methods (`Join`, `LeftJoin`, `StatementPattern`, `TripleRef`). It also overrides `precompile`, for its own node types, `SubjectMergeJoin` and `SubjectMergeCount`, which RDF4J's dispatch would refuse:
 
 | Node | Step used |
 |---|---|
 | `SubjectMergeJoin` (a star's constant patterns) | `SubjectMergeStep`, which intersects their subject-sorted lists ([section 13.6](#136-merge-joins-a-stars-constant-patterns-intersected)) |
+| `SubjectMergeCount` (a star's or a class's `COUNT`) | `SubjectMergeCountStep`, which asks the store for the count of each group of shards ([section 13.7](#137-the-entity-index-stars-shard-by-shard)) |
+| `CountedPattern` (a pattern whose object nothing else uses) | `CountedPatternStep`: each row repeated as many times as the store counts, or RDF4J's own step for a row it can't count ([section 13.8](#138-counted-patterns-a-matchs-number-not-its-statements)) |
 | `Join` or `LeftJoin` topping a chain of attribute lookups | the chain's own steps over an `EntityPrefetchStep` ([section 13.5](#135-entity-prefetch-a-chain-of-joins-at-once)) |
 | `Join` whose right side is a plain statement pattern (optionally under filters) | `BatchedJoinStep` ([section 13](#13-batched-joins)); otherwise RDF4J's own join |
 | `IndexedStatementPattern` | RDF4J's `StatementPatternQueryEvaluationStep`, reading through an `IndexTripleSource` ([section 15](#15-text-and-geo-search)) |
@@ -1283,10 +1288,15 @@ visibility  the statement's label, timestamp the statement's
 - each thread opens a shard's scans, intersects them, closes them and moves to the next, reporting to the query's trace through `StoreTrace.join`;
 - rows come in shard order, and in subject order within a shard: SPARQL fixes no order without `ORDER BY`.
 
-**By the store** (`Store.intersect`: in each row, the subjects found under every family, as one cell each with its count). Two backends do it:
+**By the store** (`Store.intersect`: in each row, the subjects found under every family, as one cell each with its count). Each backend does it:
 - **Accumulo, in its servers:** `EntityIntersectingIterator`, in the `tripatha.accumulo.iterators` jar on every tablet server, intersects a star's terms inside each shard row.
 - **RocksDB, with native seeks:** `RocksIntersection` runs the same leapfrog over one RocksDB iterator per term, applying labels and the time range to each cell as `RocksScan` does.
-- **HBase** doesn't yet (a seeking filter is the next phase): its stars are intersected on the client.
+- **HBase, in its region servers:** `IntersectionEndpoint`, a coprocessor endpoint in the `tripatha.hbase.coprocessor` jar, which the store attaches to the index tables it creates (SCALE-STUDY.md 4.21, decision D14).
+  - **One call per shard row and page.** A page ends after a number of matches, cells read or milliseconds, always between two subjects, and says where the next one starts, so a 200M-posting shard never holds a call past `hbase.rpc.timeout`. Every cell the scanner examines counts, hidden ones included, which is why the endpoint applies the time range itself.
+  - **Labels:** a scanner an endpoint opens skips the region's coprocessor hooks, and with them `VisibilityController`'s filter. So each of its scans goes through the region's `preScannerOpen`, on the call's own thread, and the caller's labels apply as on a client scan.
+  - **Seeks inside a row** go through a filter whose hint is the target column (`SEEK_NEXT_USING_HINT`), one region scanner per term. After a seek a list reads one cell, doubling while it is read in order.
+  - **The protocol** is a `.proto` compiled once with protoc 34.0, which matches HBase 3.0's shaded protobuf, and checked in (`generate-protos.sh`).
+  - **When it can:** the store asks each table once, by calling the endpoint. A table created before it, or regions without the jar, answer no, and the stars are intersected on the client.
 
 On Accumulo:
 - **The leapfrog:** it seeks each term's list to the largest subject the lists are at, until they all agree, so a long list costs about as many seeks as the shortest has postings, not its length.
@@ -1303,12 +1313,47 @@ On Accumulo:
 - **Which:** a group with no `GROUP BY` over a whole star (`SubjectMergeJoin`) or over one star pattern, each element `COUNT(*)` or `COUNT(?x)` (the rows) or `COUNT(DISTINCT ?x)` or `COUNT(DISTINCT *)` (the subjects): the star binds only ?x, and on every row.
 - **One pattern** is never a merge (a merge needs two), so the optimizer checks a merge's conditions itself, but for counters and the ratio, which only choose what to merge: no dataset, since the index holds every graph; no `query.limit`, which caps the pattern's rows and so its count; not the hashed row layout; no result-size or time tracking. Its matches are its postings: one list, which the store reads without intersecting anything.
 - **How:** `SubjectMergeCountOptimizer`, after `SubjectMergeOptimizer` and only when the store intersects, wraps such a group in a `SubjectMergeCount`. `SubjectMergeCountStep` asks `Store.countIntersection` for each group of shards, on a thread each (`query.join.mergeslices`, as a merge reads them; one call for every shard ran on one thread, 3 times slower), adds the counts up, and builds the group's one row as RDF4J's `GroupIterator` does: the parent bindings, each count an `xsd:integer`, 0 for no match.
-- **On Accumulo** the iterator's `count` option makes it return one cell per shard row, family `count`, valued `subjects,rows`; a scan resumed after it goes on at the next row. The client also sums per-subject cells, so servers with an older jar still give the right count. Elsewhere the default sums `Store.intersect`'s cells, which on RocksDB stay in the process anyway.
+- **On Accumulo** the iterator's `count` option makes it return one cell per shard row, family `count`, valued `subjects,rows`; a scan resumed after it goes on at the next row. **On HBase** the endpoint's count mode returns the same, one cell per shard row and page. The client also sums per-subject cells, so servers with an older jar still give the right count. Elsewhere the default sums `Store.intersect`'s cells, which on RocksDB stay in the process anyway.
 - **Otherwise** (the subject already bound, a filter or another aggregate in the group, a `GROUP BY`) RDF4J's own group runs over the merge.
 
-The client intersection, used on HBase and as the fallback, reads every posting of the star's terms, as the merge of 13.6 does: correct everywhere, not faster.
+The client intersection, the fallback where the servers can't, reads every posting of the star's terms, as the merge of 13.6 does: correct everywhere, not faster.
 
 **Testing:** `EntityIndexIT` checks the postings against `spo` after adds, deletes, graph drops, a purge and a rebuild, the version raise and the shard count. `SubjectMergeIT` reads its stars from the index too, in the servers and on the client; the test Accumulo cluster's servers run with the test classpath, which holds the iterator. `EntityIntersectingIteratorTest` checks the iterator alone: counts, subjects that start others, one term and three, and resuming. `EntityIndexIT` compares `Store.intersect` and `Store.countIntersection` with an intersection of the raw postings, for two terms and for each alone, with and without a label, on each backend that intersects. `-Dtripatha.test.indexes=true` keeps the index in every IT, checked after each test by `verifyIndexes`.
+
+### 13.8 Counted patterns: a match's number, not its statements
+
+In `SELECT ?p WHERE { ?p a :Person ; :knows ?f }`, the variable `?f` is named nowhere else. The pattern `?p :knows ?f` doesn't choose any value the query returns: it only decides how many times each person's row comes back, once per statement. So its lookups don't need the statements. They need how many there are (SCALE-STUDY.md O26). WatDiv's C3 has five such patterns out of six.
+
+**Which patterns** (`CountedPatternOptimizer`, the last step of the pipeline, on the final joins). It marks a pattern when:
+- it is a plain store pattern (not inferred, indexed or read as a range) on the right of a join or an OPTIONAL, alone or under filters, so its rows come from the left;
+- its object is a variable no other part of the query names. Variables have names in more places than `Var` nodes, and all of them count: a projection (`SELECT *` lists every variable), an `ExtensionElem` (`BIND`), a group's names and its aggregates, a `VALUES` block, an order, a subquery, an outside binding;
+- the query doesn't count distinct whole rows (`COUNT(DISTINCT *)` tells rows apart by every variable), describe resources or call a service, and has no dataset or `query.limit`.
+
+Names are counted over the whole query, every scope included: a name used in a subquery keeps a pattern outside it from being counted, which is only ever conservative.
+
+**The rows** (`CountedPattern`, a `StatementPattern` subclass, and `CountedPatternStep`):
+- A row whose subject, predicate and graph (when the pattern has one) are bound and whose object isn't is counted: the step gets the number `n` and returns the same row `n` times. RDF4J's own step would return `n` rows that differ only in `?f`, which nothing reads. The row object can be shared, since RDF4J's steps copy a row before adding to it.
+- Other rows are looked up by RDF4J's step as before: a graph to be bound by each statement (`GRAPH ?g`), the default graph alone (which the store can't narrow a count to), an object bound from outside.
+- An OPTIONAL with a count of 0 keeps its row once, as `LeftJoinIterator` does for an empty right side.
+
+**The batches.** `BatchedJoinStep` and `EntityPrefetchStep` build each row's lookups as before, and put a counted pattern's keys in the same batch as the others' (`StoreTripleSource.Batch` holds the statements of some keys and the counts of others). So the window's release rule of [section 13.4](#134-keeping-the-answers-identical) and the entity prefetch's fetching ahead cover counts unchanged.
+- `BatchLookup.count` groups the keys by table, graph and how many parts they bind, so the ranges of one call can't overlap.
+- A large group is counted in chunks on the lookup threads, as a disjoint group of statements is read.
+- A count left out of the batch is asked of the store when its row comes.
+- **Only a store that counts without reading counts apart** (`Store.countsWithoutReading`). On the others, a window's counted keys are read with its other keys, in the same scans, and their lists' sizes are the counts. A count of its own would be a second round trip for the same cells: on the join benchmark it made a chain of two counted links 91 % slower on Accumulo and 53 % on HBase. The rows are still repeated, not built per statement.
+
+**The store counts** (`RyaQueryEngine.countBatch`, then `Store.countRanges`): the ranges and the spec a lookup would read, under its labels, graph, time range and row filters, with one number back per range. The ranges must not overlap.
+- **The SPI's default** batch-scans them and counts each cell in the range holding its row (`RangeCounts`). Nothing is decoded into statements, which is most of a lookup's cost (SCALE-STUDY.md 4.14), but every cell still reaches the client.
+- **RocksDB** counts with native iteration (`RocksCount`): it reads each key once, finds its graph and label from the key's end, and reads the value only when a time range needs the timestamp.
+- **Accumulo and HBase** don't count without reading yet, so their counted lookups are read with the others, as above; `countRanges`' default still serves a direct call. Counting in their servers, with an iterator and with the endpoint of [section 13.7](#137-the-entity-index-stars-shard-by-shard), is the next step: then one number per range crosses the network instead of every match.
+
+**Measured** (SCALE-STUDY.md 4.22, WatDiv C3-01 in-process on RocksDB): reading every row went from 536 to 337 ms, and reading and writing TSV from 556 to 283 ms. The 444,070 rows were the same.
+
+**Testing:**
+- `CountedPatternIT` runs every query with counts on and off, with and without a label, and checks through the trace which ones counted. The data has a statement in two graphs and under two labels, subjects without a match, and statements outside a time-to-live.
+- `CountedPatternOptimizerTest` covers the ways a query names a variable.
+- `CountRangesIT` (`tripatha.test`) compares counts with scans on each backend.
+- `-Dtripatha.test.countUnused=false` runs every sail test without counts.
 
 ---
 
@@ -1848,12 +1893,114 @@ sequenceDiagram
   | `-Dtripatha.test.backend=hbase` | the ITs run on the HBase mini cluster |
   | `-Dtripatha.test.hbaseCounters=increment` | HBase counter tables use increments instead of the coprocessor |
   | `-Dtripatha.test.backend=rocksdb` | the ITs run on an embedded RocksDB database |
+  | `-Dtripatha.test.lookupThreads=3` | every batch of disjoint lookups is read, or counted, on three threads |
+  | `-Dtripatha.test.prefetchAhead=true` | every entity prefetch fetches its next window on another thread |
+  | `-Dtripatha.test.countUnused=false` | no lookup is counted (section 13.8): the whole suite reads statements |
+  | `-Dtripatha.test.hbaseIntersectPage=1` | HBase's intersection endpoint ends every page after one match and one cell (section 13.7) |
 
 - **Coverage:** `-Pcoverage` adds JaCoCo to both test phases and merges the reports in `tripatha.coverage`.
 
+## 20. Speed and scale: the optimizations
+
+Tripatha's design has two performance goals, and every optimization below serves at least one of them:
+- **One machine, against single-instance engines:** a RocksDB store served by the native executable, measured against QLever and Oxigraph on WatDiv, the one standard benchmark used for comparisons (SCALE-STUDY.md 4.13).
+- **10^12 triples on a cluster** of Accumulo or HBase servers:
+  - no step may funnel a large share of the data through one client;
+  - loads must go in bulk;
+  - tables must be sized for thousands of tablets or regions (SCALE-STUDY.md sections 1 to 3).
+
+The rule for all of them: an optimization must hold on all three backends, at 10^12 triples, with the same answers. Where a step runs in the servers (an Accumulo iterator, an HBase coprocessor), the client does the same work when the server code isn't deployed: same answers, more data moved.
+
+This section lists them in one place, with what each does, where it runs, its gain as measured, and where it is explained in detail. [SCALE-STUDY.md](SCALE-STUDY.md) is the tracker: its section 2 numbers them (`O…`), and its section 4 holds the measurements.
+
+**Where it stands on WatDiv** (SCALE-STUDY.md 4.15: 100 queries of 20 templates at scale factor 100, on one machine; measured before O26, whose effect is in 4.22). p50, geometric means:
+
+| | Tripatha | QLever 0.6.0 | Oxigraph 0.5.13 |
+|---|---|---|---|
+| All 100 queries | **2.27 ms** | 9.49 ms | 3.63 ms |
+| Complex (C1 to C3) | 67.9 ms | **66.3 ms** | 375.9 ms |
+| Small (S, L, F) | **1.25 ms** | 6.73 ms | 1.60 ms |
+| Templates where it's the fastest | **11** | 2 | 7 |
+
+### 20.1 Joins: fewer round trips
+
+A nested-loop join asks the store once per row; on a cluster each ask is a network round trip. These make a join's lookups few and large:
+
+| Optimization | What it does | Gain | Details |
+|---|---|---|---|
+| Batched joins | A window of left rows' lookups is one batch scan per table. Windows start at 64 rows and double up to 1,000 (O15), so a `LIMIT` stops early | the basis of every join here | [13.1–13.4](#13-batched-joins) |
+| Left-deep joins | `LeftDeepJoinOptimizer` turns RDF4J's right-nested joins into left-deep ones, so every join has its rows on the left and a pattern on the right | makes the batches possible | [13.1](#131-the-problem) |
+| Entity prefetch | A chain of joins and OPTIONALs over one driver (an entity's attributes) fetched together, per window | one batch for the whole chain | [13.5](#135-entity-prefetch-a-chain-of-joins-at-once) |
+| More lookups in flight (O16) | A batch of disjoint lookups read on several threads (4 by default on RocksDB); the next window fetched while the current one is joined | WatDiv C3 −50 %, the complex queries 112.2 → 97.7 ms | SCALE-STUDY.md 4.14 |
+| Less work per looked-up row (O17) | A batch whose ranges can't overlap skips the cell check and the objects' re-encoding; rows decoded in one pass | WatDiv C3 −41 %, complex −24 %, all 100 −11 % | SCALE-STUDY.md 4.14 |
+| Counted patterns (O26) | A joined pattern whose object nothing else uses asks for a count per lookup, and repeats its row that many times: counted by the store where it counts without reading (RocksDB now), counted from the fetched lists elsewhere | WatDiv C3-01 in-process −37 to −49 % | [13.8](#138-counted-patterns-a-matchs-number-not-its-statements) |
+| One range per subject (O21) | A subject's links read as one range | built, off by default: no gain on a warm cache | [13.4](#134-keeping-the-answers-identical) |
+
+### 20.2 Reading only what the query needs
+
+| Optimization | What it does | Gain | Details |
+|---|---|---|---|
+| The table per pattern | Every statement in `spo`, `po` and `osp`, so any pattern is one range of one table | the base layout | [7](#7-storage-layout), [8](#8-from-a-triple-pattern-to-a-range-scan) |
+| Statistics for join order | Cardinality counters per subject, predicate, object and pair, summed by the store, feed RDF4J's join optimizer | plans from real sizes | [11](#11-statistics-and-join-ordering) |
+| The object's type as a row suffix (O20) | The type check is a byte comparison on RocksDB and one linear expression on Accumulo and HBase | | SCALE-STUDY.md O20 |
+| `STRSTARTS` as a prefix range (O13) | The objects starting with the prefix are read, the filter kept | | [12.8](#128-strstarts-as-a-prefix-range) |
+| Comparisons as value ranges (O14, O25) | `?o > 60` reads only the matching values, one range per stored type, with a real estimate for the join order | range queries 5 to 36 times faster on Accumulo, `class-value` 26 times | [12.9](#129-comparisons-as-value-ranges) |
+| Text and geo indexes | Search filters read candidates from an index; the filter stays exact | | [15](#15-text-and-geo-search) |
+
+### 20.3 Stars: merged, then intersected in the servers
+
+"All entities matching X" (`?x a :Person ; :worksFor :Acme ; :nationality :IT`) is the shape that grows worst: at 10^12 each list holds billions of subjects.
+
+| Optimization | What it does | Gain | Details |
+|---|---|---|---|
+| Merge joins (O22) | The star's constant patterns read as subject-sorted `po` lists and intersected, instead of one lookup per row | Accumulo `class-large` 1,446 → 137 ms, `class-2` 267 → 47 ms; HBase `class-large` 506 → 149 ms | [13.6](#136-merge-joins-a-stars-constant-patterns-intersected) |
+| Slices and subjects only (O24) | Lists cut at `spo`'s split points and intersected on several threads; only each cell's subject read | 1.6 to 2 times on Accumulo and HBase, 3 on RocksDB; 3.7 times at 100M | [13.6](#136-merge-joins-a-stars-constant-patterns-intersected) |
+| One large pattern as a merge (O7a) | A class on its own read as a merge of one list, in slices | 2.8 times on RocksDB and 2.3 on Accumulo at 10M, 4.9 times at 100M | [13.6](#136-merge-joins-a-stars-constant-patterns-intersected) |
+| The entity index (O23) | Every posting also in a table sharded by subject; each shard's lists intersected by the store: Accumulo's tablet servers (an iterator), HBase's region servers (a coprocessor endpoint, D14), RocksDB's native seeks | stars 2.3 to 4 times faster on Accumulo and RocksDB, 39 to 81 % on HBase; costs 17 % more disk and a fifth of the load rate | [13.7](#137-the-entity-index-stars-shard-by-shard) |
+| Counts in the store (O23) | A star's or a class's `COUNT` asked of the store: one number per shard comes back | counts 2.7 to 4.2 times faster on Accumulo, `count-class` 4 times | [13.7](#137-the-entity-index-stars-shard-by-shard) |
+
+### 20.4 One machine: RocksDB and the native executable
+
+| Optimization | What it does | Gain | Details |
+|---|---|---|---|
+| The RocksDB backend | An embedded store in the query's process: keys sort in Accumulo's order with RocksDB's own comparator (no Java comparator, which costs a JNI call per comparison); counters are a merge operator | no network at all | BACKENDS-STUDY.md 10 |
+| Key decoding in runs (O19, O17) | Keys copied run by run between escapes, rows decoded in one pass | | SCALE-STUDY.md O19, 4.14 |
+| The native executable's heap | Served with `-Xms` equal to `-Xmx`: the native Serial collector sizes its young generation from the minimum heap | WatDiv C3 −38 %, the complex queries −21 % | SCALE-STUDY.md 4.15 |
+| Profile-guided build | Oracle GraalVM's `--pgo`, trained on the join benchmark (never WatDiv): `build-optimized.sh` | all 100 −11 to −16 %, complex −10 to −19 % | SCALE-STUDY.md 4.15 |
+
+### 20.5 10^12 triples: loading
+
+| Optimization | What it does | Gain | Details |
+|---|---|---|---|
+| Counters summed before they are written | A call's deltas summed per key, one cell each; a subject's counters of 1 left out, the planner reading a missing counter as 1 (O1) | 6.48 → 3.09 counter cells sent per triple | [9.3](#93-counters-are-summed-before-they-are-written), SCALE-STUDY.md 4.2 |
+| HBase counters by coprocessor | Deltas as plain puts, summed on reads, flushes and compactions by `CounterObserver`, instead of increments that lock a row and sync the log each | | BACKENDS-STUDY.md 4 |
+| Splits sized for 1T (O2) | `prepare` plans each table's splits from its estimated size on disk (10 GB per tablet or region), and makes that the backend's split size; HBase splits in rounds; the progress file stays a few bytes | about 2,100 tablets per statement table at 1T | SCALE-STUDY.md 4.16 |
+| The bulk build (O3, O10) | Sorted files per table and range, merged, then imported: RFiles on Accumulo, SST files on RocksDB, HFiles with label ordinals on HBase. Counter totals of 1 left out (89.5 % of them) | 0.56 counter cells stored per triple; at 10M 13 times faster than `load` on the Accumulo test cluster, with an `eval` 90 % smaller; 1.5 times on RocksDB; on HBase 31 against 45 s at 3M | [18](#18-the-synthetic-data-loader), SCALE-STUDY.md 4.18–4.20 |
+
+### 20.6 10^12 triples: reading in the servers
+
+At 10^12 what must not happen is a client reading billions of cells to keep a few. So work moves to where the data is, and only what the answer needs comes back:
+- **Filters in the servers:** Accumulo's scan iterators apply the row and qualifier expressions and the time range, and `SummingCombiner` adds up counters ([3.5](#35-iterators), [8.2](#82-what-the-scan-adds-on-top-of-the-range)). HBase does the same with its filters and `CounterObserver`.
+- **One read per region:** `HBaseBatchScan` reads many ranges as one multi-get plus one scan per region, in parallel.
+- **Intersections in the servers:** the entity index's shards, intersected by Accumulo's iterator and HBase's endpoint. Only matches or counts come back (20.3).
+  - HBase's endpoint answers in pages: a 200M-posting shard never holds a call past its timeout.
+  - It applies the caller's labels through the region's own `preScannerOpen`.
+- **Parallel by split:** merges and single large patterns are cut at `spo`'s split points, one thread per slice (O24, O7a).
+- **Counts instead of matches:** a star's `COUNT` (O23), and the lookups of a pattern whose object nothing else uses (O26). On Accumulo and HBase those lookups are still counted on the client: their server-side counts are the next step.
+
+### 20.7 Still open
+
+- **Server-side counts for O26** on Accumulo (an iterator) and HBase (a method of the endpoint).
+- **Whole-table operations in time proportional to what they change:** graph drops (O4), index rebuilds and purges (O5).
+- **Planning at scale:** text planning from per-term counts (O6), approximate counts from the counters (O8).
+- **Layout:** deprecating the hashed row prefix (O9); a dictionary encoding (O11), conditional on M5.
+- **Analytics** over the whole store, which need an engine of their own (O12).
+- **Cluster defaults:** Accumulo and HBase read a batch on one thread and don't fetch ahead until both are measured on a cluster (M3, M4).
+- **The 10^10 and 10^12 milestones** need a cluster.
+
 ---
 
-## 20. Invariants
+## 21. Invariants
 
 Breaking any of these loses data or results, or makes the store refuse to start:
 
@@ -1879,7 +2026,7 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 
 ---
 
-## 21. Glossary
+## 22. Glossary
 
 | Term | Meaning |
 |---|---|

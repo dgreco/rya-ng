@@ -222,6 +222,7 @@ Instead of the connection arguments, `--tripatha.accumulo.client-properties` can
 | `tripatha.join-merge-single` | `10000` | A star pattern on its own (`?x a :C`, alone, counted, or driving a chain) whose list is at least this long is read like a merge of one list: its subjects only, in those slices; `0` leaves it to a plain scan |
 | `tripatha.join-lookup-threads` | the store's: `4` on RocksDB, `1` on Accumulo and HBase | A batch of lookups whose ranges can't overlap (an entity chain's links) is read on this many threads, each reading, decoding and matching its share; `1` reads every batch on the request's thread |
 | `tripatha.join-prefetch-ahead` | the store's: on for RocksDB, off for Accumulo and HBase | An entity prefetch (a query's joins and `OPTIONAL`s over a batch of entities) fetches its next window on another thread while the current one is joined |
+| `tripatha.join-count-unused` | `true` | A joined pattern whose object no other part of the query uses (`?p :knows ?f`, `?f` nowhere else) has its lookups counted by the store instead of read, and each row repeated that many times |
 | `tripatha.join-merge-slices` | `4` | Merge joins read their lists in up to this many slices of the subject space, cut at the store's split points and intersected on threads of their own; `1` reads each list whole |
 | `tripatha.text-index` | `false` | Keep the full-text index (see [Search](#search)) |
 | `tripatha.text-index-predicates` | `[]` | Predicates whose literals are text-indexed; empty means all |

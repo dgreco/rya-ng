@@ -168,6 +168,124 @@ public final class BatchLookup {
     }
 
     /**
+     * How many statements a lookup of each key would return, counted by the store instead of read
+     * (SCALE-STUDY.md O26): for the patterns whose object is used nowhere else
+     * ({@link CountedPattern}). A key is counted only when it binds its subject, leaves its object
+     * free and doesn't ask for the default graph alone; the others are left out of the map, and
+     * their lookups made as usual.
+     *
+     * <p>Keys are grouped by table, graph and how many parts they bind, so the ranges of one call
+     * can't overlap (two keys binding as many parts never do). Each range is counted once, its count
+     * given to every key that shares it.
+     */
+    public static <C extends RdfCloudTripleStoreConfiguration> Map<LookupKey, Long> count(final RyaDAO<C> dao, final C conf,
+            final Collection<LookupKey> keys) {
+        final Map<List<Object>, List<RyaStatement>> patterns = new LinkedHashMap<>();
+        final Map<List<Object>, Map<List<Object>, List<LookupKey>>> byPath = new LinkedHashMap<>();
+        for (final LookupKey key : new LinkedHashSet<>(keys)) {
+            final Target target = Target.of(key);
+            if (target == null || !target.shape().subject() || target.shape().object() || target.shape().defaultGraphOnly()) {
+                continue;
+            }
+            // A bound subject and a free object: an spo range, its subject then its predicate.
+            final TABLE_LAYOUT layout = TABLE_LAYOUT.SPO;
+            final List<Object> path = target.projection().predicate() == null ? List.of(target.projection().subject())
+                    : List.of(target.projection().subject(), target.projection().predicate());
+            // Its patterns share one context, which the count's spec takes (null for any graph).
+            final List<Object> group = java.util.Arrays.asList(layout, target.namedGraph(), path.size());
+            final Map<List<Object>, List<LookupKey>> paths = byPath.computeIfAbsent(group, g -> new LinkedHashMap<>());
+            if (!paths.containsKey(path)) {
+                patterns.computeIfAbsent(group, g -> new ArrayList<>()).add(target.pattern);
+            }
+            paths.computeIfAbsent(path, p -> new ArrayList<>()).add(key);
+        }
+        final Map<LookupKey, Long> counts = new HashMap<>();
+        for (final Map.Entry<List<Object>, List<RyaStatement>> e : patterns.entrySet()) {
+            // Each pattern is a range of its own, so the group can be counted in chunks on several
+            // threads, as a disjoint group is read (O16).
+            final int chunks = Math.min(conf.getJoinLookupThreads(), e.getValue().size() / conf.getJoinLookupThreadKeys());
+            final long[] found = chunks > 1 ? countInChunks(dao, conf, e.getValue(), chunks)
+                    : dao.getQueryEngine().countBatch(e.getValue(), conf);
+            if (found == null) {
+                continue; // an engine that can't count: the lookups are made as usual
+            }
+            int i = 0;
+            for (final List<LookupKey> sharing : byPath.get(e.getKey()).values()) {
+                for (final LookupKey key : sharing) {
+                    counts.put(key, found[i]);
+                }
+                i++;
+            }
+        }
+        return counts;
+    }
+
+    /**
+     * Counts patterns in {@code chunks} parts at once, the first on this thread, each under the
+     * query's trace; every part is finished before this returns or throws.
+     *
+     * @return the counts in the patterns' order, or null if the engine can't count
+     */
+    private static <C extends RdfCloudTripleStoreConfiguration> long[] countInChunks(final RyaDAO<C> dao, final C conf,
+            final List<RyaStatement> patterns, final int chunks) {
+        final List<List<RyaStatement>> cut = new ArrayList<>(chunks);
+        for (int c = 0; c < chunks; c++) {
+            cut.add(patterns.subList(c * patterns.size() / chunks, (c + 1) * patterns.size() / chunks));
+        }
+        final long[][] parts = new long[chunks][];
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+        final AtomicBoolean stop = new AtomicBoolean();
+        final CountDownLatch done = new CountDownLatch(chunks - 1);
+        final Trace trace = StoreTrace.current();
+        final String why = trace == null ? "" : trace.reason();
+        for (int c = 1; c < chunks; c++) {
+            final int part = c;
+            final String reason = (why.isEmpty() ? "" : why + " › ") + "part " + (c + 1) + " of " + chunks + ", on a thread of its own";
+            try {
+                LOOKUP_THREADS.execute(() -> {
+                    try (StoreTrace.Scope joined = StoreTrace.join(trace, reason)) {
+                        parts[part] = dao.getQueryEngine().countBatch(cut.get(part), conf);
+                    } catch (final Throwable t) {
+                        failure.compareAndSet(null, t);
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            } catch (final RuntimeException e) {
+                failure.compareAndSet(null, e);
+                done.countDown();
+            }
+        }
+        try {
+            parts[0] = dao.getQueryEngine().countBatch(cut.get(0), conf);
+        } catch (final RuntimeException | Error e) {
+            failure.compareAndSet(null, e);
+        } finally {
+            awaitUninterruptibly(done, stop);
+        }
+        final Throwable failed = failure.get();
+        if (failed instanceof RuntimeException e) {
+            throw e;
+        }
+        if (failed instanceof Error e) {
+            throw e;
+        }
+        if (failed != null) {
+            throw new IllegalStateException(failed);
+        }
+        final long[] out = new long[patterns.size()];
+        int at = 0;
+        for (final long[] part : parts) {
+            if (part == null) {
+                return null;
+            }
+            System.arraycopy(part, 0, out, at, part.length);
+            at += part.length;
+        }
+        return out;
+    }
+
+    /**
      * Reads a group's patterns with one batch scan, and gives each stored statement to the group's
      * keys it matches exactly, after clearing their lists.
      *
