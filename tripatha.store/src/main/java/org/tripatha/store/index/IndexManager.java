@@ -141,6 +141,14 @@ public final class IndexManager implements IndexCatalog {
             } else if (stored == null) {
                 state = new IndexState(IndexState.Status.BUILDING, index.definition());
             } else if (!stored.definition().equals(index.definition())) {
+                if (running != null) {
+                    // Clearing it would throw away what the job built, and its files would bring back cells of the old rules.
+                    throw new RyaDAOException(running.equals(job)
+                            ? "The " + type.id() + " index was redefined during rebuild job " + running + " (stored " + stored.definition()
+                                    + ", the job's " + index.definition() + "): run the job with the index options it started with"
+                            : "Rebuild job " + running + " is building the " + type.id() + " index with other settings ("
+                                    + stored.definition() + ", here " + index.definition() + "): use those, or wait for the job");
+                }
                 if (!conf.isRebuildIndexes() && job == null) {
                     throw new RyaDAOException("The " + type.id() + " index was built with different settings ("
                             + stored.definition() + ", now " + index.definition() + "). Rebuild it with the loader's rebuild "
@@ -318,9 +326,10 @@ public final class IndexManager implements IndexCatalog {
      * the deletes recorded for it. Refused if the job isn't the running one, or an index was
      * redefined since.
      *
+     * @param built the indexes the job built
      * @return the indexes made READY
      */
-    public List<IndexType> finishRebuild(final String id) throws Exception {
+    public List<IndexType> finishRebuild(final String id, final Set<IndexType> built) throws Exception {
         final String running = readJob(store, tables);
         if (!id.equals(running)) {
             throw new RyaDAOException("Rebuild job " + id + " isn't the running one (" + running + ")");
@@ -332,7 +341,7 @@ public final class IndexManager implements IndexCatalog {
         }
         final List<IndexType> ready = new ArrayList<>();
         for (final Map.Entry<IndexType, SecondaryIndex> e : active.entrySet()) {
-            if (states.get(e.getKey()).status() == IndexState.Status.BUILDING) {
+            if (built.contains(e.getKey()) && states.get(e.getKey()).status() == IndexState.Status.BUILDING) {
                 setState(e.getKey(), new IndexState(IndexState.Status.READY, e.getValue().definition()));
                 ready.add(e.getKey());
             }

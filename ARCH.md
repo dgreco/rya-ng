@@ -667,6 +667,7 @@ The batch is written early once it holds 50,000 keys (`MAX_PENDING_COUNTERS`), s
 3. opens the batch writers and the query engine;
 4. reads the storage version (`ns` row `tripatha`, family `version`):
    - **on a store it has just created,** it writes version `1.1.0` (`1.2.0` with the entity index on) and the `datatypes` flag, which says that every statement of the store has its datatype markers ([section 12.9](#129-comparisons-as-value-ranges));
+   - **when a loader rebuild job starts,** it raises the store to `1.3.0`: older code neither records its deletes while an index is BUILDING nor refuses graph drops during a job ([section 18.5](#185-rebuild));
    - **with the entity index on,** it raises an older store to `1.2.0`, so that code from before the index, which would add statements without their postings, refuses to write to it ([section 13.7](#137-the-entity-index-stars-shard-by-shard));
    - **on any other store,** it writes neither. A store created before the markers keeps its version (`1.0.0`, or none) and has no flag, so comparisons there read whole predicates;
    - **on a store whose version is newer than its own,** it opens read-only: every write method (`add`, `delete`, `dropGraph`, `purge`, namespaces, index rebuilds) throws. A newer store may rely on writes this code doesn't make, as a 1.1.0 store relies on the markers. Versions compare number by number between the dots;
@@ -1896,7 +1897,8 @@ sequenceDiagram
 **Writes go on.** The endpoint may write meanwhile, with the same index settings:
 - **Adds** are indexed by their writers, as for any BUILDING index.
 - **Deletes** are recorded in `ns` before they are made (`RebuildLog`), because an imported file would bring back the index cells of a statement deleted after the sort read it. The finish deletes those of every recorded cell no longer in `spo`, at its own timestamp, and writes again those of one added back. A second pass covers the deletes made during the first.
-- **Graph drops and `purge` are refused** until the job finishes: they delete by column filter, with nothing to replay.
+- **Graph drops and `purge` are refused** until the job finishes: they delete by column filter, with nothing to replay. So is a store opened with other settings for an index the job builds: it would clear the table.
+- **Version:** the job's start raises the store to `1.3.0`, so older code, which records nothing, refuses to write to it.
 - **Restarts:** to change an index's definition, stop the writers, run `rebuild --phase start`, then start them with the new settings; readers pick up READY by themselves.
 
 On RocksDB only one process opens the store, so nothing else writes during the job.
@@ -2052,6 +2054,7 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 17. **A value range only narrows.** The filter stays and decides every row ([section 12.9](#129-comparisons-as-value-ranges)).
 18. **Every stored statement has exactly one entity posting** when the entity index is on. Its matches are answers, not candidates: a missing posting loses rows, a stale one adds them ([section 13.7](#137-the-entity-index-stars-shard-by-shard)).
 19. **A store with the entity index has storage version 1.2.0,** so code that doesn't keep the index never writes to it.
+20. **A statement deleted during a rebuild stays out of the index.** While an index is BUILDING, each delete is recorded before it is made, and a job's finish replays the record after its import; graph drops wait for the job. A store that has had a job is at version 1.3.0, so code that records nothing never writes to it ([section 18.5](#185-rebuild)).
 
 ---
 

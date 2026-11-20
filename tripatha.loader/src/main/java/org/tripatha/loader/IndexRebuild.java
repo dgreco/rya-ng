@@ -158,7 +158,7 @@ public final class IndexRebuild {
             if (building.isEmpty()) {
                 if (id.equals(IndexManager.readJob(store, tables))) {
                     // A finish that stopped after making the indexes READY: end it.
-                    indexes.finishRebuild(id);
+                    indexes.finishRebuild(id, Set.of());
                     out.println("Rebuild job " + id + " is done.");
                 } else {
                     out.println("Nothing to rebuild: every enabled index of " + o.tablePrefix() + " is READY.");
@@ -626,7 +626,7 @@ public final class IndexRebuild {
             }
         }
         final long[] secondPass = replay(later, building, context, false);
-        final List<IndexType> ready = indexes.finishRebuild(id);
+        final List<IndexType> ready = indexes.finishRebuild(id, building.keySet());
         out.printf(Locale.ROOT, "Finish: %,d deletes recorded during the job, %,d replayed, %,d written again (%,d more in a second "
                 + "pass), in %s; %s READY.%n", first.size(), firstPass[0] + secondPass[0], firstPass[1], later.size(),
                 BulkFiles.duration(Math.max(1, System.currentTimeMillis() - t0)), ready);

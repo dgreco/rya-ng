@@ -207,6 +207,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
             }
             indexes = new IndexManager(store, conf, writer, storeCreated);
             raiseVersionForEntityIndex();
+            raiseVersionForRebuildJob();
             isInitialized.set(true);
         } catch (final Exception e) {
             if (writer != null) {
@@ -234,6 +235,23 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
         if (version == null || isNewer(RdfCloudTripleStoreConstants.VERSION_WITH_ENTITY_INDEX, version)) {
             bwNs.write(new RowMutation(VERSION_ROW).put(VERSION_CF, EMPTY, EMPTY,
                     utf8(RdfCloudTripleStoreConstants.VERSION_WITH_ENTITY_INDEX)));
+            writer.flush();
+        }
+    }
+
+    /**
+     * A loader rebuild job starting raises the store's version to 1.3.0: code from before it
+     * neither records its deletes while an index is BUILDING nor refuses graph drops during a job,
+     * and an imported file would then bring back the index cells of what it deleted.
+     */
+    private void raiseVersionForRebuildJob() throws Exception {
+        if (conf.getIndexRebuildJob() == null || !indexes.isBuilding() || writesRefused != null) {
+            return;
+        }
+        final String version = getVersion();
+        if (version == null || isNewer(RdfCloudTripleStoreConstants.VERSION_WITH_REBUILD_JOBS, version)) {
+            bwNs.write(new RowMutation(VERSION_ROW).put(VERSION_CF, EMPTY, EMPTY,
+                    utf8(RdfCloudTripleStoreConstants.VERSION_WITH_REBUILD_JOBS)));
             writer.flush();
         }
     }

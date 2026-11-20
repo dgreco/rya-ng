@@ -70,6 +70,7 @@ import org.tripatha.api.domain.RyaIRI;
 import org.tripatha.store.index.IndexType;
 import org.tripatha.store.index.IndexVerifier;
 import org.tripatha.api.RdfCloudTripleStoreConfiguration;
+import org.tripatha.api.RdfCloudTripleStoreConstants;
 import org.tripatha.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import org.tripatha.api.domain.RyaStatement;
 import org.tripatha.api.resolver.RyaTripleContext;
@@ -666,8 +667,11 @@ class LoaderIT extends StoreITBase {
 
     /**
      * Writes while the job runs, between its sort and its import: deletes (which the imported
-     * files would undo), deletes then adds again, and adds. The finish replays the deletes, a
-     * writer that was open sees the indexes READY, and graph drops wait for the job.
+     * files undo), deletes then adds again, and adds. The index tables are compacted before the
+     * import, so Accumulo and HBase drop the deletes' markers, as a major compaction may on a
+     * cluster: the import then brings the deleted cells back on every backend, and the finish
+     * removes them. A writer that was open sees the indexes READY, graph drops wait for the job,
+     * and another store can't redefine an index the job builds.
      */
     @Test
     void aRebuildReplaysTheDeletesMadeWhileItRan() throws Exception {
@@ -682,6 +686,8 @@ class LoaderIT extends StoreITBase {
         writer.init();
         try {
             assertFalse(writer.getIndexCatalog().isReady(IndexType.ENTITY), "BUILDING while the job runs");
+            assertEquals(RdfCloudTripleStoreConstants.VERSION_WITH_REBUILD_JOBS, writer.getVersion(),
+                    "a job raises the store's version: older writers don't record their deletes");
             final List<RyaStatement> stored = new ArrayList<>();
             final RyaTripleContext context = RyaTripleContext.getInstance(conf);
             try (CellScanner spo = getStore().scan(getTablePrefix() + "spo", KeyRange.all(), ScanSpec.of(Auths.of(AUTHS)))) {
@@ -721,8 +727,22 @@ class LoaderIT extends StoreITBase {
             starting.init();
             assertFalse(starting.getIndexCatalog().isReady(IndexType.ENTITY));
             starting.destroy();
+            // Nor may a store with other index settings clear what the job builds.
+            final StoreRdfConfiguration redefined = new StoreRdfConfiguration(inProcess);
+            redefined.setTextIndexPredicates(List.of("http://www.w3.org/2000/01/rdf-schema#label"));
+            final RyaStoreDAO other = new RyaStoreDAO(getStore(), redefined);
+            final RyaDAOException clash = assertThrows(RyaDAOException.class, other::init);
+            assertTrue(clash.getMessage().contains("other settings"), clash.getMessage());
 
-            final Run finished = run(env(), "rebuild", rebuild("--phase", "merge,import,finish"));
+            for (final String table : List.of("text", "geo", "entity")) {
+                backend().compact(getTablePrefix() + table);
+            }
+            final Run imported = run(env(), "rebuild", rebuild("--phase", "merge,import"));
+            assertEquals(0, imported.code(), imported.all());
+            final IndexVerifier.Report undone = IndexVerifier.verify(getStore(), conf, IndexType.ENTITY);
+            assertFalse(undone.extra().isEmpty(), "the import brings back postings of deleted statements: " + undone);
+
+            final Run finished = run(env(), "rebuild", rebuild("--phase", "finish"));
             assertEquals(0, finished.code(), finished.all());
             final int again = (stored.size() + 2) / 3;
             assertTrue(finished.out().contains("Finish: " + stored.size() + " deletes recorded during the job, "

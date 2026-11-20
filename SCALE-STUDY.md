@@ -1215,6 +1215,8 @@ The rows were the same in every variant. `chain-unused` sends as many cells as b
   1. Every recorded cell no longer in `spo` has its index cells deleted, at its own timestamp. One still there (added again) has them written again from the stored cell: an imported file may have replaced them with an older version.
   2. The cells recorded since the first pass read the record are deleted again if they are gone, and nothing is written. A delete recorded later came after the first pass's writes.
 - **Graph drops and `purge` are refused** while a job runs: they delete by column filter, and there is nothing per statement to replay. A store started with `index.rebuild=true` leaves the indexes to a running job.
+- **Redefinitions are refused** while a job runs: a store opened with other settings for an index the job builds would clear its table, and the job's files would bring back cells of the old rules. The job itself, resumed with other index options, is refused too.
+- **Storage version 1.3.0:** the job's start raises the store to it, as the entity index raises it to 1.2.0. Code from before records nothing and drops graphs freely, so it refuses to write to the store. Writers already open when a job starts must run this version.
 
 **States seen by other processes.** A store re-reads its indexes' states every minute (`index.state.refresh`), on a daemon thread and only while it is used, so it isn't part of any query's trace. Readers then use an index the job made READY without a restart, and a writer whose index another process redefined stops writing it.
 
@@ -1229,7 +1231,9 @@ The first RocksDB run took 17.0 s: an index table created on RocksDB has no spli
 
 **Tests:**
 - `LoaderIT.aRebuildWritesTheIndexesALoadWrites`: a store loaded without indexes, rebuilt, holds the text, geo and entity cells a load with them writes, cell by cell with timestamps. Its index tables are split, and a second run has nothing to do.
-- `LoaderIT.aRebuildReplaysTheDeletesMadeWhileItRan`: between the sort and the import, a writer deletes statements, adds a third of them back later, and adds one. A graph drop and an in-process rebuild are refused. After the finish every index matches `spo` (`IndexVerifier`), the open writer sees the index READY, and a graph drop works.
+- `LoaderIT.aRebuildReplaysTheDeletesMadeWhileItRan`: between the sort and the import, a writer deletes statements, adds a third of them back later, and adds one. A graph drop, an in-process rebuild and a store with other index settings are refused, and the store is at version 1.3.0.
+  - **The race, on every backend:** the index tables are compacted before the import, so Accumulo and HBase drop the deletes' markers, as a major compaction may on a cluster. The import then brings the deleted postings back everywhere (checked), and the finish removes them.
+  - After the finish every index matches `spo` (`IndexVerifier`), the open writer sees the index READY, and a graph drop works.
 - `LoaderIT.aRebuildResumesAfterACrash` and `IndexRebuildTest` (the weighted split points).
 - All three on RocksDB, Accumulo and HBase in both counter modes: index tables hold no counters, so HBase's increment mode rebuilds too.
 
