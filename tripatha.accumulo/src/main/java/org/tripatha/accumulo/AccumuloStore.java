@@ -242,6 +242,60 @@ public final class AccumuloStore implements Store {
         return total;
     }
 
+    /** The iterator that counts each range in the tablet servers (SCALE-STUDY.md O26), in Tripatha's iterator jar. */
+    public static final String RANGE_COUNTER = "org.tripatha.accumulo.iterators.RangeCountingIterator";
+    /** Above every other iterator of a scan, those a configuration adds included: it counts what they leave. */
+    private static final int RANGE_COUNTER_PRIORITY = 10_000;
+
+    /** Whether each table's servers can load the counting iterator, asked once. */
+    private final java.util.Map<String, Boolean> counting = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** In the tablet servers, when they load Tripatha's counting iterator. */
+    @Override
+    public boolean countsWithoutReading(final String table) {
+        final Boolean known = counting.get(table);
+        if (known != null) {
+            return known;
+        }
+        if (!tables().exists(table)) {
+            return false; // asked again once it exists
+        }
+        return counting.computeIfAbsent(table, t -> {
+            final boolean loads = tables().canLoadIterator(t, RANGE_COUNTER);
+            if (!loads) {
+                log.info("The tablet servers of {} can't load {}: lookups are counted on the client. Put the "
+                        + "tripatha.accumulo.iterators jar on every tablet server.", t, RANGE_COUNTER);
+            }
+            return loads;
+        });
+    }
+
+    /**
+     * One batch scan of the ranges with {@code RangeCountingIterator} on top, which returns one
+     * cell per range and tablet: its last key, valued its count. Each is added to the range holding
+     * its row. Servers that can't load the iterator are counted on the client (the default).
+     */
+    @Override
+    public long[] countRanges(final String table, final List<KeyRange> ranges, final ScanSpec spec) {
+        if (ranges.isEmpty() || !countsWithoutReading(table)) {
+            return Store.super.countRanges(table, ranges, spec);
+        }
+        final long[] counts = new long[ranges.size()];
+        final org.tripatha.store.spi.RangeCounts.Locator locator = new org.tripatha.store.spi.RangeCounts.Locator(ranges);
+        try (CellScanner cells = batchScan(table, ranges, spec.toBuilder()
+                .iterator(new org.tripatha.store.spi.ServerIterator(RANGE_COUNTER_PRIORITY, "count", RANGE_COUNTER, java.util.Map.of()))
+                .build())) {
+            while (cells.hasNext()) {
+                final Cell cell = cells.next();
+                final int i = locator.indexOf(cell.row());
+                if (i >= 0) {
+                    counts[i] += Long.parseLong(new String(cell.value(), StandardCharsets.US_ASCII));
+                }
+            }
+        }
+        return counts;
+    }
+
     private CellScanner intersecting(final String table, final List<byte[]> rows, final List<byte[]> families,
             final ScanSpec spec, final boolean count) {
         final List<KeyRange> ranges = new ArrayList<>(rows.size());

@@ -541,13 +541,15 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
             final boolean apart = !counted.isEmpty() && storeCounts();
             final Collection<LookupKey> read = apart || counted.isEmpty() ? keys : union(keys, counted);
             try (StoreTrace.Reason why = StoreTrace.reason(reason)) {
-                final Map<LookupKey, List<Statement>> statements = read.isEmpty() ? Map.of()
-                        : BatchLookup.fetch(ryaDAO, conf, read, conf.getJoinPrefetchLimit());
-                if (statements == null) {
+                // The count and the reads at the same time: one more round trip, but not one more wait.
+                final BatchLookup.Fetched fetched = apart ? BatchLookup.fetchAndCount(ryaDAO, conf, read, counted, conf.getJoinPrefetchLimit())
+                        : new BatchLookup.Fetched(read.isEmpty() ? Map.of() : BatchLookup.fetch(ryaDAO, conf, read, conf.getJoinPrefetchLimit()),
+                                Map.of());
+                if (fetched.statements() == null) {
                     return null;
                 }
                 // A count is a number: it never makes a batch too large to hold.
-                return new Batch(statements, apart ? BatchLookup.count(ryaDAO, conf, counted) : Map.of());
+                return new Batch(fetched.statements(), fetched.counts());
             }
         }
 

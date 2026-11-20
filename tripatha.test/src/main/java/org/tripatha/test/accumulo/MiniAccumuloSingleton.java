@@ -42,6 +42,8 @@ public final class MiniAccumuloSingleton {
 
     /** The address the cluster's servers bind to and advertise. */
     private static final String LOOPBACK = "127.0.0.1";
+    /** How long the cluster waits for its ZooKeeper to answer: past a 30 s reverse-DNS stall. */
+    private static final java.time.Duration ZOOKEEPER_STARTUP = java.time.Duration.ofSeconds(60);
 
     private static MiniAccumuloCluster cluster;
     private static File clusterDir;
@@ -63,6 +65,10 @@ public final class MiniAccumuloSingleton {
                 // stops resolving mid-run (another network, a rename, a sleep) cuts the manager
                 // off from the tablet server, which it then halts.
                 config.setSiteConfig(Map.of("rpc.bind.addr", LOOPBACK));
+                // ZooKeeper logs its host's canonical name when it starts. Where the host name
+                // doesn't resolve, the JDK falls back to an interface's address, whose reverse
+                // lookup can take 30 s, and the cluster's default wait for ZooKeeper is 20 s.
+                config.setZooKeeperStartupTime(ZOOKEEPER_STARTUP.toMillis());
                 final MiniAccumuloCluster started = new MiniAccumuloCluster(config);
                 log.info("Starting MiniAccumuloCluster in {}", dir);
                 started.start();

@@ -102,7 +102,116 @@ The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.ja
 
 ## Benchmarks
 
-[tripatha.loader/README.md](tripatha.loader/README.md) describes the two benchmarks and how to install what they need on macOS and Linux: the join benchmark, in-process on any backend, and the comparison of Tripatha's endpoint on RocksDB with QLever and Oxigraph on a standard benchmark, WatDiv.
+### Tripatha on one machine, against engines built for one machine
+
+Tripatha is built to run on distributed stores, Accumulo and HBase clusters, with cell-level labels and up to 10^12 triples. Its RocksDB backend runs the same code on a single machine. How far does that cost it against engines built only for one machine? This compares them on **WatDiv**, a standard SPARQL benchmark that none of the three engines was tuned for.
+
+**The engines,** on one machine, each measured alone, over HTTP:
+
+| Engine | What it is | Here |
+|---|---|---|
+| **Tripatha** | This project: RocksDB inside, the same query engine and storage interface as on Accumulo and HBase | its native executable, profile-guided build, `-Xms6g -Xmx6g`, the entity index on |
+| [QLever](https://github.com/ad-freiburg/qlever) 0.6.0 | A single-machine engine for large analytical queries, over an index it builds in advance | Homebrew build, `-m 6G` |
+| [Oxigraph](https://github.com/oxigraph/oxigraph) 0.5.13 | An embedded store which, like Tripatha here, keeps its data in RocksDB | the pinned release, read-only |
+
+**What Tripatha carries that the others don't.** Everything in it is designed so that the same plan holds on a cluster of servers:
+- **A storage interface three backends share.** Each call is one native operation of a distributed sorted store (a range scan, a batch of ranges, a write), and the query engine works on generic labelled cells, not on structures only one machine could hold.
+- **A visibility label on every statement,** checked on every cell read, with the same meaning on every backend.
+- **Terms stored whole in every key,** with no dictionary of integer IDs. At 10^12 triples a dictionary would hold hundreds of billions of terms, and whether one pays there is an open decision (SCALE-STUDY.md O11, M5).
+- **Every statement three times** (`spo`, `po`, `osp`), plus cardinality counters and an entity index, all kept up to date on every write: it takes updates online.
+- **RDF4J's evaluation,** binding set by binding set.
+
+**The results,** measured on 2026-11-20 with `compare.sh`:
+- **The setup:** commit `70ca405`, on one machine (12 cores, 24 GB, macOS, NVMe).
+- **The benchmark:** WatDiv at scale factor 100, 10,867,277 statements, 5 queries from each of its 20 templates.
+- **The checks:** all three engines held the same statements, and every query returned the same rows on all three.
+- **The times:** the median of 10 timed runs, to the last byte of a TSV result over HTTP, with a warm cache.
+
+Geometric means, in ms:
+
+| Queries | Count | Tripatha | QLever | Oxigraph |
+|---|---|---|---|---|
+| **All** | 100 | **2.6** | 10.1 | 4.0 |
+| Linear (L) | 25 | **1.5** | 4.0 | **1.5** |
+| Star (S) | 35 | **1.3** | 6.4 | 2.2 |
+| Snowflake (F) | 25 | 1.8 | 15.6 | **1.5** |
+| Complex (C) | 15 | **56.1** | 67.3 | 417.3 |
+| Fastest on (templates of 20) | | **10** (2 tied with Oxigraph) | 3 | 7 |
+
+<details>
+<summary>Per template: the median of its 5 queries, in ms</summary>
+
+| Template | Rows | Tripatha | QLever | Oxigraph |
+|---|---|---|---|---|
+| L1 | 0–3 | **0.5** | 4.5 | **0.5** |
+| L2 | 12–212 | 10.6 | **4.9** | 12.2 |
+| L3 | 9–26 | 0.5 | 2.3 | **0.4** |
+| L4 | 46–66 | **1.7** | 3.1 | 1.8 |
+| L5 | 49–275 | **4.4** | 6.5 | 6.6 |
+| S1 | 0–9 | **1.3** | 73.1 | 1.4 |
+| S2 | 16–128 | **1.1** | 3.9 | 2.2 |
+| S3 | 0 | 6.2 | 5.9 | **5.6** |
+| S4 | 0–5 | 4.7 | **3.3** | 44.5 |
+| S5 | 0 | **0.5** | 5.5 | 3.1 |
+| S6 | 0–16 | 2.7 | 2.9 | **1.4** |
+| S7 | 0 | **0.2** | 5.0 | **0.2** |
+| F1 | 0–10 | **2.9** | 9.5 | 8.2 |
+| F2 | 1–7 | 1.5 | 21.4 | **1.3** |
+| F3 | 1–2 | 0.9 | 10.4 | **0.5** |
+| F4 | 0–60 | 4.7 | 38.9 | **2.0** |
+| F5 | 13–51 | 1.3 | 10.7 | **1.2** |
+| C1 | 26 | **13.2** | 22.9 | 14.1 |
+| C2 | 6 | 50.5 | **38.6** | 305.1 |
+| C3 | 444,070 | **268.2** | 350.3 | 16,976.6 |
+
+</details>
+
+**What it shows:**
+- **On par or ahead, despite the extra work.** Over all 100 queries, Oxigraph takes 1.5 times Tripatha's time and QLever 3.9 times.
+- **The 85 small queries** (linear, star, snowflake): 1.5 ms on Tripatha, 1.7 on Oxigraph, 7.3 on QLever.
+  - Tripatha leads on the stars and is level on the linear queries.
+  - It trails Oxigraph on the snowflakes, by 0.1 to 2.7 ms.
+  - QLever spends a few milliseconds even on the smallest: 4.5 ms on L1, which returns 0 to 3 rows.
+- **The complex queries:** Tripatha is 17 % faster than QLever and 7 times faster than Oxigraph.
+  - QLever stays ahead on C2 (38.6 against 50.5 ms), and on L2 and S4.
+  - C3, the largest answer (444,070 rows), went from 533 to 268 ms with the last optimization (O26). Its patterns whose values the query never returns are counted, not read.
+- **The cost is on the write side.**
+  - Loading took 99 s, against 11 s for each of the others. Tripatha loads through the write path of online updates: labelled cells, three orders, statistics and its entity index.
+  - Its store is 0.99 GB, against 0.28 GB for QLever's index and 1.22 GB for Oxigraph.
+- **What it doesn't measure:** concurrent queries, writes while querying, a cold cache, or data larger than memory. Like any one benchmark on one machine, it is a guide, not a ranking.
+
+### Run it yourself
+
+The comparison is one script, `tripatha.loader/compare.sh`. It needs macOS or Linux and about 3 GB of disk at the default scale. The first run takes 30 to 45 minutes; later runs, which reuse the data and the loaded stores, about 25.
+1. **Install what it needs.** `tripatha.loader/compare.sh --check` lists anything still missing, with the command that installs it. [tripatha.loader/README.md](tripatha.loader/README.md) has the full list for macOS and for Linux:
+   - a JDK 25 with GraalVM's `native-image`: Oracle GraalVM gives the profile-guided build measured here, GraalVM Community the default build;
+   - Maven;
+   - a C++ compiler and Boost, for WatDiv;
+   - QLever.
+
+   Oxigraph and WatDiv are downloaded and checked by the script.
+2. **Run it** from the repository's root:
+
+   ```bash
+   tripatha.loader/compare.sh --build
+   ```
+
+   - It builds Tripatha's native executable.
+   - It downloads, checks and builds WatDiv.
+   - It generates the data (scale factor 100, about 10.9M triples) and 5 queries per template.
+   - It loads every engine.
+   - It measures each engine alone, with 1 run to warm up, then 3 warm-up and 10 timed runs per query.
+
+   The data, the queries and the loaded stores are kept, so a second run only measures.
+3. **Read the report:** `tripatha.loader/target/compare/compare-<date>.md`, and the same as CSV. It starts with each engine's version, settings, load time and size. It checks that the engines hold the same statements and return the same rows, and it leaves out of the means any query on which they don't. [Reading the comparison](tripatha.loader/README.md#reading-the-comparison) explains how each figure is made.
+
+Options: `--scale N` (WatDiv's scale factor), `--per-template N`, `--engines tripatha,qlever,oxigraph`, `--only C1,C2` (templates), `--warmup N`, `--runs N`.
+
+WatDiv is the work of G. Aluç, O. Hartig, M. T. Özsu and K. Daudjee: *[Diversified stress testing of RDF data management systems](https://doi.org/10.1007/978-3-319-11964-9_13)*, ISWC 2014. It publishes no license, so it isn't part of this repository: the script fetches it from its publisher. It seeds its generator from the clock, so each machine gets its own dataset: compare figures only within one.
+
+### Tripatha's own benchmark
+
+The **join benchmark** (`tripatha.loader/bench.sh`) measures Tripatha's own optimizations on any of its three backends, in-process, over a generated store of 10M triples. It is how each optimization in [SCALE-STUDY.md](SCALE-STUDY.md) was measured, and it isn't used against other engines. See [tripatha.loader/README.md](tripatha.loader/README.md).
 
 ## Storage backends
 
@@ -121,7 +230,7 @@ The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.ja
 - Literals of more than about 32 KB (rows over 32,767 bytes, HBase's limit) are refused.
 - **Finding the cluster:** give the cluster's `hbase-site.xml` (`tripatha.hbase.site`), or only a ZooKeeper quorum (`tripatha.hbase.conf[hbase.zookeeper.quorum]`), in which case Tripatha finds the cluster through ZooKeeper. HBase 3's client otherwise asks its masters (`hbase.client.bootstrap.servers`, by default `localhost:16000`).
 
-**Accumulo**, with the entity index on (`tripatha.entity-index`), intersects its shards in the tablet servers if they have `tripatha.accumulo.iterators/target/tripatha.accumulo.iterators-<version>.jar` on their classpath (`lib/ext`). It depends only on Accumulo. Without it, stars are intersected on the client: same answers, more data moved. The store checks once per table and logs which it uses. RocksDB intersects with native seeks, in the process. **HBase** intersects in its region servers, with the coprocessor jar above: the store attaches the endpoint `org.tripatha.hbase.coprocessor.IntersectionEndpoint` to the index tables it creates, and logs which way it intersects. An index table created before this release is intersected on the client, which is about as fast as without the index. To add the endpoint to one: `alter '<prefix>entity', METHOD => 'table_att', 'coprocessor' => '|org.tripatha.hbase.coprocessor.IntersectionEndpoint|1073741823|'` (with the jar's hdfs path before the first `|` if it isn't on the classpath).
+**Accumulo**, with the entity index on (`tripatha.entity-index`), intersects its shards in the tablet servers if they have `tripatha.accumulo.iterators/target/tripatha.accumulo.iterators-<version>.jar` on their classpath (`lib/ext`). It depends only on Accumulo. The same jar counts in the tablet servers the lookups of patterns whose object a query never uses (`RangeCountingIterator`), so one number per range crosses the network instead of every match. Without it, stars are intersected and lookups counted on the client: same answers, more data moved. The store checks once per table and logs which it uses. RocksDB intersects with native seeks, in the process. **HBase** intersects in its region servers, with the coprocessor jar above: the store attaches the endpoint `org.tripatha.hbase.coprocessor.IntersectionEndpoint` to the index tables it creates, and logs which way it intersects. An index table created before this release is intersected on the client, which is about as fast as without the index. To add the endpoint to one: `alter '<prefix>entity', METHOD => 'table_att', 'coprocessor' => '|org.tripatha.hbase.coprocessor.IntersectionEndpoint|1073741823|'` (with the jar's hdfs path before the first `|` if it isn't on the classpath).
 
 **RocksDB** is a store in a local directory, in the endpoint's or the loader's own process: nothing to install or run besides Tripatha.
 

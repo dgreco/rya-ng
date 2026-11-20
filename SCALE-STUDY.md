@@ -88,12 +88,13 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
    - Small queries: Tripatha and Oxigraph are close, within half a millisecond on 9 of the 17 smaller templates. QLever pays 20 to 70 ms on selective stars and snowflakes.
    - Large intermediate results: QLever is 3 to 11 times faster than Tripatha (C3 346 ms against 3,872, C2 37 against 121). It reads IDs from a dictionary and merges whole sorted lists, which is where O11 and O22 to O24 point.
    - **The same day, after O16, O17 and the native executable's heap and build (sections 4.14 and 4.15):** 2.27 ms against Oxigraph's 3.63 and QLever's 9.49, the complex queries 67.9 ms against QLever's 66.3. QLever still leads on C2 and C3, which O26 targets.
+   - **2026-11-20, after O26 (section 4.22):** 2.6 ms against Oxigraph's 4.0 and QLever's 10.1 (every engine about 10 % slower than the evening before), the complex queries 56.1 ms against QLever's 67.3, and C3 268 ms against 350: Tripatha now leads on C3. QLever still leads on C2.
 8. **IRI prefix codes: measured (M9), and deferred.**
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
 9. **Whole-table operations and planning at scale (O4 to O6, O8, O9).**
 10. **Next (2026-11-19): the load work,** no longer deferred, since it blocks 1T outright: the loader at 1T (O2, done: section 4.16), the bulk spikes (M6, done: section 4.17), then the bulk builds of Accumulo and RocksDB (O3) and of HBase (O10).
-11. **Then queries in the servers, on every backend:** HBase's coprocessor endpoint (D14 (a), done for the entity index: section 4.21), then patterns whose object is never used, counted (O26: done for the joins on every backend, section 4.22; the counts in Accumulo's and HBase's servers next). Every optimization must hold on Accumulo, HBase and RocksDB at 10^12. Whole-table operations and planning at scale follow (item 9), then the fixed cost per query (M14). Dictionary encoding (O11) and an analytics engine (O12) stay conditional.
+11. **Then queries in the servers, on every backend:** HBase's coprocessor endpoint (D14 (a), done for the entity index: section 4.21), then patterns whose object is never used, counted (O26: done for the joins on every backend and counted in Accumulo's servers, section 4.22; HBase's server counts next). Every optimization must hold on Accumulo, HBase and RocksDB at 10^12. Whole-table operations and planning at scale follow (item 9), then the fixed cost per query (M14). Dictionary encoding (O11) and an analytics engine (O12) stay conditional.
 
 **Dictionary encoding comes late on purpose (R1, section 5.1).**
 - The statement tables send 446 B per triple (0.5 PB at 1T), but compress about 7× on disk.
@@ -168,7 +169,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O23 | **Stars evaluated in the servers:** an optional subject-partitioned table, maintained like an index. A shard holds, per predicate and object, the sorted subjects of its share of the store. A server-side iterator (Accumulo) or coprocessor (HBase) intersects a star's lists inside every shard in parallel, and returns only the matching subjects (section 6.10) | R2 | the distributed join for "all entities matching X" (D1). To be measured against O22 | O22, D13 | 2 | Done on Accumulo and RocksDB (PR #17): the entity index (`index.entity`, storage version 1.2.0), read shard by shard by merge joins and intersected by the store (`Store.intersect`), in Accumulo's tablet servers (`tripatha.accumulo.iterators`) and with RocksDB's native seeks. The store also counts a star, or one pattern (a class's size). On the benchmark stars are 2.3 to 4 times faster, counts 2.7 to 4.2 times on Accumulo (one cell per shard back), `count-class` 4 times; value stars 5 to 10 % slower. The index costs 17 % more disk and a fifth of the load rate (section 4.10). On HBase since 2026-11-20 (D14, section 4.21): a coprocessor endpoint in its region servers, 39 to 81 % faster than without the index on stars and counts |
 | O24 | **Merge joins, part 2:** intersect a star's lists in slices of the subject space on several threads at once (cut at `spo`'s tablet splits or at sampled subjects), and read only each cell's subject instead of decoding the whole statement (section 6.10) | R2 | O22 reads one list per pattern on one thread, and decodes every cell | O22 | 1 | Done: subjects read as bytes, no statement decoding; slices cut at `spo`'s split points (`TableAdmin.splitRows`), up to `query.join.mergeslices` (4) on threads of their own. With 4 slices merges are 1.6 to 2 times faster on Accumulo and HBase and 3 times on RocksDB (section 4.9). At 100M triples the slices stalled when no lookups followed: 4 were 11 % faster than 1. Since 2026-11-18 they share one queue then: 3.7 times (section 4.11) |
 | O25 | **A real estimate for a value range:** count the range's cells up to a cap (about 10,000) when its pattern is in a join, and use the count when the range is shorter, or assume most of the predicate when it isn't. Only the join order depends on it, so a pattern on its own needs none | R2 | O14's estimate is a fixed tenth of the predicate: `class-value-wide` (`?v > 0`, 91 % pass) is 8.2 times slower on Accumulo with it, 4.1 on RocksDB and 3.6 on HBase (section 4.8) | O14 | 1 | Done: counted up to `query.valueranges.count` (10,000) for a pattern in a join. `class-value-wide` is back within 1 to 6 % of the merge plan, and the selective stars keep their gains; a condition between the cap and the star's lists (`class-value-mid`) gets the merge plan, 1.2 to 2.75 times slower than the range would be (section 4.8). Since 2026-11-18 the count stops at the shortest other pattern of the join, at most 1,000,000 cells. At 100M the fixed cap had lost `class-value-int` its plan (510 → 224 ms with the fix); `class-value-mid` now gets the range plan, 12 to 39 % faster at 10M; a wide condition pays 1 to 7.5 % for the longer count (section 4.11) |
-| O26 | **Patterns whose object is never used, counted in the servers:** a pattern whose object variable appears once and isn't returned (`SELECT ?s WHERE { ?s :p ?o … }`) only decides how many times a row comes back. Its lookups ask the store for one count per range, under the query's labels and the graph condition, instead of reading and decoding every match; the joins repeat the row that many times, and with `DISTINCT` existence is enough. Accumulo counts with an option of its iterators, RocksDB with native iteration that copies no values, HBase with the coprocessor endpoint of D14 (a client count where it isn't deployed). Never from the `eval` counters: they leave out 1s and can drift | R2 | one cell per range crosses the network instead of every match (about 10 times fewer for `?s :friendOf ?f`). On WatDiv C1 to C3, where QLever leads, decoding and row building were 29 % of C3's CPU (section 4.14) | D14 | 4 | Done on every backend for the joins (2026-11-20, section 4.22): `CountedPatternOptimizer` marks the patterns, batched joins and entity chains fetch counts with their statements, and the store counts where it can without reading (`Store.countRanges`, natively on RocksDB); on Accumulo and HBase, until their servers count (next), the counted lookups are read with the window's others and counted from their lists. WatDiv C3-01 in-process −37 to −49 %; the join benchmark within noise on all three |
+| O26 | **Patterns whose object is never used, counted in the servers:** a pattern whose object variable appears once and isn't returned (`SELECT ?s WHERE { ?s :p ?o … }`) only decides how many times a row comes back. Its lookups ask the store for one count per range, under the query's labels and the graph condition, instead of reading and decoding every match; the joins repeat the row that many times, and with `DISTINCT` existence is enough. Accumulo counts with an option of its iterators, RocksDB with native iteration that copies no values, HBase with the coprocessor endpoint of D14 (a client count where it isn't deployed). Never from the `eval` counters: they leave out 1s and can drift | R2 | one cell per range crosses the network instead of every match (about 10 times fewer for `?s :friendOf ?f`). On WatDiv C1 to C3, where QLever leads, decoding and row building were 29 % of C3's CPU (section 4.14) | D14 | 4 | Done on every backend for the joins (2026-11-20, section 4.22): `CountedPatternOptimizer` marks the patterns, batched joins and entity chains fetch counts with their statements, and the store counts where it can without reading: natively on RocksDB, in Accumulo's tablet servers (`RangeCountingIterator`), the count running alongside the window's reads. On HBase, until its servers count (next), the counted lookups are read with the window's others and counted from their lists. WatDiv C3-01 in-process −37 to −49 %; the join benchmark within noise, Accumulo's `star-unused` with 23 % fewer cells to the client |
 
 ### 2.2 Measurements
 
@@ -1092,7 +1093,7 @@ p50, and the cells reaching the client:
 - **The shared tests:** `EntityIndexIT.theStoreIntersectsAsTheClientWould` now runs on HBase, and `SubjectMergeIT` expects HBase to intersect and count in the store. Both pass with `-Dtripatha.test.hbaseIntersectPage=1`, which ends every page after one match and one cell.
 
 **Not done:**
-- **O26's range counts,** the other half of the endpoint planned in D14 (a) (section 4.22: counted on the client for now).
+- **O26's range counts,** the other half of the endpoint planned in D14 (a) (section 4.22: counted on the client for now on HBase).
 - **Delete markers:** markers not yet compacted away are skipped by HBase before the endpoint's filter sees them, so they don't count toward a page's limits.
 
 ## 4.22 Patterns whose object is never used, counted (O26)
@@ -1149,7 +1150,37 @@ p50:
 - **`CountRangesIT`** compares counts with scans on every backend: under labels held, not held or none, graphs and a time range; for empty ranges and ranges across splits; and with a scan batch of two cells.
 - **The whole suite** runs with counts on, its default, on all three backends; on RocksDB also with batches of 2, three lookup threads and fetching ahead.
 
-**Next:** counts in Accumulo's servers (an iterator) and in HBase's (the endpoint of section 4.21), each falling back to the default where it isn't deployed.
+**In Accumulo's tablet servers** (the second PR, the same day). `RangeCountingIterator`, in the iterator jar, counts each range a scan seeks and returns one entry: the range's last key, valued its count.
+- **Why the last key:** when a batch fills, a tablet server resumes after the last key it returned. That key closes the range, so nothing is counted twice; at the first key, the rest of the range would be. `CountRangesIT`'s scan batch of two cells makes the servers resume every second range.
+- **A range across tablets** gives one partial count per tablet, added up by the client.
+- **The store asks once per table** whether its servers load the class, and counts on the client when they don't.
+- **The count runs alongside the window's reads,** on a lookup thread. One after the other, its extra round trip was what made `star-unused` 91 % slower.
+
+On the join benchmark, Accumulo 10M, counts off and on, both in the servers (report `accumulo-20261120-141846`):
+
+| Query | p50, off / on | Cells to the client, off / on | Query thread CPU, off / on |
+|---|---|---|---|
+| `star-unused` | 354.0 / 359.2 ms (+1 %) | 12,057 / 9,343 (−23 %) | 12.0 / 8.1 ms |
+| `chain-unused` | 248.2 / 246.7 ms | 6,058 / 6,058 | 10.7 / 10.9 ms |
+| `star-in`, `star-optional` (no count) | within 1 % | the same | |
+
+`chain-unused`'s counted pattern has one statement per lookup (a review's rating), so its count sends as many cells as the read did. At 10^12, a pattern with many statements per subject sends one cell per range instead of all of them.
+
+**WatDiv, the native executable, after O26** (`compare.sh`, report `compare-20261120-144731`, the code at `70ca405`, the three engines one after the other as in 4.13; all 100 queries the same rows on all three). Geometric means of the p50s:
+
+| | Tripatha | QLever | Oxigraph |
+|---|---|---|---|
+| All 100 | **2.6 ms** | 10.1 ms | 4.0 ms |
+| Small (S, L, F) | **1.49 ms** | 7.26 ms | 1.73 ms |
+| Complex | **56.1 ms** | 67.3 ms | 417.3 ms |
+| C3 (median of 5) | **268.2 ms** | 350.3 ms | 16,976.6 ms |
+| C2 (median of 5) | 50.5 ms | **38.6 ms** | 305.1 ms |
+
+- **C3:** 533 ms in section 4.15 (before O26), 268 ms now. Tripatha now leads on it, and on the complex queries.
+- **Noise:** every engine was about 10 % slower than in 4.15's run: QLever 9.49 → 10.1 ms overall, Oxigraph 3.63 → 4.0. Only ratios within one run compare.
+- The README's [Benchmarks](README.md#benchmarks) section reports this run, with how to make it.
+
+**Next:** counts in HBase's region servers, a method of the endpoint of section 4.21.
 
 ---
 
@@ -1758,7 +1789,7 @@ Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, no
 ### Phase 4: queries in the servers, on every backend
 
 5. **HBase's coprocessor endpoint** (D14 (a)): one protobuf service on each region that counts ranges under the caller's labels and the graph condition, then intersects the entity index's lists as Accumulo's iterator does. The caller's labels are enforced and tested as `LabelParityIT` tests scans. A cluster without the coprocessor jar falls back to the client. **The intersection is done** (2026-11-20, section 4.21); the range counts come with item 6.
-6. **O26**, patterns whose object is never used, counted in the servers: the optimizer and the joins on every backend, the counts in Accumulo's iterators, RocksDB's native iteration and item 5's endpoint. **The optimizer, the joins and RocksDB's counts are done** (2026-11-20, section 4.22); Accumulo's iterator and the endpoint's counts follow, one PR each.
+6. **O26**, patterns whose object is never used, counted in the servers: the optimizer and the joins on every backend, the counts in Accumulo's iterators, RocksDB's native iteration and item 5's endpoint. **The optimizer, the joins, RocksDB's counts and Accumulo's iterator are done** (2026-11-20, section 4.22); the endpoint's counts follow.
 
 **Exit:** answers identical with O26 on and off on every backend, including `OPTIONAL`, `DISTINCT`, labels and graphs; the entity index worth turning on for HBase (README; done with item 5).
 
