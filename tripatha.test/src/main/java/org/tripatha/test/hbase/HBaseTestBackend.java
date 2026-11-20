@@ -82,17 +82,20 @@ public final class HBaseTestBackend implements TestBackend {
         settings.setProperty("hbase.conf.hbase.zookeeper.property.clientPort", conf.get("hbase.zookeeper.property.clientPort"));
         settings.setProperty("hbase.user", MiniHBaseSingleton.TEST_USER);
         settings.setProperty("hbase.counters", counterMode().name().toLowerCase(java.util.Locale.ROOT));
+        MiniHBaseSingleton.intersectionPages().forEach((k, v) -> settings.setProperty("hbase.conf." + k, v));
         return settings;
     }
 
     @Override
     public Map<String, String> endpointProperties() {
         final var conf = MiniHBaseSingleton.configuration();
-        return Map.of("tripatha.backend", "hbase",
+        final Map<String, String> properties = new java.util.HashMap<>(Map.of("tripatha.backend", "hbase",
                 "tripatha.hbase.conf[hbase.zookeeper.quorum]", conf.get("hbase.zookeeper.quorum"),
                 "tripatha.hbase.conf[hbase.zookeeper.property.clientPort]", conf.get("hbase.zookeeper.property.clientPort"),
                 "tripatha.hbase.user", MiniHBaseSingleton.TEST_USER,
-                "tripatha.hbase.counters", counterMode().name().toLowerCase(java.util.Locale.ROOT));
+                "tripatha.hbase.counters", counterMode().name().toLowerCase(java.util.Locale.ROOT)));
+        MiniHBaseSingleton.intersectionPages().forEach((k, v) -> properties.put("tripatha.hbase.conf[" + k + "]", v));
+        return Map.copyOf(properties);
     }
 
     @Override

@@ -133,12 +133,33 @@ public final class MiniHBaseSingleton {
 
     /** A new connection as {@value #TEST_USER}; the caller closes it. */
     public static Connection newTestConnection() {
-        final Configuration conf = configuration();
+        return newTestConnection(java.util.Map.of());
+    }
+
+    /** A connection as {@link #TEST_USER} with these client settings on top. */
+    public static Connection newTestConnection(final java.util.Map<String, String> settings) {
+        final Configuration conf = new Configuration(configuration());
+        intersectionPages().forEach(conf::set);
+        settings.forEach(conf::set);
         try {
             return testUser().runAs((PrivilegedExceptionAction<Connection>) () -> ConnectionFactory.createConnection(conf));
         } catch (final Exception e) {
             throw new IllegalStateException("Could not connect to the HBase mini cluster as " + TEST_USER, e);
         }
+    }
+
+    /**
+     * {@code -Dtripatha.test.hbaseIntersectPage=N}: the intersection endpoint's pages end after N
+     * matches or N cells read, N cells per scanner call, so every test crosses page boundaries
+     * (client settings, as {@code hbase.conf.<key>} for code that connects on its own).
+     */
+    public static java.util.Map<String, String> intersectionPages() {
+        final String n = System.getProperty("tripatha.test.hbaseIntersectPage");
+        if (n == null || n.isBlank()) {
+            return java.util.Map.of();
+        }
+        return java.util.Map.of("tripatha.intersect.page.matches", n.trim(), "tripatha.intersect.page.cells", n.trim(),
+                "tripatha.intersect.batch", n.trim());
     }
 
     private static synchronized void stop() {
