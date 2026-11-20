@@ -42,8 +42,8 @@ import org.tripatha.loader.gen.GenConfig;
 public final class LoaderOptions {
 
     public enum Command {
-        PREPARE("prepare"), LOAD("load"), BUILD("build"), DRY_RUN("dry-run"), VERIFY("verify"), DROP("drop"), CHECK("check"),
-        LABELS("labels");
+        PREPARE("prepare"), LOAD("load"), BUILD("build"), REBUILD("rebuild"), DRY_RUN("dry-run"), VERIFY("verify"), DROP("drop"),
+        CHECK("check"), LABELS("labels");
 
         private final String word;
 
@@ -61,7 +61,7 @@ public final class LoaderOptions {
                     return c;
                 }
             }
-            throw new IllegalArgumentException("unknown command '" + word + "' (prepare, load, dry-run, verify, drop, check, labels)");
+            throw new IllegalArgumentException("unknown command '" + word + "' (prepare, load, build, rebuild, dry-run, verify, drop, check, labels)");
         }
     }
 
@@ -596,7 +596,7 @@ public final class LoaderOptions {
 
     /** The bulk build's work directory: its sorted runs, files and progress (default tripatha-build-PREFIX). */
     public String workDir() {
-        return values.getOrDefault("work-dir", "tripatha-build-" + tablePrefix());
+        return values.getOrDefault("work-dir", (command == Command.REBUILD ? "tripatha-rebuild-" : "tripatha-build-") + tablePrefix());
     }
 
     /** The memory a build process gives the cells it holds before spilling them, all threads together. */
@@ -606,19 +606,36 @@ public final class LoaderOptions {
 
     /** The bulk build's phases to run ({@code --phase sort,merge,import}, all by default). */
     public java.util.Set<BulkBuild.Phase> phases() {
+        return phases(BulkBuild.Phase.class);
+    }
+
+    /** The phases of {@code --phase} (all by default) among a command's own. */
+    public <E extends Enum<E>> java.util.Set<E> phases(final Class<E> type) {
         final String v = values.getOrDefault("phase", "all");
         if (v.equals("all")) {
-            return java.util.EnumSet.allOf(BulkBuild.Phase.class);
+            return java.util.EnumSet.allOf(type);
         }
-        final java.util.Set<BulkBuild.Phase> phases = java.util.EnumSet.noneOf(BulkBuild.Phase.class);
+        final java.util.Set<E> phases = java.util.EnumSet.noneOf(type);
         for (final String p : v.split(",")) {
             try {
-                phases.add(BulkBuild.Phase.valueOf(p.trim().toUpperCase(Locale.ROOT)));
+                phases.add(Enum.valueOf(type, p.trim().toUpperCase(Locale.ROOT)));
             } catch (final IllegalArgumentException e) {
-                throw new IllegalArgumentException("--phase takes all or sort, merge, import (got '" + p + "')");
+                throw new IllegalArgumentException("--phase takes all or " + java.util.Arrays.stream(type.getEnumConstants())
+                        .map(c -> c.name().toLowerCase(Locale.ROOT)).collect(java.util.stream.Collectors.joining(", ")) + " (got '" + p + "')");
             }
         }
         return phases;
+    }
+
+    /** Whether {@code --phase} names phases, rather than all of them. */
+    public boolean phasesListed() {
+        final String v = values.get("phase");
+        return v != null && !v.equals("all");
+    }
+
+    /** Whether an option was given (rather than left to its default). */
+    public boolean given(final String option) {
+        return values.containsKey(option);
     }
 
     /**
@@ -814,8 +831,10 @@ public final class LoaderOptions {
                   dry-run   generate without a cluster: speed, bytes per triple, network ceiling, storage estimate
                   prepare   once per dataset: create the tables, pre-split them, write the ontology and reference data
                   load      write the dataset (or this process's part of it); resumable with --resume
-                  build     write it as sorted files and import them, bypassing the write path (Accumulo, RocksDB);
-                            resumable with --resume
+                  build     write it as sorted files and import them, bypassing the write path; resumable with --resume
+                  rebuild   build the store's indexes that aren't ready (--text-index, --geo-index, --entity-index, as the
+                            endpoint has them) from spo, as sorted files imported; resumable, and the endpoint may write
+                            meanwhile (graph drops wait). Any store, loaded by this tool or not
                   verify    regenerate a sample of entities and compare them with the store
                   drop      delete every table of the prefix (needs --confirm <prefix>)
                   check     connect and report the backend, its servers and the account's rights
@@ -864,6 +883,10 @@ public final class LoaderOptions {
 
                 Build:   --work-dir DIR (default tripatha-build-PREFIX)  --spill-memory-mb 1024 (all threads)
                          --phase all|sort,merge,import  and the load options --threads, --block-size, --part/--parts
+                Rebuild: --work-dir DIR (default tripatha-rebuild-PREFIX)  --spill-memory-mb 1024  --threads 8
+                         --phase all|start,sort,merge,import,finish  --part K --parts N (finish once, after every
+                         part imported)  --tablet-size 10G --compression 7 (the index tables' splits)
+                         --entity-shards N (when enabling the entity index; default: the stored count, or 16)
                 Prepare: --splits auto|N  (auto: each table's estimated size over --tablet-size, at least
                            4 per server)  --tablet-size 10G (also the tables' split threshold)  --compression 7
                            --grant-auths (give the account the --labels; on HBase as the labels command)

@@ -667,6 +667,7 @@ The batch is written early once it holds 50,000 keys (`MAX_PENDING_COUNTERS`), s
 3. opens the batch writers and the query engine;
 4. reads the storage version (`ns` row `tripatha`, family `version`):
    - **on a store it has just created,** it writes version `1.1.0` (`1.2.0` with the entity index on) and the `datatypes` flag, which says that every statement of the store has its datatype markers ([section 12.9](#129-comparisons-as-value-ranges));
+   - **when a loader rebuild job starts,** it raises the store to `1.3.0`: older code neither records its deletes while an index is BUILDING nor refuses graph drops during a job ([section 18.5](#185-rebuild));
    - **with the entity index on,** it raises an older store to `1.2.0`, so that code from before the index, which would add statements without their postings, refuses to write to it ([section 13.7](#137-the-entity-index-stars-shard-by-shard));
    - **on any other store,** it writes neither. A store created before the markers keeps its version (`1.0.0`, or none) and has no flag, so comparisons there read whole predicates;
    - **on a store whose version is newer than its own,** it opens read-only: every write method (`add`, `delete`, `dropGraph`, `purge`, namespaces, index rebuilds) throws. A newer store may rely on writes this code doesn't make, as a 1.1.0 store relies on the markers. Versions compare number by number between the dots;
@@ -1582,7 +1583,7 @@ WKT is parsed with RDF4J's `SpatialSupport`. WKT that doesn't parse is stored bu
 
 ### 15.6 Index lifecycle
 
-An index is only usable if it covers every statement. `IndexManager` records each index's state in the `ns` table (row `tripatha`, family `index`, qualifier `text` or `geo`): `READY` or `BUILDING`, plus its **definition**. The definition is a string that captures the indexing rules (`text/1;max=64;preds=…`, `geo/1;k=32;lvl=12;eps=1.0E-9`).
+An index is only usable if it covers every statement. `IndexManager` records each index's state in the `ns` table (row `tripatha`, family `index`, qualifier `text`, `geo` or `entity`): `READY` or `BUILDING`, plus its **definition**. Qualifier `job` names a running rebuild job. The definition is a string that captures the indexing rules (`text/1;max=64;preds=…`, `geo/1;k=32;lvl=12;eps=1.0E-9`).
 
 ```mermaid
 flowchart TD
@@ -1597,15 +1598,17 @@ flowchart TD
     ex2 -- "yes" --> rec{"stored definition"}
     rec -- "missing" --> building
     rec -- "same" --> keep["keep the stored state"]
-    rec -- "different" --> rb{"index.rebuild set?"}
+    rec -- "different" --> rb{"index.rebuild set,<br/>or a rebuild job?"}
     rb -- "no" --> refuse2["refuse to start"]
     rb -- "yes" --> clear["clear the table"] --> building
-    building --> rb2{"index.rebuild set?"}
-    rb2 -- "yes" --> rebuild["scan all of spo with the user's<br/>full authorizations, write entries"] --> ready
-    rb2 -- "no" --> warn["warn: queries won't use it,<br/>writes keep it up to date"]
+    building --> rb2{"built how?"}
+    rb2 -- "index.rebuild,<br/>no job running" --> rebuild["scan all of spo with the user's<br/>full authorizations, write entries"] --> ready
+    rb2 -- "the loader's rebuild job" --> job["sort spo by range, import files,<br/>replay the deletes (18.5)"] --> ready
+    rb2 -- "neither" --> warn["warn: queries won't use it,<br/>writes keep it up to date"]
 ```
 
-- **Writes:** while an index is enabled, every add and delete maintains it, whatever its state.
+- **Writes:** while an index is enabled, every add and delete maintains it, whatever its state. While it is BUILDING, each delete is also recorded first (`RebuildLog`), for a rebuild job to replay ([section 18.5](#185-rebuild)).
+- **States seen by other processes:** a store re-reads the states every minute (`index.state.refresh`) on a daemon thread, while it is used: readers start using an index a job made READY, and a writer whose index another process redefined refuses to write.
 - **Queries:** queries use only `READY` indexes.
 - **Versioned rules:** changing the analysis rules means bumping `TextAnalyzer.VERSION` or `GeoCells.DEFINITION`, so existing indexes are detected as different and must be rebuilt.
 
@@ -1881,6 +1884,25 @@ sequenceDiagram
 
 ---
 
+### 18.5 `rebuild`
+
+`rebuild` builds a store's indexes that aren't READY (SCALE-STUDY.md O5, 4.23) as a batch job, for any store, loaded by this tool or not. The options name the indexes as the endpoint has them (`--text-index`, `--geo-index`, `--entity-index`); every phase resumes (`--resume`):
+
+1. **start:** the store, opened with the job's id, marks those indexes BUILDING for the job (clearing a redefined one) and records the job in `ns`.
+2. **sort:** `spo` read by split range on threads (and processes, `--part`/`--parts`) with every label the account holds; each statement's index cells spilled to sorted runs, recorded with their range and a sample of its rows.
+3. **merge:** the index tables split from the samples, as `prepare` splits a store; then each table's runs merged per row range into files in the backend's format (`BulkFiles`, shared with `build`).
+4. **import:** every file once.
+5. **finish,** once every part has imported: the deletes recorded during the job replayed, then the indexes READY.
+
+**Writes go on.** The endpoint may write meanwhile, with the same index settings:
+- **Adds** are indexed by their writers, as for any BUILDING index.
+- **Deletes** are recorded in `ns` before they are made (`RebuildLog`), because an imported file would bring back the index cells of a statement deleted after the sort read it. The finish deletes those of every recorded cell no longer in `spo`, at its own timestamp, and writes again those of one added back. A second pass covers the deletes made during the first.
+- **Graph drops and `purge` are refused** until the job finishes: they delete by column filter, with nothing to replay. So is a store opened with other settings for an index the job builds: it would clear the table.
+- **Version:** the job's start raises the store to `1.3.0`, so older code, which records nothing, refuses to write to it.
+- **Restarts:** to change an index's definition, stop the writers, run `rebuild --phase start`, then start them with the new settings; readers pick up READY by themselves.
+
+On RocksDB only one process opens the store, so nothing else writes during the job.
+
 ## 19. Test infrastructure
 
 - **Naming:** `*Test` classes are pure unit tests (surefire, `mvn test`). `*IT` classes need a cluster (failsafe, `mvn verify`).
@@ -1984,6 +2006,7 @@ A nested-loop join asks the store once per row; on a cluster each ask is a netwo
 | Counters summed before they are written | A call's deltas summed per key, one cell each; a subject's counters of 1 left out, the planner reading a missing counter as 1 (O1) | 6.48 → 3.09 counter cells sent per triple | [9.3](#93-counters-are-summed-before-they-are-written), SCALE-STUDY.md 4.2 |
 | HBase counters by coprocessor | Deltas as plain puts, summed on reads, flushes and compactions by `CounterObserver`, instead of increments that lock a row and sync the log each | | BACKENDS-STUDY.md 4 |
 | Splits sized for 1T (O2) | `prepare` plans each table's splits from its estimated size on disk (10 GB per tablet or region), and makes that the backend's split size; HBase splits in rounds; the progress file stays a few bytes | about 2,100 tablets per statement table at 1T | SCALE-STUDY.md 4.16 |
+| Index rebuilds as a batch job (O5) | The loader's `rebuild`: `spo` sorted by range into the indexes' files, imported; deletes made meanwhile recorded and replayed, graph drops held | Accumulo test cluster 3M: 16.6 → 5.8 s; RocksDB 10M: 18.5 → 9.3 s; the start-up rebuild's single thread (64 days at 10^12 at its 3M rate) becomes a job that scales with its machines | [18.5](#185-rebuild), SCALE-STUDY.md 4.23 |
 | The bulk build (O3, O10) | Sorted files per table and range, merged, then imported: RFiles on Accumulo, SST files on RocksDB, HFiles with label ordinals on HBase. Counter totals of 1 left out (89.5 % of them) | 0.56 counter cells stored per triple; at 10M 13 times faster than `load` on the Accumulo test cluster, with an `eval` 90 % smaller; 1.5 times on RocksDB; on HBase 31 against 45 s at 3M | [18](#18-the-synthetic-data-loader), SCALE-STUDY.md 4.18–4.20 |
 
 ### 20.6 10^12 triples: reading in the servers
@@ -1999,7 +2022,7 @@ At 10^12 what must not happen is a client reading billions of cells to keep a fe
 
 ### 20.7 Still open
 
-- **Whole-table operations in time proportional to what they change:** graph drops (O4), index rebuilds and purges (O5).
+- **Graph drops** still scan every table (D8 (c): O4 closed); index rebuilds are a batch job (O5, 20.5), and `purge` stays as it is.
 - **Planning at scale:** text planning from per-term counts (O6), approximate counts from the counters (O8).
 - **Layout:** deprecating the hashed row prefix (O9); a dictionary encoding (O11), conditional on M5.
 - **Analytics** over the whole store, which need an engine of their own (O12).
@@ -2031,6 +2054,7 @@ Breaking any of these loses data or results, or makes the store refuse to start:
 17. **A value range only narrows.** The filter stays and decides every row ([section 12.9](#129-comparisons-as-value-ranges)).
 18. **Every stored statement has exactly one entity posting** when the entity index is on. Its matches are answers, not candidates: a missing posting loses rows, a stale one adds them ([section 13.7](#137-the-entity-index-stars-shard-by-shard)).
 19. **A store with the entity index has storage version 1.2.0,** so code that doesn't keep the index never writes to it.
+20. **A statement deleted during a rebuild stays out of the index.** While an index is BUILDING, each delete is recorded before it is made, and a job's finish replays the record after its import; graph drops wait for the job. A store that has had a job is at version 1.3.0, so code that records nothing never writes to it ([section 18.5](#185-rebuild)).
 
 ---
 

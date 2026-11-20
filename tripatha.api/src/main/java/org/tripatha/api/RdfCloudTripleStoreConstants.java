@@ -113,10 +113,14 @@ public class RdfCloudTripleStoreConstants {
      * <ul>
      *   <li>1.1.0: every statement has its datatype markers (SCALE-STUDY.md O14);</li>
      *   <li>1.2.0: the entity index is on, so every statement must have its posting there
-     *       (SCALE-STUDY.md O23).</li>
+     *       (SCALE-STUDY.md O23);</li>
+     *   <li>1.3.0: a loader rebuild job has run on the store, so while an index is BUILDING every
+     *       writer must record its deletes and refuse graph drops during a job (SCALE-STUDY.md O5).</li>
      * </ul>
      */
-    public static final Value VERSION = VALUE_FACTORY.createLiteral("1.2.0");
+    public static final Value VERSION = VALUE_FACTORY.createLiteral("1.3.0");
+    /** The version a loader rebuild job raises a store to. */
+    public static final String VERSION_WITH_REBUILD_JOBS = "1.3.0";
     /** The version of a store with datatype markers and no entity index. */
     public static final String VERSION_WITH_MARKERS = "1.1.0";
     /** The version of a store with the entity index on. */

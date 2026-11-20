@@ -22,6 +22,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,15 +56,29 @@ import org.tripatha.store.spi.TableWriter;
  * An index is READY (queries may use it) when it was created together with the store, or after
  * a rebuild. Enabling it on a store that already has data, or changing its definition (for
  * example the indexed predicates), leaves it BUILDING until the store is started with
- * {@link RdfCloudTripleStoreConfiguration#CONF_INDEX_REBUILD}. An index table that exists while
- * its index is switched off stops the store from starting: writes would no longer reach it and
- * it would silently become incomplete.
+ * {@link RdfCloudTripleStoreConfiguration#CONF_INDEX_REBUILD}, or a loader rebuild job makes it
+ * READY ({@link RdfCloudTripleStoreConfiguration#CONF_INDEX_REBUILD_JOB}, SCALE-STUDY.md O5). An
+ * index table that exists while its index is switched off stops the store from starting: writes
+ * would no longer reach it and it would silently become incomplete.
+ * <p>
+ * The states are re-read every {@link RdfCloudTripleStoreConfiguration#CONF_INDEX_STATE_REFRESH}
+ * milliseconds, on a daemon thread and only while the store is used: readers start using an index
+ * a rebuild job made READY, and a writer whose index another process redefined stops writing.
+ * While an index is BUILDING, deletes are recorded in the {@link RebuildLog} before they are made.
  */
 public final class IndexManager implements IndexCatalog {
     private static final Logger log = LoggerFactory.getLogger(IndexManager.class);
     private static final byte[] RECORD_ROW = "tripatha".getBytes(StandardCharsets.UTF_8);
     private static final byte[] RECORD_CF = "index".getBytes(StandardCharsets.UTF_8);
+    /** The qualifier of the running rebuild job's record, next to the indexes' states. */
+    private static final byte[] JOB_CQ = "job".getBytes(StandardCharsets.UTF_8);
     private static final byte[] EMPTY = new byte[0];
+    /** Re-reads states off the callers' threads, so they aren't part of a query's trace. */
+    private static final ExecutorService REFRESHER = Executors.newSingleThreadExecutor(r -> {
+        final Thread t = new Thread(r, "tripatha-index-states");
+        t.setDaemon(true);
+        return t;
+    });
 
     private final Store store;
     private final StoreRdfConfiguration conf;
@@ -71,7 +88,14 @@ public final class IndexManager implements IndexCatalog {
     private final Map<IndexType, SecondaryIndex> active = new EnumMap<>(IndexType.class);
     private final Map<IndexType, TableWriter> writers = new EnumMap<>(IndexType.class);
     private final Map<IndexType, IndexState> states = new ConcurrentHashMap<>();
+    /** Indexes another process redefined since this one started: writing them would be wrong. */
+    private final Set<IndexType> redefined = ConcurrentHashMap.newKeySet();
     private final Set<String> textPredicates;
+    /** This store's rebuild job, when it is one (the loader's), or null. */
+    private final String job;
+    private final long refreshMillis;
+    private final AtomicLong nextRefresh = new AtomicLong(Long.MAX_VALUE);
+    private volatile boolean closed;
 
     /**
      * Opens the enabled indexes, creating their tables when needed.
@@ -87,6 +111,13 @@ public final class IndexManager implements IndexCatalog {
         this.bwNs = writer.table(tables.getNs());
         final TextIndex text = new TextIndex(conf.getTextIndexPredicates());
         this.textPredicates = text.predicates();
+        this.job = conf.getIndexRebuildJob();
+        this.refreshMillis = conf.getIndexStateRefresh();
+        final String running = readJob(store, tables);
+        if (job != null && running != null && !running.equals(job)) {
+            throw new RyaDAOException("Another rebuild job (" + running + ") is building the indexes of " + tables.getSpo()
+                    + ": finish that one first (its work directory knows it)");
+        }
 
         final TableAdmin ops = store.tables();
         final List<SecondaryIndex> toClear = new ArrayList<>();
@@ -110,10 +141,18 @@ public final class IndexManager implements IndexCatalog {
             } else if (stored == null) {
                 state = new IndexState(IndexState.Status.BUILDING, index.definition());
             } else if (!stored.definition().equals(index.definition())) {
-                if (!conf.isRebuildIndexes()) {
+                if (running != null) {
+                    // Clearing it would throw away what the job built, and its files would bring back cells of the old rules.
+                    throw new RyaDAOException(running.equals(job)
+                            ? "The " + type.id() + " index was redefined during rebuild job " + running + " (stored " + stored.definition()
+                                    + ", the job's " + index.definition() + "): run the job with the index options it started with"
+                            : "Rebuild job " + running + " is building the " + type.id() + " index with other settings ("
+                                    + stored.definition() + ", here " + index.definition() + "): use those, or wait for the job");
+                }
+                if (!conf.isRebuildIndexes() && job == null) {
                     throw new RyaDAOException("The " + type.id() + " index was built with different settings ("
-                            + stored.definition() + ", now " + index.definition() + "). Start once with "
-                            + RdfCloudTripleStoreConfiguration.CONF_INDEX_REBUILD + "=true to rebuild it.");
+                            + stored.definition() + ", now " + index.definition() + "). Rebuild it with the loader's rebuild "
+                            + "command, or start once with " + RdfCloudTripleStoreConfiguration.CONF_INDEX_REBUILD + "=true.");
                 }
                 state = new IndexState(IndexState.Status.BUILDING, index.definition());
                 toClear.add(index);
@@ -139,17 +178,190 @@ public final class IndexManager implements IndexCatalog {
                 building.add(index);
             }
         }
+        if (job != null && !building.isEmpty() && running == null) {
+            bwNs.write(new RowMutation(RECORD_ROW).put(RECORD_CF, JOB_CQ, EMPTY, job.getBytes(StandardCharsets.UTF_8)));
+            writer.flush();
+        }
         if (!building.isEmpty()) {
-            if (conf.isRebuildIndexes()) {
+            if (job != null) {
+                log.info("The {} index(es) are left to rebuild job {}", building.stream().map(i -> i.type().id()).toList(), job);
+            } else if (conf.isRebuildIndexes() && running != null) {
+                log.warn("Not rebuilding the {} index(es) here: rebuild job {} is building them",
+                        building.stream().map(i -> i.type().id()).toList(), running);
+            } else if (conf.isRebuildIndexes()) {
                 rebuild(building);
             } else {
                 for (final SecondaryIndex index : building) {
                     log.warn("The {} index does not cover the existing statements yet, so queries won't use it. "
-                            + "Start once with {}=true to build it.", index.type().id(),
+                            + "Build it with the loader's rebuild command, or start once with {}=true.", index.type().id(),
                             RdfCloudTripleStoreConfiguration.CONF_INDEX_REBUILD);
                 }
             }
         }
+        if (refreshMillis > 0) {
+            nextRefresh.set(System.currentTimeMillis() + refreshMillis);
+        }
+    }
+
+    // ------------------------------------------------------------------ states seen by other processes
+
+    /**
+     * Re-reads the states on the daemon thread when they are due. The caller goes on with the
+     * states it has: they change rarely, and a read here would be part of the caller's trace.
+     */
+    private void refreshIfDue() {
+        final long due = nextRefresh.get();
+        if (closed || System.currentTimeMillis() < due || !nextRefresh.compareAndSet(due, Long.MAX_VALUE)) {
+            return;
+        }
+        try {
+            REFRESHER.execute(() -> {
+                try {
+                    if (!closed) {
+                        reread();
+                    }
+                } catch (final Throwable t) {
+                    log.debug("Could not re-read the index states of {}", tables.getSpo(), t);
+                } finally {
+                    nextRefresh.set(System.currentTimeMillis() + refreshMillis);
+                }
+            });
+        } catch (final RuntimeException e) {
+            nextRefresh.set(System.currentTimeMillis() + refreshMillis);
+        }
+    }
+
+    /** Reads every index's state again; one that another process redefined stops being written. */
+    void reread() throws Exception {
+        final Map<String, String> record = readRecord(store, tables);
+        for (final Map.Entry<IndexType, SecondaryIndex> e : active.entrySet()) {
+            final String raw = record.get(e.getKey().id());
+            if (raw == null) {
+                continue; // purge rewrites the records it deleted
+            }
+            final IndexState stored = IndexState.decode(raw);
+            if (stored.definition().equals(e.getValue().definition())) {
+                states.put(e.getKey(), stored);
+                redefined.remove(e.getKey());
+            } else {
+                if (redefined.add(e.getKey())) {
+                    log.warn("The {} index was redefined by another process ({}): restart with its settings", e.getKey().id(),
+                            stored.definition());
+                }
+                states.put(e.getKey(), new IndexState(IndexState.Status.BUILDING, e.getValue().definition()));
+            }
+        }
+    }
+
+    /** Stops the re-reads: the store may close after this. */
+    public void close() {
+        closed = true;
+    }
+
+    /** Refuses writes once another process redefined an index this store maintains. */
+    public void checkCurrent() {
+        refreshIfDue();
+        if (!redefined.isEmpty()) {
+            throw new RyaDAOException("The " + redefined.stream().map(IndexType::id).toList() + " index(es) of " + tables.getSpo()
+                    + " were redefined by another process: restart with the store's new index settings");
+        }
+    }
+
+    /** Whether an enabled index is BUILDING, as this store last read it. */
+    public boolean isBuilding() {
+        refreshIfDue();
+        for (final IndexType type : active.keySet()) {
+            if (states.get(type).status() == IndexState.Status.BUILDING) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Records deleted {@code spo} cells in the {@link RebuildLog} and flushes them, before the
+     * caller deletes them: a rebuild that read them before the delete finds them there.
+     */
+    public void logDeletes(final List<RowMutation> spoDeletes) throws Exception {
+        for (final RowMutation m : spoDeletes) {
+            bwNs.write(RebuildLog.records(m));
+        }
+        writer.flush();
+    }
+
+    /** Refuses an operation a running rebuild job can't follow (graph drops, purge), read afresh. */
+    public void refuseWhileRebuilding(final String what) {
+        final String running = readJob(store, tables);
+        if (running != null) {
+            throw new RyaDAOException("Can't " + what + " while rebuild job " + running + " builds the "
+                    + active.keySet().stream().filter(t -> states.get(t).status() == IndexState.Status.BUILDING).map(IndexType::id)
+                            .toList() + " index(es) of " + tables.getSpo() + ": the job can't replay it. Retry once the job is done.");
+        }
+    }
+
+    /** The running rebuild job, or null. */
+    public static String readJob(final Store store, final TableLayoutStrategy tables) {
+        final String job = readRecord(store, tables).get(new String(JOB_CQ, StandardCharsets.UTF_8));
+        return job == null || job.isEmpty() ? null : job;
+    }
+
+    /** The record row's cells: each index's state by its id, and the job. */
+    private static Map<String, String> readRecord(final Store store, final TableLayoutStrategy tables) {
+        final Map<String, String> out = new java.util.HashMap<>();
+        if (!store.tables().exists(tables.getNs())) {
+            return out;
+        }
+        final ScanSpec spec = ScanSpec.builder(Auths.NONE).family(RECORD_CF).build();
+        try (CellScanner scanner = store.scan(tables.getNs(), KeyRange.row(RECORD_ROW), spec)) {
+            while (scanner.hasNext()) {
+                final Cell c = scanner.next();
+                out.put(new String(c.qualifier(), StandardCharsets.UTF_8), new String(c.value(), StandardCharsets.UTF_8));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Ends rebuild job {@code id}: the indexes it built become READY, then its record goes, then
+     * the deletes recorded for it. Refused if the job isn't the running one, or an index was
+     * redefined since.
+     *
+     * @param built the indexes the job built
+     * @return the indexes made READY
+     */
+    public List<IndexType> finishRebuild(final String id, final Set<IndexType> built) throws Exception {
+        final String running = readJob(store, tables);
+        if (!id.equals(running)) {
+            throw new RyaDAOException("Rebuild job " + id + " isn't the running one (" + running + ")");
+        }
+        reread();
+        if (!redefined.isEmpty()) {
+            throw new RyaDAOException("The " + redefined.stream().map(IndexType::id).toList()
+                    + " index(es) were redefined during rebuild job " + id + ": run it again with the new settings");
+        }
+        final List<IndexType> ready = new ArrayList<>();
+        for (final Map.Entry<IndexType, SecondaryIndex> e : active.entrySet()) {
+            if (built.contains(e.getKey()) && states.get(e.getKey()).status() == IndexState.Status.BUILDING) {
+                setState(e.getKey(), new IndexState(IndexState.Status.READY, e.getValue().definition()));
+                ready.add(e.getKey());
+            }
+        }
+        writer.flush();
+        bwNs.write(new RowMutation(RECORD_ROW).delete(RECORD_CF, JOB_CQ, EMPTY));
+        writer.flush();
+        RebuildLog.clear(store, tables, Auths.ALL_HELD);
+        return ready;
+    }
+
+    /** The enabled indexes that are BUILDING, with their definitions. */
+    public Map<IndexType, SecondaryIndex> building() {
+        final Map<IndexType, SecondaryIndex> out = new EnumMap<>(IndexType.class);
+        for (final Map.Entry<IndexType, SecondaryIndex> e : active.entrySet()) {
+            if (states.get(e.getKey()).status() == IndexState.Status.BUILDING) {
+                out.put(e.getKey(), e.getValue());
+            }
+        }
+        return out;
     }
 
     /**
@@ -170,6 +382,7 @@ public final class IndexManager implements IndexCatalog {
 
     /** Refuses, before anything is written, a statement an enabled index can't take. */
     public void check(final RyaStatement statement) {
+        checkCurrent();
         if (active.containsKey(IndexType.ENTITY)) {
             EntityIndex.checkIndexable(statement);
         }
@@ -258,6 +471,8 @@ public final class IndexManager implements IndexCatalog {
             setState(index.type(), new IndexState(IndexState.Status.READY, index.definition()));
         }
         writer.flush();
+        // Deletes recorded while they were BUILDING: what they cover is in the index as built now.
+        RebuildLog.clear(store, tables, Auths.ALL_HELD);
         log.info("Built the {} index(es) over {} statements", ids, count);
     }
 
@@ -287,6 +502,7 @@ public final class IndexManager implements IndexCatalog {
 
     @Override
     public boolean isReady(final IndexType type) {
+        refreshIfDue();
         final IndexState state = states.get(type);
         return state != null && state.status() == IndexState.Status.READY;
     }

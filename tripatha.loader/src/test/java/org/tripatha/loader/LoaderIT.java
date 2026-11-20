@@ -17,6 +17,7 @@ package org.tripatha.loader;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -59,10 +60,17 @@ import org.junit.jupiter.api.io.TempDir;
 import org.tripatha.store.StoreRdfConfiguration;
 import org.tripatha.store.DatatypeMarkers;
 import org.tripatha.store.EvalStatsMutations;
+import org.tripatha.store.RyaStoreDAO;
+import org.tripatha.store.index.IndexManager;
 import org.tripatha.store.index.IndexSearcher;
+import org.tripatha.store.index.IndexState;
+import org.tripatha.store.index.RebuildLog;
+import org.tripatha.api.persist.RyaDAOException;
+import org.tripatha.api.domain.RyaIRI;
 import org.tripatha.store.index.IndexType;
 import org.tripatha.store.index.IndexVerifier;
 import org.tripatha.api.RdfCloudTripleStoreConfiguration;
+import org.tripatha.api.RdfCloudTripleStoreConstants;
 import org.tripatha.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
 import org.tripatha.api.domain.RyaStatement;
 import org.tripatha.api.resolver.RyaTripleContext;
@@ -569,6 +577,217 @@ class LoaderIT extends StoreITBase {
         final Run refused = run(env(), "build", build());
         assertEquals(2, refused.code(), refused.all());
         assertTrue(refused.err().contains("increment mode"), refused.all());
+    }
+
+    // ------------------------------------------------------------------ rebuild (O5)
+
+    /** The dataset options without the indexes: a store the indexes are added to later. */
+    private List<String> withoutIndexes(final List<String> args) {
+        final List<String> a = new ArrayList<>();
+        for (int i = 0; i < args.size(); i++) {
+            final String arg = args.get(i);
+            if (arg.equals("--entity-shards")) {
+                i++;
+            } else if (!arg.equals("--text-index") && !arg.equals("--geo-index") && !arg.equals("--entity-index")) {
+                a.add(arg);
+            }
+        }
+        return a;
+    }
+
+    /** Prepares and loads the dataset with no index, as a store an index is enabled on later. */
+    private void loadWithoutIndexes() {
+        if (!onBackend("accumulo")) {
+            grantAuthorizations(AUTHS);
+        }
+        final Run prepared = run(env(), "prepare", withoutIndexes(onBackend("accumulo") ? dataset("--splits", "7", "--grant-auths")
+                : dataset("--splits", "7")));
+        assertEquals(0, prepared.code(), prepared.all());
+        final Run loaded = run(env(), "load", withoutIndexes(load(0, 1)));
+        assertEquals(0, loaded.code(), loaded.all());
+        assertFalse(getStore().tables().exists(getTablePrefix() + "entity"));
+    }
+
+    private List<String> rebuild(final String... extra) {
+        final List<String> a = dataset("--threads", "4", "--work-dir", dir.resolve("rebuild").toString(), "--spill-memory-mb", "1");
+        a.addAll(List.of(extra));
+        return a;
+    }
+
+    /** Every enabled index matches spo, is READY, and no job or recorded delete is left. */
+    private void assertIndexesRebuilt() throws Exception {
+        final StoreRdfConfiguration conf = options().rdfConf();
+        conf.setAuths(AUTHS);
+        for (final IndexType type : IndexType.values()) {
+            final IndexState state = IndexManager.readState(getStore(), conf.getTableLayoutStrategy(), type);
+            assertEquals(IndexState.Status.READY, state.status(), type + " is READY");
+            final IndexVerifier.Report report = IndexVerifier.verify(getStore(), conf, type);
+            assertTrue(report.isClean(), type + ": " + report);
+        }
+        assertEquals(null, IndexManager.readJob(getStore(), conf.getTableLayoutStrategy()), "the job's record is gone");
+        assertTrue(RebuildLog.read(getStore(), conf.getTableLayoutStrategy(), Auths.ALL_HELD).isEmpty(), "the recorded deletes are gone");
+    }
+
+    /**
+     * Indexes enabled on a loaded store: the rebuild writes the cells a load with the indexes
+     * writes, splits the index tables, and a second run has nothing to do.
+     */
+    @Test
+    void aRebuildWritesTheIndexesALoadWrites() throws Exception {
+        loadWithoutIndexes();
+        IndexRebuild.fanIn = 2;
+        try {
+            final Run r = run(env(), "rebuild", rebuild());
+            assertEquals(0, r.code(), r.all());
+            assertTrue(r.out().contains("Finish: 0 deletes recorded"), r.out());
+        } finally {
+            IndexRebuild.fanIn = IndexRebuild.FAN_IN;
+        }
+        assertIndexesRebuilt();
+        assertQueriesAgreeWithAndWithoutIndexes(options().rdfConf());
+        if (!onBackend("rocksdb")) {
+            assertEquals(3, getStore().tables().splitCount(getTablePrefix() + "entity"), "split at each of its 4 shards");
+            assertTrue(getStore().tables().splitCount(getTablePrefix() + "text") > 0);
+        }
+        final Run again = run(env(), "rebuild", rebuild());
+        assertEquals(0, again.code(), again.all());
+        assertTrue(again.out().contains("Nothing to rebuild"), again.out());
+
+        final String loaded = getTablePrefix() + "l_";
+        final Run prepared = run(env(), "prepare", Stream.concat(dataset("--splits", "7").stream(),
+                Stream.of("--table-prefix", loaded)).toList());
+        assertEquals(0, prepared.code(), prepared.all());
+        final Run load = run(env(), "load", load(0, 1, "--table-prefix", loaded, "--progress-file",
+                dir.resolve("indexed.progress").toString()));
+        assertEquals(0, load.code(), load.all());
+        for (final String table : List.of("text", "geo", "entity")) {
+            assertSame(table, cells(loaded + table, true), cells(getTablePrefix() + table, true));
+        }
+    }
+
+    /**
+     * Writes while the job runs, between its sort and its import: deletes (which the imported
+     * files undo), deletes then adds again, and adds. The index tables are compacted before the
+     * import, so Accumulo and HBase drop the deletes' markers, as a major compaction may on a
+     * cluster: the import then brings the deleted cells back on every backend, and the finish
+     * removes them. A writer that was open sees the indexes READY, graph drops wait for the job,
+     * and another store can't redefine an index the job builds.
+     */
+    @Test
+    void aRebuildReplaysTheDeletesMadeWhileItRan() throws Exception {
+        loadWithoutIndexes();
+        final Run sorted = run(env(), "rebuild", rebuild("--phase", "start,sort"));
+        assertEquals(0, sorted.code(), sorted.all());
+
+        final StoreRdfConfiguration conf = options().rdfConf();
+        conf.setAuths(AUTHS);
+        conf.setIndexStateRefresh(100);
+        final RyaStoreDAO writer = new RyaStoreDAO(getStore(), conf);
+        writer.init();
+        try {
+            assertFalse(writer.getIndexCatalog().isReady(IndexType.ENTITY), "BUILDING while the job runs");
+            assertEquals(RdfCloudTripleStoreConstants.VERSION_WITH_REBUILD_JOBS, writer.getVersion(),
+                    "a job raises the store's version: older writers don't record their deletes");
+            final List<RyaStatement> stored = new ArrayList<>();
+            final RyaTripleContext context = RyaTripleContext.getInstance(conf);
+            try (CellScanner spo = getStore().scan(getTablePrefix() + "spo", KeyRange.all(), ScanSpec.of(Auths.of(AUTHS)))) {
+                for (int i = 0; spo.hasNext() && stored.size() < 60; i++) {
+                    final Cell k = spo.next();
+                    // In a named graph: a pattern without one would match every graph.
+                    if (i % 7 == 0 && k.family().length > 0) {
+                        stored.add(context.deserializeTriple(TABLE_LAYOUT.SPO,
+                                new TripleRow(k.row(), k.family(), k.qualifier(), k.timestamp(), k.visibility(), k.value())));
+                    }
+                }
+            }
+            for (final RyaStatement st : stored) {
+                writer.delete(st, conf);
+            }
+            // A third of them come back, later.
+            final long later = System.currentTimeMillis();
+            for (int i = 0; i < stored.size(); i += 3) {
+                final RyaStatement again = stored.get(i);
+                again.setTimestamp(later);
+                writer.add(again);
+            }
+            final RyaIRI added = new RyaIRI("urn:tripatha-gen:rebuild-test");
+            writer.add(new RyaStatement(added, new RyaIRI("http://www.w3.org/2000/01/rdf-schema#label"),
+                    new org.tripatha.api.domain.RyaType("added while rebuilding"), new RyaIRI("urn:tripatha-gen:graph/0")));
+            writer.flush();
+            assertEquals(stored.size(), RebuildLog.read(getStore(), conf.getTableLayoutStrategy(), Auths.ALL_HELD).size());
+
+            final RyaDAOException refused = assertThrows(RyaDAOException.class,
+                    () -> writer.dropGraph(conf, new RyaIRI("urn:tripatha-gen:graph/1")));
+            assertTrue(refused.getMessage().contains("rebuild job"), refused.getMessage());
+            assertThrows(RyaDAOException.class, writer::rebuildIndexes);
+            // A store started to rebuild in its own process leaves the indexes to the job.
+            final StoreRdfConfiguration inProcess = new StoreRdfConfiguration(conf);
+            inProcess.setRebuildIndexes(true);
+            final RyaStoreDAO starting = new RyaStoreDAO(getStore(), inProcess);
+            starting.init();
+            assertFalse(starting.getIndexCatalog().isReady(IndexType.ENTITY));
+            starting.destroy();
+            // Nor may a store with other index settings clear what the job builds.
+            final StoreRdfConfiguration redefined = new StoreRdfConfiguration(inProcess);
+            redefined.setTextIndexPredicates(List.of("http://www.w3.org/2000/01/rdf-schema#label"));
+            final RyaStoreDAO other = new RyaStoreDAO(getStore(), redefined);
+            final RyaDAOException clash = assertThrows(RyaDAOException.class, other::init);
+            assertTrue(clash.getMessage().contains("other settings"), clash.getMessage());
+
+            for (final String table : List.of("text", "geo", "entity")) {
+                backend().compact(getTablePrefix() + table);
+            }
+            final Run imported = run(env(), "rebuild", rebuild("--phase", "merge,import"));
+            assertEquals(0, imported.code(), imported.all());
+            final IndexVerifier.Report undone = IndexVerifier.verify(getStore(), conf, IndexType.ENTITY);
+            assertFalse(undone.extra().isEmpty(), "the import brings back postings of deleted statements: " + undone);
+
+            final Run finished = run(env(), "rebuild", rebuild("--phase", "finish"));
+            assertEquals(0, finished.code(), finished.all());
+            final int again = (stored.size() + 2) / 3;
+            assertTrue(finished.out().contains("Finish: " + stored.size() + " deletes recorded during the job, "
+                    + (stored.size() - again) + " replayed, " + again + " written again"), finished.out());
+            assertIndexesRebuilt();
+
+            final long deadline = System.currentTimeMillis() + 10_000;
+            while (!writer.getIndexCatalog().isReady(IndexType.ENTITY) && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50);
+            }
+            assertTrue(writer.getIndexCatalog().isReady(IndexType.ENTITY), "the open writer sees the index READY");
+            writer.dropGraph(conf, new RyaIRI("urn:tripatha-gen:graph/1"));
+            writer.flush();
+            for (final IndexType type : IndexType.values()) {
+                final IndexVerifier.Report report = IndexVerifier.verify(getStore(), conf, type);
+                assertTrue(report.isClean(), type + " after the drop: " + report);
+            }
+        } finally {
+            writer.destroy();
+        }
+    }
+
+    /** A crash between writing a range's runs and recording them: the resume reads that range again. */
+    @Test
+    void aRebuildResumesAfterACrash() throws Exception {
+        loadWithoutIndexes();
+        // The second of spo's ranges, or its only one (a RocksDB store has no splits).
+        final int crashAt = getStore().tables().splitRows(getTablePrefix() + "spo", Integer.MAX_VALUE).isEmpty() ? 1 : 2;
+        final java.util.concurrent.atomic.AtomicInteger commits = new java.util.concurrent.atomic.AtomicInteger();
+        IndexRebuild.beforeCommit = () -> {
+            if (commits.incrementAndGet() == crashAt) {
+                throw new IllegalStateException("a crash before commit " + crashAt);
+            }
+        };
+        try {
+            final Run crashed = run(env(), "rebuild", rebuild());
+            assertEquals(1, crashed.code(), crashed.all());
+        } finally {
+            IndexRebuild.beforeCommit = null;
+        }
+        final Run again = run(env(), "rebuild", rebuild());
+        assertEquals(2, again.code(), "a rebuild that was started needs --resume: " + again.all());
+        final Run resumed = run(env(), "rebuild", rebuild("--resume"));
+        assertEquals(0, resumed.code(), resumed.all());
+        assertIndexesRebuilt();
     }
 
     /** Every cell of a table, under the dataset's labels, as text; with or without its timestamp. */

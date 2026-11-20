@@ -147,7 +147,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O2 | **Loader at 1T:**<br>• `--triples 1T`<br>• `prepare --tablet-size`, planning splits by size instead of 4 per server<br>• `dry-run` reports stored counter cells and their share of 1s | R8, R9 | tablets near the target size from the start, instead of about 50 GB tablets splitting online | — | 3 | Done (2026-11-20, section 4.16): `--triples 1T`; `prepare` plans each table's splits by its estimated size on disk over `--tablet-size` (10G), at least 4 per server, and makes that size the backend's split threshold (`TableAdmin.setTargetSize`); HBase splits in rounds; the progress file is a watermark plus the blocks above it; `dry-run` reports the stored counters per family |
 | O3 | **Bulk build on Accumulo and RocksDB:**<br>• sorted files per tablet, then an import<br>• every counter of 1 left out except `p`<br>• the DAO's guards in the writer<br>• input from the generator or from N-Triples/N-Quads files<br>(section 6.2) | R4, R5, R11 | no write-ahead log, memory tables or compactions. *est.* counters about 5.4 → 0.5 stored cells per triple, 160 → about 115 B per triple on disk | O1, M6 | 3 | Done for Accumulo and RocksDB (2026-11-20, sections 4.18 and 4.19): `build`, the same cells as `load` (checked cell by cell), at 10M 1.5 times faster on RocksDB and 13 times on the Accumulo test cluster, `eval` 90 % smaller. The 10B milestone needs a cluster |
 | O4 | **Graph drops in time proportional to the graph** (D8) | R6 | a drop reads the graph, not the 5 cells per triple of every table (about 5T cells at 1T) | D8 | 5 | Won't do: D8 (c), 2026-11-20 |
-| O5 | **Index rebuilds through the bulk build; purge by recreating tables** when the caller sees everything | R6 | a rebuild becomes a batch job; such a purge becomes constant time | O3 | 5 | Next (2026-11-20). Scoped to the rebuilds: `purge` has no production caller, the loader's `drop` already deletes the tables, and `CLEAR ALL` is a graph drop (D8 (c)) |
+| O5 | **Index rebuilds through the bulk build; purge by recreating tables** when the caller sees everything | R6 | a rebuild becomes a batch job; such a purge becomes constant time | O3 | 5 | Done (2026-11-20, section 4.23): the loader's `rebuild` sorts `spo` by split range into the indexes' files and imports them, while writers record their deletes for the job to replay; graph drops wait for it. Accumulo test cluster 3M: 16.6 → 5.8 s; RocksDB 10M: 18.5 → 9.3 s. `purge` left as it is (no production caller) |
 | O6 | **Text planning from per-term posting counts** | R7 | an AND is driven by its rarest word | — | 5 | Not started |
 | O7a | **Parallel reads of one large range, constant object:** a star pattern on its own (`?x a :C`: alone, counted, or driving lookups) read as a merge of one list, its subjects in slices at `spo`'s split points (section 6.6) | R2 | every server holding the list reads at once, and the client decodes no statements | O24 | 1 | Done: `query.join.mergesingle` (10,000). A whole class returned is 2.8 times faster on RocksDB and 2.3 on Accumulo at 10M, 4.9 times on RocksDB at 100M; counted without the entity index, 2.1 to 4.3 times; with a lookup per member, 13 to 16 % on RocksDB and nothing on Accumulo, where the lookups are the time (section 4.12) |
 | O7b | **Parallel reads of one large range, variable object:** `?s :p ?o` (a whole predicate, such as a filter no index covers), cut at the table's own split points, statements decoded on the slice threads (section 6.6) | R2 | every server holding the range reads at once | — | 1 | Not started: later, when a workload needs it (decided 2026-11-19) |
@@ -1196,7 +1196,48 @@ On the join benchmark, HBase at 3M (built with `--bulk`), counts off and on, bot
 
 The rows were the same in every variant. `chain-unused` sends as many cells as before (one rating per review), but its region server counts them instead of the client decoding them.
 
-**Next:** phase 5. D8 was decided (c) the same day, which closes O4, so the phase starts with O5's index rebuilds.
+**Next:** phase 5. D8 was decided (c) the same day, which closes O4, so the phase starts with O5's index rebuilds (section 4.23).
+
+## 4.23 Index rebuilds as a batch job (O5)
+
+**The problem (R6).** An index turned on for a store that has data, or redefined, was built by the store's own start-up (`index.rebuild=true`): one client thread reads all of `spo` and writes every index cell as a mutation, and the endpoint isn't up until it ends. At the 3M rate measured below on the Accumulo test cluster (181,000 statements/s), 10^12 statements would take 64 days.
+
+**The job** (`IndexRebuild`, the loader's `rebuild` command; decided 2026-11-20: rebuilds only, `purge` stays as it is). It works on any store, whatever wrote it, and every phase resumes:
+- **start:** the store, opened with the job's id (`index.rebuild.job`), marks the indexes that aren't READY as BUILDING for it, clears a redefined one, and records the job in `ns`.
+- **sort:** `spo` read by split range (fixed in the work directory the first time) on threads, and processes with `--part`, with every label the account holds. Each statement's index cells go to sorted runs, recorded with their range in one write, with a sample of the range's rows.
+- **merge:** the index tables are split from the samples, as `prepare` splits a store (size over `--tablet-size`, at least 4 per server, the entity index at each shard; on RocksDB at least one range per thread, as hints). Then the bulk build's merge and import (`BulkFiles`, shared with `build`).
+- **finish,** once every part has imported: the deletes recorded meanwhile are replayed, then the indexes become READY.
+
+**Writes during the job.** Adds need nothing: writers maintain a BUILDING index as they add. A delete does:
+- **The race:** the sort read a statement; it is deleted; the import brings its index cells back. RocksDB keeps the last write, and Accumulo and HBase hide the cells only until a major compaction drops the delete marker.
+- **The record:** so a writer that sees an index BUILDING records each `spo` cell it deletes in `ns` (`RebuildLog`: the `spo` row in the row, the graph as qualifier, the statement's own label and timestamp), and flushes the record before the delete.
+- **The replay,** in two passes:
+  1. Every recorded cell no longer in `spo` has its index cells deleted, at its own timestamp. One still there (added again) has them written again from the stored cell: an imported file may have replaced them with an older version.
+  2. The cells recorded since the first pass read the record are deleted again if they are gone, and nothing is written. A delete recorded later came after the first pass's writes.
+- **Graph drops and `purge` are refused** while a job runs: they delete by column filter, and there is nothing per statement to replay. A store started with `index.rebuild=true` leaves the indexes to a running job.
+- **Redefinitions are refused** while a job runs: a store opened with other settings for an index the job builds would clear its table, and the job's files would bring back cells of the old rules. The job itself, resumed with other index options, is refused too.
+- **Storage version 1.3.0:** the job's start raises the store to it, as the entity index raises it to 1.2.0. Code from before records nothing and drops graphs freely, so it refuses to write to the store. Writers already open when a job starts must run this version.
+
+**States seen by other processes.** A store re-reads its indexes' states every minute (`index.state.refresh`), on a daemon thread and only while it is used, so it isn't part of any query's trace. Readers then use an index the job made READY without a restart, and a writer whose index another process redefined stops writing it.
+
+**Measured** with `RebuildBench` (loader test sources): two stores built with the text and geo indexes, then the entity index built by the start-up rebuild on one and by the job (8 threads) on the other. Both wrote the same postings.
+
+| Store | Start-up rebuild | Job | Sort / merge / import |
+|---|---|---|---|
+| Accumulo test cluster, 3M | 16.6 s | 5.8 s (2.9 times faster) | 3.9 s (772,000 statements/s) / 1.0 s, 16 files / 0.3 s |
+| RocksDB, 10M | 18.5 s | 9.3 s (2.0 times) | 7.5 s (1.33M statements/s) / 1.3 s, 16 files / 0.2 s |
+
+The first RocksDB run took 17.0 s: an index table created on RocksDB has no split rows, so the merge was one file on one thread (9.1 s). Hints planned from the samples cut it in 16. At 10^12 the gap is in the structure, not these ratios: the start-up rebuild is one client thread doing mutations, and the job's sort and merge spread over the machines given to it, with imports instead of mutations.
+
+**Tests:**
+- `LoaderIT.aRebuildWritesTheIndexesALoadWrites`: a store loaded without indexes, rebuilt, holds the text, geo and entity cells a load with them writes, cell by cell with timestamps. Its index tables are split, and a second run has nothing to do.
+- `LoaderIT.aRebuildReplaysTheDeletesMadeWhileItRan`: between the sort and the import, a writer deletes statements, adds a third of them back later, and adds one. A graph drop, an in-process rebuild and a store with other index settings are refused, and the store is at version 1.3.0.
+  - **The race, on every backend:** the index tables are compacted before the import, so Accumulo and HBase drop the deletes' markers, as a major compaction may on a cluster. The import then brings the deleted postings back everywhere (checked), and the finish removes them.
+  - After the finish every index matches `spo` (`IndexVerifier`), the open writer sees the index READY, and a graph drop works.
+- `LoaderIT.aRebuildResumesAfterACrash` and `IndexRebuildTest` (the weighted split points).
+- All three on RocksDB, Accumulo and HBase in both counter modes: index tables hold no counters, so HBase's increment mode rebuilds too.
+
+**Next:** O8, approximate counts from the counters.
 
 ---
 
@@ -1495,7 +1536,7 @@ The other readers of the counters are `RyaStoreEvalStatsDAO.getCardinality`, `Gr
 
 **`purge` and index rebuilds:**
 - **`purge`** keeps reading everything visible. Where the caller can see everything, dropping and recreating the tables is equivalent and constant-time.
-- **Index rebuilds** become a bulk build whose input is `spo`.
+- **Index rebuilds** become a bulk build whose input is `spo`. Done as the loader's `rebuild` (O5, section 4.23); `purge` stays as it is (decided 2026-11-20).
 
 ### 6.5 Dictionary encoding: go/no-go (M5, O11)
 
@@ -1812,13 +1853,13 @@ Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, no
 ### Phase 5: whole-table operations and planning at scale
 
 7. ~~**O4**, graph drops per D8~~: closed, D8 (c) (2026-11-20): a drop keeps scanning the tables;
-8. **O5**, index rebuilds through the bulk build: a resumable loader job that reads `spo` by split range and imports the index's sorted files, while writes go on (decided 2026-11-20: rebuilds only, purge stays as it is);
+8. **O5**, index rebuilds through the bulk build: a resumable loader job that reads `spo` by split range and imports the index's sorted files, while writes go on (decided 2026-11-20: rebuilds only, purge stays as it is). **Done** (2026-11-20, section 4.23);
 9. **O8**, approximate counts;
 10. **O6**, text planning from posting counts.
 
 **Exit:**
 - an AND of a common and a rare word is driven by the rare one;
-- an index rebuild at 10^12 is a resumable batch job, not a start-up scan.
+- an index rebuild at 10^12 is a resumable batch job, not a start-up scan (reached with O5, section 4.23).
 
 ### Phase 6: smaller wins
 

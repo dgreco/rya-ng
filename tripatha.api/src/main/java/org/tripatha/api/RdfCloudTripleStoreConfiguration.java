@@ -139,6 +139,16 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
     public static final String CONF_QUERY_ENTITY_SERVERS = "query.entityindex.servers";
     /** Rebuild indexes that are not ready (enabled on existing data, or redefined) when the store starts. */
     public static final String CONF_INDEX_REBUILD = "index.rebuild";
+    /**
+     * The id of a loader rebuild job (SCALE-STUDY.md O5): the store marks the indexes that aren't
+     * ready BUILDING for that job, clears the redefined ones, and leaves building them to the job.
+     */
+    public static final String CONF_INDEX_REBUILD_JOB = "index.rebuild.job";
+    /**
+     * How often a store re-reads its indexes' states, in milliseconds (default 60,000; 0 or less:
+     * never), so readers use an index a rebuild job made ready without a restart.
+     */
+    public static final String CONF_INDEX_STATE_REFRESH = "index.state.refresh";
     /** Let queries use the secondary indexes (they are still maintained when this is false). */
     public static final String CONF_USE_INDEX = "query.useindex";
     public static final String CONF_OFFSET = "query.offset";
@@ -337,6 +347,24 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setRebuildIndexes(final boolean rebuild) {
         setBoolean(CONF_INDEX_REBUILD, rebuild);
+    }
+
+    /** The loader rebuild job this store belongs to, or null. */
+    public String getIndexRebuildJob() {
+        final String job = get(CONF_INDEX_REBUILD_JOB);
+        return job == null || job.isBlank() ? null : job;
+    }
+
+    public void setIndexRebuildJob(final String job) {
+        set(CONF_INDEX_REBUILD_JOB, job);
+    }
+
+    public long getIndexStateRefresh() {
+        return getLong(CONF_INDEX_STATE_REFRESH, 60_000L);
+    }
+
+    public void setIndexStateRefresh(final long millis) {
+        setLong(CONF_INDEX_STATE_REFRESH, millis);
     }
 
     public boolean isUseIndex() {

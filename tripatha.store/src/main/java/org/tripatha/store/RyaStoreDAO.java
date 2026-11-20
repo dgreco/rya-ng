@@ -207,6 +207,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
             }
             indexes = new IndexManager(store, conf, writer, storeCreated);
             raiseVersionForEntityIndex();
+            raiseVersionForRebuildJob();
             isInitialized.set(true);
         } catch (final Exception e) {
             if (writer != null) {
@@ -234,6 +235,23 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
         if (version == null || isNewer(RdfCloudTripleStoreConstants.VERSION_WITH_ENTITY_INDEX, version)) {
             bwNs.write(new RowMutation(VERSION_ROW).put(VERSION_CF, EMPTY, EMPTY,
                     utf8(RdfCloudTripleStoreConstants.VERSION_WITH_ENTITY_INDEX)));
+            writer.flush();
+        }
+    }
+
+    /**
+     * A loader rebuild job starting raises the store's version to 1.3.0: code from before it
+     * neither records its deletes while an index is BUILDING nor refuses graph drops during a job,
+     * and an imported file would then bring back the index cells of what it deleted.
+     */
+    private void raiseVersionForRebuildJob() throws Exception {
+        if (conf.getIndexRebuildJob() == null || !indexes.isBuilding() || writesRefused != null) {
+            return;
+        }
+        final String version = getVersion();
+        if (version == null || isNewer(RdfCloudTripleStoreConstants.VERSION_WITH_REBUILD_JOBS, version)) {
+            bwNs.write(new RowMutation(VERSION_ROW).put(VERSION_CF, EMPTY, EMPTY,
+                    utf8(RdfCloudTripleStoreConstants.VERSION_WITH_REBUILD_JOBS)));
             writer.flush();
         }
     }
@@ -483,8 +501,18 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                     }
                 }
             }
+            indexes.checkCurrent();
+            final List<Map<TABLE_LAYOUT, RowMutation>> deletes = new ArrayList<>(matches.size());
             for (final RyaStatement match : matches) {
-                final Map<TABLE_LAYOUT, RowMutation> rows = mutationsFactory.serializeDelete(match);
+                deletes.add(mutationsFactory.serializeDelete(match));
+            }
+            if (!matches.isEmpty() && indexes.isBuilding()) {
+                // Recorded, and flushed, before the deletes: a rebuild that read them finds them (O5).
+                indexes.logDeletes(deletes.stream().map(rows -> rows.get(TABLE_LAYOUT.SPO)).toList());
+            }
+            for (int i = 0; i < matches.size(); i++) {
+                final RyaStatement match = matches.get(i);
+                final Map<TABLE_LAYOUT, RowMutation> rows = deletes.get(i);
                 bwSpo.write(rows.get(TABLE_LAYOUT.SPO));
                 bwPo.write(rows.get(TABLE_LAYOUT.PO));
                 bwOsp.write(rows.get(TABLE_LAYOUT.OSP));
@@ -509,6 +537,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
     @Override
     public synchronized void dropGraph(final StoreRdfConfiguration aconf, final RyaIRI... graphs) {
         checkWritable();
+        indexes.refuseWhileRebuilding("drop graphs");
         final Auths auths = (aconf != null ? aconf : conf).getStoreAuths();
         try {
             writer.flush();
@@ -713,6 +742,9 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
     @Override
     public synchronized void purge(final RdfCloudTripleStoreConfiguration configuration) {
         checkWritable();
+        if (isInitialized.get()) {
+            indexes.refuseWhileRebuilding("purge the store");
+        }
         final ScanSpec spec = ScanSpec.builder(Auths.of(configuration.getAuths())).threads(NUM_THREADS).build();
         try {
             flush();
@@ -773,6 +805,9 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
         if (!isInitialized.getAndSet(false)) {
             return;
         }
+        if (indexes != null) {
+            indexes.close();
+        }
         try {
             writer.close();
         } catch (final RyaDAOException e) {
@@ -806,6 +841,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
     /** Rebuilds every enabled index from the statement tables. */
     public synchronized void rebuildIndexes() {
         checkWritable();
+        indexes.refuseWhileRebuilding("rebuild the indexes in this process");
         try {
             flush();
             indexes.rebuildAll();
