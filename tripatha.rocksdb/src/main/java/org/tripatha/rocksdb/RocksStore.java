@@ -27,6 +27,7 @@ import org.rocksdb.WriteBatch;
 import org.rocksdb.WriteOptions;
 
 import org.tripatha.api.persist.RyaDAOException;
+import org.tripatha.store.spi.BulkImport;
 import org.tripatha.store.spi.Capabilities;
 import org.tripatha.store.spi.Cell;
 import org.tripatha.store.spi.CellScanner;
@@ -98,6 +99,11 @@ public final class RocksStore implements Store {
     @Override
     public Capabilities capabilities() {
         return CAPABILITIES;
+    }
+
+    @Override
+    public java.util.Optional<BulkImport> bulk() {
+        return java.util.Optional.of(new RocksBulkImport(database));
     }
 
     @Override

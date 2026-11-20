@@ -204,6 +204,11 @@ final class RocksDatabase {
         return families.containsKey(table);
     }
 
+    /** Options for writing an SST file that a table of this database ingests: its own family options. Close them. */
+    org.rocksdb.Options sstOptions() {
+        return new org.rocksdb.Options(dbOptions, familyOptions);
+    }
+
     /** Whether the table holds counters; false for a table that doesn't exist. */
     boolean isCounters(final String table) {
         return kinds.get(table) == TableKind.COUNTERS;

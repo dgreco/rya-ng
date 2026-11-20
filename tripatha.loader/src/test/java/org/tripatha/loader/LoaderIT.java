@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
@@ -395,14 +396,26 @@ class LoaderIT extends StoreITBase {
      * that wrote it).
      */
     private StoreRdfConfiguration assertStoreHoldsExactlyTheDataset() throws Exception {
+        return assertStoreHoldsExactlyTheDataset(false);
+    }
+
+    /**
+     * @param built the entities were written by a bulk build: its counter totals of 1 are left out
+     *        but p's (the reference data, written by prepare, keeps the loader's rule), so a key with
+     *        1 from each reads 1, the drift of SCALE-STUDY.md 6.3
+     */
+    private StoreRdfConfiguration assertStoreHoldsExactlyTheDataset(final boolean built) throws Exception {
         final LoaderOptions o = options();
         final StoreRdfConfiguration conf = o.rdfConf();
         conf.setAuths(AUTHS);
         final EntityGenerator generator = new EntityGenerator(o.genConfig());
-        final List<RyaStatement> statements = new ArrayList<>(ReferenceData.statements(generator));
+        final List<RyaStatement> reference = ReferenceData.statements(generator);
+        final List<RyaStatement> entities = new ArrayList<>();
         for (long e = 0; e < ENTITIES; e++) {
-            statements.addAll(generator.generate(e));
+            entities.addAll(generator.generate(e));
         }
+        final List<RyaStatement> statements = new ArrayList<>(reference);
+        statements.addAll(entities);
 
         final Set<String> expected = statements.stream().map(Verify::key).collect(Collectors.toSet());
         final Set<String> actual = new HashSet<>();
@@ -417,12 +430,24 @@ class LoaderIT extends StoreITBase {
         assertSame("spo", expected, actual);
 
         final EvalStatsMutations.CounterBatch batch = new EvalStatsMutations.CounterBatch();
-        statements.forEach(st -> batch.add(st, 1));
+        (built ? reference : statements).forEach(st -> batch.add(st, 1));
         final Map<String, Long> expectedCounts = new HashMap<>();
         for (final RowMutation m : batch.drain(o.statsOnes())) {
             for (final RowMutation.Update u : m.updates()) {
                 expectedCounts.merge(cell(m.row(), u.family(), u.qualifier(), u.visibility()), u.delta(), Long::sum);
             }
+        }
+        if (built) {
+            final EvalStatsMutations.CounterBatch bulk = new EvalStatsMutations.CounterBatch();
+            entities.forEach(st -> bulk.add(st, 1));
+            bulk.forEachSum((key, sum) -> {
+                final boolean one = sum == 1 && EvalStatsMutations.COUNTER_FAMILIES.contains(key.family()) && !key.family().equals("p");
+                if (sum != 0 && !one) {
+                    expectedCounts.merge(cell(key.row().getBytes(StandardCharsets.UTF_8), key.family().getBytes(StandardCharsets.UTF_8),
+                            key.graph().getBytes(StandardCharsets.UTF_8), key.visibility().getBytes(StandardCharsets.ISO_8859_1)),
+                            sum, Long::sum);
+                }
+            });
         }
         final Set<String> expectedMarkers = statements.stream()
                 .map(st -> cell(st.getPredicate().getData().getBytes(StandardCharsets.UTF_8),
@@ -448,6 +473,96 @@ class LoaderIT extends StoreITBase {
         assertSame("eval", expectedCounts.entrySet().stream().map(Object::toString).collect(Collectors.toSet()),
                 actualCounts.entrySet().stream().map(Object::toString).collect(Collectors.toSet()));
         return conf;
+    }
+
+    // ------------------------------------------------------------------ the bulk build
+
+    private List<String> build(final String... extra) {
+        final List<String> a = dataset("--threads", "4", "--block-size", "25", "--work-dir", dir.resolve("work").toString(),
+                "--spill-memory-mb", "1");
+        a.addAll(List.of(extra));
+        return a;
+    }
+
+    /** The same store as load writes: the dataset, the indexes, verify, and the cells of a load into another prefix. */
+    @Test
+    void aBuildWritesWhatALoadWrites() throws Exception {
+        assumeTrue(getStore().bulk().isPresent(), getStore().backend() + " can't import files yet (O10)");
+        prepare();
+        BulkBuild.fanIn = 2;
+        try {
+            for (final String phase : List.of("sort", "merge", "import")) {
+                final Run r = run(env(), "build", build("--phase", phase));
+                assertEquals(0, r.code(), r.all());
+            }
+            // Every phase is done: sorting again does nothing, and importing again imports nothing.
+            final Run again = run(env(), "build", build());
+            assertEquals(0, again.code(), again.all());
+            assertTrue(again.out().contains("Sort: done already"), again.out());
+            assertTrue(again.out().contains("Import: 0 files"), again.out());
+        } finally {
+            BulkBuild.fanIn = BulkBuild.FAN_IN;
+        }
+        final StoreRdfConfiguration conf = assertStoreHoldsExactlyTheDataset(true);
+        for (final IndexType type : IndexType.values()) {
+            if (type.isEnabled(conf)) {
+                final IndexVerifier.Report report = IndexVerifier.verify(getStore(), conf, type);
+                assertTrue(report.isClean(), type + ": " + report);
+            }
+        }
+        assertQueriesAgreeWithAndWithoutIndexes(conf);
+        final Run verify = run(env(), "verify", dataset("--auths", "A,B", "--sample", Integer.toString(ENTITIES)));
+        assertEquals(0, verify.code(), verify.all());
+        assertTrue(verify.out().contains(" 0 missing, 0 unexpected, 0 counter mismatches"), verify.out());
+
+        // The same dataset through load, under another prefix: every table but eval holds the same cells.
+        final String loaded = getTablePrefix() + "l_";
+        final Run prepared = run(env(), "prepare", Stream.concat(dataset("--splits", "7").stream(),
+                Stream.of("--table-prefix", loaded)).toList());
+        assertEquals(0, prepared.code(), prepared.all());
+        final Run load = run(env(), "load", load(0, 1, "--table-prefix", loaded));
+        assertEquals(0, load.code(), load.all());
+        for (final String table : List.of("spo", "po", "osp", "text", "geo", "entity")) {
+            assertSame(table, cells(loaded + table, true), cells(getTablePrefix() + table, true));
+        }
+        assertSame("graphs", cells(loaded + "graphs", false), cells(getTablePrefix() + "graphs", false));
+    }
+
+    /** A crash between a spill and its record: the resume deletes that spill and writes its blocks once. */
+    @Test
+    void aBuildResumesAfterACrashWithoutCountingTwice() throws Exception {
+        assumeTrue(getStore().bulk().isPresent(), getStore().backend() + " can't import files yet (O10)");
+        prepare();
+        final java.util.concurrent.atomic.AtomicInteger commits = new java.util.concurrent.atomic.AtomicInteger();
+        BulkBuild.beforeCommit = () -> {
+            if (commits.incrementAndGet() == 3) {
+                throw new IllegalStateException("a crash before the third commit");
+            }
+        };
+        try {
+            final Run crashed = run(env(), "build", build());
+            assertEquals(1, crashed.code(), crashed.all());
+        } finally {
+            BulkBuild.beforeCommit = null;
+        }
+        final Run again = run(env(), "build", build());
+        assertEquals(2, again.code(), "a build that was started needs --resume: " + again.all());
+        final Run resumed = run(env(), "build", build("--resume"));
+        assertEquals(0, resumed.code(), resumed.all());
+        assertStoreHoldsExactlyTheDataset(true);
+    }
+
+    /** Every cell of a table, under the dataset's labels, as text; with or without its timestamp. */
+    private Set<String> cells(final String table, final boolean timestamps) {
+        final Set<String> out = new HashSet<>();
+        try (CellScanner cells = getStore().scan(table, KeyRange.all(), ScanSpec.of(Auths.of(AUTHS)))) {
+            while (cells.hasNext()) {
+                final Cell c = cells.next();
+                out.add(cell(c.row(), c.family(), c.qualifier(), c.visibility()) + (timestamps ? " @" + c.timestamp() : "") + " = "
+                        + java.util.HexFormat.of().formatHex(c.value()));
+            }
+        }
+        return out;
     }
 
     private static String cell(final byte[] row, final byte[] cf, final byte[] cq, final byte[] cv) {

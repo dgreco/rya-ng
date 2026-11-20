@@ -37,6 +37,14 @@ public interface Store extends AutoCloseable {
     /** Creating, listing and deleting tables. */
     TableAdmin tables();
 
+    /**
+     * The backend's import of sorted files (the bulk build, SCALE-STUDY.md O3), or empty when it
+     * has none.
+     */
+    default java.util.Optional<BulkImport> bulk() {
+        return java.util.Optional.empty();
+    }
+
     /** The account and its labels. */
     StoreAccess access();
 

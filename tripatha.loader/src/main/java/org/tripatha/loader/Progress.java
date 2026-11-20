@@ -50,6 +50,8 @@ public final class Progress {
     /** Written blocks above the watermark. */
     private final TreeSet<Long> above;
     private long committedTriples;
+    /** Files the blocks were written to (the bulk build's spills), saved with them so both change at once. */
+    private java.util.List<String> files = java.util.List.of();
 
     private Progress(final Path file, final String fingerprint, final long blocks, final long watermark,
             final TreeSet<Long> above, final long committedTriples) {
@@ -110,12 +112,30 @@ public final class Progress {
                 rest.add(Long.parseLong(b.trim()));
             }
         }
-        return new Progress(file, fingerprint, blocks, Long.parseLong(props.getProperty("watermark", "0")), rest,
+        final Progress p = new Progress(file, fingerprint, blocks, Long.parseLong(props.getProperty("watermark", "0")), rest,
                 Long.parseLong(props.getProperty("committedTriples", "0")));
+        final String files = props.getProperty("files", "");
+        p.files = files.isEmpty() ? java.util.List.of() : java.util.List.of(files.split("\n"));
+        return p;
     }
 
     public synchronized boolean isCommitted(final long block) {
         return block < watermark || above.contains(block);
+    }
+
+    /**
+     * Marks blocks as safely written and saves, with the files that now hold every committed block
+     * (replacing the earlier list): a block and the file holding it are recorded in one write.
+     */
+    public synchronized void commit(final Collection<Long> done, final long triples, final java.util.List<String> nowFiles)
+            throws IOException {
+        files = java.util.List.copyOf(nowFiles);
+        commit(done, triples);
+    }
+
+    /** The files saved with the committed blocks; empty for a load. */
+    public synchronized java.util.List<String> files() {
+        return files;
     }
 
     /** Marks blocks as safely written (their writer was flushed) and saves. */
@@ -172,6 +192,9 @@ public final class Progress {
         props.setProperty("above", rest.toString());
         props.setProperty("committedBlocks", Long.toString(watermark + above.size()));
         props.setProperty("committedTriples", Long.toString(committedTriples));
+        if (!files.isEmpty()) {
+            props.setProperty("files", String.join("\n", files));
+        }
         final Path dir = file.toAbsolutePath().getParent();
         if (dir != null) {
             Files.createDirectories(dir);

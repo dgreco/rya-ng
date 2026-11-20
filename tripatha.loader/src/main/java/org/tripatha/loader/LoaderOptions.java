@@ -42,7 +42,8 @@ import org.tripatha.loader.gen.GenConfig;
 public final class LoaderOptions {
 
     public enum Command {
-        PREPARE("prepare"), LOAD("load"), DRY_RUN("dry-run"), VERIFY("verify"), DROP("drop"), CHECK("check"), LABELS("labels");
+        PREPARE("prepare"), LOAD("load"), BUILD("build"), DRY_RUN("dry-run"), VERIFY("verify"), DROP("drop"), CHECK("check"),
+        LABELS("labels");
 
         private final String word;
 
@@ -75,6 +76,7 @@ public final class LoaderOptions {
             "link-skew", "word-skew", "class-weights", "rdf12-fraction", "base-iri", "part", "parts", "threads", "block-size",
             "commit-interval", "batch-memory-mb", "writer-threads", "max-latency", "writer-timeout", "durability",
             "max-rate", "report-interval", "progress-file", "splits", "tablet-size", "compression", "print", "link-mbps",
+            "work-dir", "spill-memory-mb", "phase",
             "counter-sample", "sample", "auths", "confirm");
     /** Options that change the generated data: repeated in the commands printed by prepare. */
     private static final List<String> GENERATION = List.of("seed", "timestamp", "graphs", "default-graph-fraction", "labels",
@@ -592,6 +594,33 @@ public final class LoaderOptions {
         return flag("resume");
     }
 
+    /** The bulk build's work directory: its sorted runs, files and progress (default tripatha-build-PREFIX). */
+    public String workDir() {
+        return values.getOrDefault("work-dir", "tripatha-build-" + tablePrefix());
+    }
+
+    /** The memory a build process gives the cells it holds before spilling them, all threads together. */
+    public long spillMemoryBytes() {
+        return longValue("spill-memory-mb", 1024) << 20;
+    }
+
+    /** The bulk build's phases to run ({@code --phase sort,merge,import}, all by default). */
+    public java.util.Set<BulkBuild.Phase> phases() {
+        final String v = values.getOrDefault("phase", "all");
+        if (v.equals("all")) {
+            return java.util.EnumSet.allOf(BulkBuild.Phase.class);
+        }
+        final java.util.Set<BulkBuild.Phase> phases = java.util.EnumSet.noneOf(BulkBuild.Phase.class);
+        for (final String p : v.split(",")) {
+            try {
+                phases.add(BulkBuild.Phase.valueOf(p.trim().toUpperCase(Locale.ROOT)));
+            } catch (final IllegalArgumentException e) {
+                throw new IllegalArgumentException("--phase takes all or sort, merge, import (got '" + p + "')");
+            }
+        }
+        return phases;
+    }
+
     /**
      * Splits per table for prepare: -1 for automatic, each table's estimated size on disk over
      * {@link #tabletSize()}, and at least 4 per tablet server, minus one.
@@ -785,6 +814,8 @@ public final class LoaderOptions {
                   dry-run   generate without a cluster: speed, bytes per triple, network ceiling, storage estimate
                   prepare   once per dataset: create the tables, pre-split them, write the ontology and reference data
                   load      write the dataset (or this process's part of it); resumable with --resume
+                  build     write it as sorted files and import them, bypassing the write path (Accumulo, RocksDB);
+                            resumable with --resume
                   verify    regenerate a sample of entities and compare them with the store
                   drop      delete every table of the prefix (needs --confirm <prefix>)
                   check     connect and report the backend, its servers and the account's rights
@@ -831,6 +862,8 @@ public final class LoaderOptions {
                   --max-latency 5s  --writer-timeout 15m  --durability default|sync|flush|log|none  --max-rate N
                   --report-interval 10s  --progress-file F  --resume
 
+                Build:   --work-dir DIR (default tripatha-build-PREFIX)  --spill-memory-mb 1024 (all threads)
+                         --phase all|sort,merge,import  and the load options --threads, --block-size, --part/--parts
                 Prepare: --splits auto|N  (auto: each table's estimated size over --tablet-size, at least
                            4 per server)  --tablet-size 10G (also the tables' split threshold)  --compression 7
                            --grant-auths (give the account the --labels; on HBase as the labels command)
