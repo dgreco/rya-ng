@@ -37,6 +37,10 @@
         </dependency>
         <dependency>
             <groupId>org.tripatha</groupId>
+            <artifactId>tripatha.hbase.bulk</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.tripatha</groupId>
             <artifactId>tripatha.rocksdb</artifactId>
         </dependency>
         <dependency>

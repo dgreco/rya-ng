@@ -91,6 +91,7 @@ The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.ja
 | `tripatha.accumulo` | The Accumulo backend |
 | `tripatha.hbase` | The HBase backend |
 | `tripatha.hbase.coprocessor` | The region observer for HBase's counter table, installed on the region servers |
+| `tripatha.hbase.bulk` | HBase's files for the loader's bulk build: HFiles with visibility tags, bulk-loaded (needs hbase-server, so only the loader depends on it) |
 | `tripatha.accumulo.iterators` | Server-side iterators for Accumulo's tablet servers: the entity index's intersection (optional) |
 | `tripatha.rocksdb` | The RocksDB backend: a store in a local directory, without a cluster |
 | `tripatha.sail` | RDF4J Sail (`RdfCloudTripleStore`), query planning, inference, and `RyaSailFactory` |
@@ -500,7 +501,7 @@ $R dry-run --triples 1B --text-index --geo-index           # no cluster: speed, 
 $R prepare $C --table-prefix big_ --triples 1B --text-index --geo-index
 $R load    $C <the dataset options prepare printed> --threads 8
 $R load    $C <same options> --resume                       # after Ctrl-C or a failure
-$R build   $C <the dataset options prepare printed> --threads 8 --work-dir /data/build   # or: files imported (Accumulo, RocksDB)
+$R build   $C <the dataset options prepare printed> --threads 8 --work-dir /data/build   # or: files imported
 $R verify  $C <same options> --sample 1000
 $R drop    $C --table-prefix big_ --confirm big_
 ```
@@ -524,16 +525,21 @@ $R drop    $C --table-prefix big_ --confirm big_
   `load` refuses a store prepared for another dataset or with other index settings.
 - **Parallelism:** `--threads` writers per process. `--part K --parts N` divides the entities between processes, on one or more machines.
 - **Resuming:** progress is saved after each flush (every `--commit-interval`), and `--resume` continues from there. After a crash with `--durability` below `sync`, run `verify`.
-- **`build` instead of `load` (Accumulo and RocksDB; HBase later):** the same cells, written as sorted files in the store's own format and imported, bypassing the write path.
+- **`build` instead of `load`:** the same cells, written as sorted files in the store's own format and imported, bypassing the write path.
   - **Phases:** it sorts the dataset into runs in `--work-dir`, merges them into one file per table and tablet, then imports them. `--phase sort|merge|import` runs one, and `--resume` continues after a failure.
   - **Counters:** it leaves out every counter total of 1 except `p`'s (with `--stats-ones skip`), so the built `eval` table is much smaller. The datatype markers stay.
   - **Speed:** at 10M triples with every index:
     - RocksDB: 64 s against `load`'s 96 s. The store comes out compacted: 2.7 GB against 8.0 GB before `load`'s compaction.
     - The Accumulo test cluster: 70 s against 906 s. Its counter table is 26 MB instead of 251 MB.
+    - The HBase test cluster, at 3M triples: 31 s against 45 s. Its write path runs in-process, so it gains least there.
   - **Accumulo:** files are RFiles imported with a load plan, one per tablet.
     - The account needs the bulk-import permission on the tables.
     - The tablet servers must read the work directory. It is a local path today (the build's progress files are local), so use one they can read too: the same machine, or a mounted shared file system. HDFS work directories come with the first cluster run.
     - With `--part K --parts N`, the parts share the sort and the merge; one process then runs `--phase import`.
+  - **HBase:** HFiles whose visibility tags hold the labels' ordinals, bulk-loaded as the loading account.
+    - **Ordinals:** HBase shows them to superusers only, so the `labels` command records each one in its label's canary. Labels registered before that need `labels` run once more before a build.
+    - **Labels held:** the loading account must hold every label of the data.
+    - **Counter mode:** the build needs the coprocessor mode, the default. In increment mode it refuses, because an imported counter would replace the store's instead of adding to it: use `load` there.
   - **Space:** the work directory needs about 160 bytes per triple, compressed, until the import. `--spill-memory-mb` (1024, all threads together) is the memory for cells waiting to be sorted.
   - The progress file holds a watermark and the few blocks done above it, so it stays a few bytes at any size; 1T in one process is about 134 million blocks.
   - A file written by an earlier loader is read and rewritten in this form, which earlier loaders refuse rather than starting over (that would add the done blocks' counters twice).

@@ -44,6 +44,12 @@ import org.tripatha.store.spi.BulkImport;
  * The import moves the files into the table, so a file that is gone was imported.
  */
 final class AccumuloBulkImport implements BulkImport {
+    /**
+     * The key size Accumulo's default constraint allows ({@code DefaultKeySizeConstraint}, 1 MB):
+     * an imported file skips the table's constraints (R11), so the writer checks it.
+     */
+    static final int MAX_KEY_BYTES = 1 << 20;
+
     private final AccumuloClient client;
 
     AccumuloBulkImport(final AccumuloClient client) {
@@ -135,6 +141,10 @@ final class AccumuloBulkImport implements BulkImport {
         }
 
         private void append(final byte[] row, final Key key, final Value value) {
+            if (key.getSize() > MAX_KEY_BYTES) {
+                throw new RyaDAOException("A key of " + key.getSize() + " bytes: Accumulo's key size constraint allows "
+                        + MAX_KEY_BYTES);
+            }
             try {
                 writer.append(key, value);
             } catch (final IOException | IllegalArgumentException e) {

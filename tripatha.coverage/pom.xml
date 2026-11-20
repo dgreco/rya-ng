@@ -59,6 +59,10 @@
             <artifactId>tripatha.hbase.coprocessor</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.tripatha</groupId>
+            <artifactId>tripatha.hbase.bulk</artifactId>
+        </dependency>
+        <dependency>
             <!-- its own tests are the store-level integration tests, which cover tripatha.store -->
             <groupId>org.tripatha</groupId>
             <artifactId>tripatha.test</artifactId>

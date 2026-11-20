@@ -41,6 +41,12 @@ under the License.
             <artifactId>tripatha.hbase</artifactId>
         </dependency>
         <dependency>
+            <!-- HBase's bulk import, for the store ITs of the bulk build -->
+            <groupId>org.tripatha</groupId>
+            <artifactId>tripatha.hbase.bulk</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.tripatha</groupId>
             <artifactId>tripatha.rocksdb</artifactId>
         </dependency>

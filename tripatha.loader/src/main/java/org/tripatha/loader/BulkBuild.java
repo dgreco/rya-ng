@@ -138,11 +138,21 @@ public final class BulkBuild {
         return tables;
     }
 
-    /** The build's own settings, written once: the timestamp of its imported counters (HBase needs one per import). */
+    /**
+     * The build's own settings, written once: which build the work directory belongs to, and the
+     * timestamp of its imported counters (HBase's coprocessor mode needs one per build: a second
+     * build reusing it would write counter cells that collapse into the first one's).
+     */
     private Properties buildProperties() throws IOException {
         final Path file = work.resolve("build.properties");
         final Properties p = load(file);
+        final String build = o.genConfig().fingerprint() + "|" + o.tablePrefix() + "|" + o.parts();
+        if (p.getProperty("build") != null && !p.getProperty("build").equals(build)) {
+            throw new StoreCheck.Mismatch("the work directory " + work.toAbsolutePath() + " belongs to another build (another "
+                    + "dataset, prefix or number of parts): give this one a directory of its own, or delete that one");
+        }
         if (p.getProperty("importTime") == null) {
+            p.setProperty("build", build);
             p.setProperty("importTime", Long.toString(System.currentTimeMillis()));
             save(file, p);
         }

@@ -148,6 +148,8 @@ public final class HBaseStore implements Store {
     private final Connection connection;
     private final boolean ownsConnection;
     private final String user;
+    /** The connection's user; null for the process's own. */
+    private final User hbaseUser;
     private final boolean labels;
     private final Options options;
     private final Capabilities capabilities;
@@ -162,6 +164,7 @@ public final class HBaseStore implements Store {
         this.connection = connection;
         this.ownsConnection = ownsConnection;
         this.options = options;
+        this.hbaseUser = user;
         try {
             this.user = (user != null ? user : UserProvider.instantiate(connection.getConfiguration()).getCurrent()).getShortName();
             try (Admin admin = connection.getAdmin()) {
@@ -196,6 +199,25 @@ public final class HBaseStore implements Store {
     /** A store on a connection the caller owns, with these settings. */
     public static HBaseStore wrap(final Connection connection, final User user, final Options options) {
         return new HBaseStore(connection, false, user, options);
+    }
+
+    /**
+     * The bulk build's import (SCALE-STUDY.md O10), from {@code tripatha.hbase.bulk} when it is on
+     * the classpath: it needs hbase-server, which this module leaves out.
+     */
+    @Override
+    public java.util.Optional<org.tripatha.store.spi.BulkImport> bulk() {
+        return java.util.ServiceLoader.load(HBaseBulkImportProvider.class).findFirst().map(p -> p.create(this));
+    }
+
+    /** The connection's user, null for the process's own: work done for this store outside its connection runs as it. */
+    User hbaseUser() {
+        return hbaseUser;
+    }
+
+    /** The label canary table. */
+    String labelsTable() {
+        return options.labelsTable();
     }
 
     /** A store that closes its connection when it is closed. */

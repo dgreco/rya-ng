@@ -144,7 +144,9 @@ public final class HBaseLabels {
 
     /**
      * Writes one canary cell per label into {@code table}, creating it if needed. The account must
-     * hold, or be able to write, every label.
+     * hold, or be able to write, every label, and read {@code hbase:labels} (a superuser): each
+     * canary holds its label's ordinal, which HBase keeps from everyone else, and which the bulk
+     * build needs to write a cell's visibility tag ({@link #ordinals}).
      */
     public static void writeCanaries(final Connection connection, final String table, final Collection<String> labels) {
         final TableName name = TableName.valueOf(table);
@@ -158,11 +160,17 @@ public final class HBaseLabels {
                     // created meanwhile
                 }
             }
+            final java.util.Map<String, Integer> registered = registeredOrdinals(connection);
             final List<Put> puts = new ArrayList<>();
             for (final String label : labels) {
+                final Integer ordinal = registered.get(label);
+                if (ordinal == null) {
+                    throw new IllegalStateException("label " + label + " isn't registered in hbase:labels");
+                }
                 final byte[] expression = VisibilityExpression.quoteIfNeeded(label).getBytes(StandardCharsets.UTF_8);
                 final Put put = new Put(HBaseCodec.row(label.getBytes(StandardCharsets.UTF_8)))
-                        .addColumn(HBaseCodec.FAMILY, HBaseCodec.qualifier(CANARY, EMPTY, expression), EMPTY);
+                        .addColumn(HBaseCodec.FAMILY, HBaseCodec.qualifier(CANARY, EMPTY, expression),
+                                org.apache.hadoop.hbase.util.Bytes.toBytes(ordinal));
                 put.setCellVisibility(new CellVisibility(VisibilityExpression.parse(expression).toHBase()));
                 puts.add(put);
             }
@@ -172,6 +180,62 @@ public final class HBaseLabels {
         } catch (final IOException e) {
             throw new RyaDAOException(e);
         }
+    }
+
+    /** Every registered label and its ordinal, as hbase:labels holds them; only a superuser sees them all. */
+    private static java.util.Map<String, Integer> registeredOrdinals(final Connection connection) throws IOException {
+        final java.util.Map<String, Integer> out = new java.util.HashMap<>();
+        try (Table t = connection.getTable(org.apache.hadoop.hbase.security.visibility.VisibilityConstants.LABELS_TABLE_NAME);
+                org.apache.hadoop.hbase.client.ResultScanner rows = t.getScanner(new org.apache.hadoop.hbase.client.Scan()
+                        .addColumn(org.apache.hadoop.hbase.security.visibility.VisibilityConstants.LABELS_TABLE_FAMILY,
+                                org.apache.hadoop.hbase.security.visibility.VisibilityConstants.LABEL_QUALIFIER))) {
+            for (final org.apache.hadoop.hbase.client.Result r : rows) {
+                final byte[] label = r.getValue(org.apache.hadoop.hbase.security.visibility.VisibilityConstants.LABELS_TABLE_FAMILY,
+                        org.apache.hadoop.hbase.security.visibility.VisibilityConstants.LABEL_QUALIFIER);
+                if (label != null) {
+                    out.put(new String(label, StandardCharsets.UTF_8), org.apache.hadoop.hbase.util.Bytes.toInt(r.getRow()));
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The ordinals of {@code labels}, read from their canaries as the store's own account: it sees
+     * the canary of each label it holds, so a label's ordinal is revealed only to its holders. The
+     * bulk build writes visibility tags of ordinals with them (SCALE-STUDY.md O10, R10).
+     *
+     * @throws IllegalStateException naming the labels without an ordinal: not held by the account,
+     *         or not registered through Tripatha's labels command since canaries hold ordinals
+     */
+    public static java.util.Map<String, Integer> ordinals(final HBaseStore store, final Collection<String> labels) {
+        final java.util.Map<String, Integer> out = new java.util.HashMap<>();
+        final List<String> missing = new ArrayList<>();
+        for (final String label : labels) {
+            Integer ordinal = null;
+            if (store.tables().exists(store.labelsTable())) {
+                try (CellScanner cells = store.scan(store.labelsTable(), KeyRange.row(label.getBytes(StandardCharsets.UTF_8)),
+                        ScanSpec.of(Auths.of(label)))) {
+                    while (cells.hasNext()) {
+                        final Cell c = cells.next();
+                        if (c.visibility().length > 0 && c.value().length == Integer.BYTES) {
+                            ordinal = org.apache.hadoop.hbase.util.Bytes.toInt(c.value());
+                        }
+                    }
+                }
+            }
+            if (ordinal == null) {
+                missing.add(label);
+            } else {
+                out.put(label, ordinal);
+            }
+        }
+        if (!missing.isEmpty()) {
+            throw new IllegalStateException("no ordinal for the labels " + missing + " in " + store.labelsTable() + ": the account "
+                    + store.access().whoami() + " must hold them, and an HBase superuser must register them with Tripatha's labels "
+                    + "command (it records their ordinals, which HBase shows to superusers only)");
+        }
+        return out;
     }
 
     /**
