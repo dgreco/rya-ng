@@ -1345,7 +1345,12 @@ Names are counted over the whole query, every scope included: a name used in a s
 **The store counts** (`RyaQueryEngine.countBatch`, then `Store.countRanges`): the ranges and the spec a lookup would read, under its labels, graph, time range and row filters, with one number back per range. The ranges must not overlap.
 - **The SPI's default** batch-scans them and counts each cell in the range holding its row (`RangeCounts`). Nothing is decoded into statements, which is most of a lookup's cost (SCALE-STUDY.md 4.14), but every cell still reaches the client.
 - **RocksDB** counts with native iteration (`RocksCount`): it reads each key once, finds its graph and label from the key's end, and reads the value only when a time range needs the timestamp.
-- **Accumulo and HBase** don't count without reading yet, so their counted lookups are read with the others, as above; `countRanges`' default still serves a direct call. Counting in their servers, with an iterator and with the endpoint of [section 13.7](#137-the-entity-index-stars-shard-by-shard), is the next step: then one number per range crosses the network instead of every match.
+- **Accumulo counts in its tablet servers** (`RangeCountingIterator`, in the `tripatha.accumulo.iterators` jar): a batch scan of the ranges with the iterator above every other one, which returns one entry per range and tablet instead of its cells.
+  - **The entry is the range's last key**, valued its count. When a batch fills, a tablet server resumes from just after the last key it returned, and that key closes the range, so nothing is counted twice. Emitted at the first key, the rest of the range would be.
+  - **A range across tablets** gives one partial count per tablet. The client adds each count to the range holding its row (`RangeCounts.Locator`), which is why the ranges must not overlap: Accumulo's batch scanner would also merge overlapping ones.
+  - **When it can:** the store asks once per table whether the servers load the class (`Store.countsWithoutReading`), as it does for the intersecting iterator; without the jar the client counts.
+- **A window's count runs alongside its reads** (`BatchLookup.fetchAndCount`): on a lookup thread, under the query's trace, while the window's statements are read. One after the other, the count's extra round trip made a chain of two counted links 91 % slower on the Accumulo test cluster; at the same time it is within 1 %.
+- **HBase** doesn't count without reading yet, so its counted lookups are read with the others, as above. The endpoint of [section 13.7](#137-the-entity-index-stars-shard-by-shard) counting them is the next step.
 
 **Measured** (SCALE-STUDY.md 4.22, WatDiv C3-01 in-process on RocksDB): reading every row went from 536 to 337 ms, and reading and writing TSV from 556 to 283 ms. The 444,070 rows were the same.
 
@@ -1913,14 +1918,14 @@ The rule for all of them: an optimization must hold on all three backends, at 10
 
 This section lists them in one place, with what each does, where it runs, its gain as measured, and where it is explained in detail. [SCALE-STUDY.md](SCALE-STUDY.md) is the tracker: its section 2 numbers them (`O…`), and its section 4 holds the measurements.
 
-**Where it stands on WatDiv** (SCALE-STUDY.md 4.15: 100 queries of 20 templates at scale factor 100, on one machine; measured before O26, whose effect is in 4.22). p50, geometric means:
+**Where it stands on WatDiv** (SCALE-STUDY.md 4.22 and the README's [Benchmarks](README.md#benchmarks): 100 queries of 20 templates at scale factor 100, on one machine, 2026-11-20, with O26). p50, geometric means:
 
 | | Tripatha | QLever 0.6.0 | Oxigraph 0.5.13 |
 |---|---|---|---|
-| All 100 queries | **2.27 ms** | 9.49 ms | 3.63 ms |
-| Complex (C1 to C3) | 67.9 ms | **66.3 ms** | 375.9 ms |
-| Small (S, L, F) | **1.25 ms** | 6.73 ms | 1.60 ms |
-| Templates where it's the fastest | **11** | 2 | 7 |
+| All 100 queries | **2.6 ms** | 10.1 ms | 4.0 ms |
+| Complex (C1 to C3) | **56.1 ms** | 67.3 ms | 417.3 ms |
+| Small (S, L, F) | **1.49 ms** | 7.26 ms | 1.73 ms |
+| Templates where it's the fastest | **10** (2 tied) | 3 | 7 |
 
 ### 20.1 Joins: fewer round trips
 
@@ -1933,7 +1938,7 @@ A nested-loop join asks the store once per row; on a cluster each ask is a netwo
 | Entity prefetch | A chain of joins and OPTIONALs over one driver (an entity's attributes) fetched together, per window | one batch for the whole chain | [13.5](#135-entity-prefetch-a-chain-of-joins-at-once) |
 | More lookups in flight (O16) | A batch of disjoint lookups read on several threads (4 by default on RocksDB); the next window fetched while the current one is joined | WatDiv C3 −50 %, the complex queries 112.2 → 97.7 ms | SCALE-STUDY.md 4.14 |
 | Less work per looked-up row (O17) | A batch whose ranges can't overlap skips the cell check and the objects' re-encoding; rows decoded in one pass | WatDiv C3 −41 %, complex −24 %, all 100 −11 % | SCALE-STUDY.md 4.14 |
-| Counted patterns (O26) | A joined pattern whose object nothing else uses asks for a count per lookup, and repeats its row that many times: counted by the store where it counts without reading (RocksDB now), counted from the fetched lists elsewhere | WatDiv C3-01 in-process −37 to −49 % | [13.8](#138-counted-patterns-a-matchs-number-not-its-statements) |
+| Counted patterns (O26) | A joined pattern whose object nothing else uses asks for a count per lookup, and repeats its row that many times: counted by the store where it counts without reading (RocksDB in its process, Accumulo in its tablet servers), from the fetched lists on HBase for now | WatDiv C3-01 in-process −37 to −49 %; Accumulo `star-unused` 23 % fewer cells to the client | [13.8](#138-counted-patterns-a-matchs-number-not-its-statements) |
 | One range per subject (O21) | A subject's links read as one range | built, off by default: no gain on a warm cache | [13.4](#134-keeping-the-answers-identical) |
 
 ### 20.2 Reading only what the query needs
@@ -1986,11 +1991,11 @@ At 10^12 what must not happen is a client reading billions of cells to keep a fe
   - HBase's endpoint answers in pages: a 200M-posting shard never holds a call past its timeout.
   - It applies the caller's labels through the region's own `preScannerOpen`.
 - **Parallel by split:** merges and single large patterns are cut at `spo`'s split points, one thread per slice (O24, O7a).
-- **Counts instead of matches:** a star's `COUNT` (O23), and the lookups of a pattern whose object nothing else uses (O26). On Accumulo and HBase those lookups are still counted on the client: their server-side counts are the next step.
+- **Counts instead of matches:** a star's `COUNT` (O23), and the lookups of a pattern whose object nothing else uses (O26), counted in Accumulo's tablet servers by `RangeCountingIterator`: one cell per range comes back. On HBase those lookups are still counted on the client, until the endpoint counts them.
 
 ### 20.7 Still open
 
-- **Server-side counts for O26** on Accumulo (an iterator) and HBase (a method of the endpoint).
+- **Server-side counts for O26 on HBase,** a method of the endpoint (Accumulo's iterator is done).
 - **Whole-table operations in time proportional to what they change:** graph drops (O4), index rebuilds and purges (O5).
 - **Planning at scale:** text planning from per-term counts (O6), approximate counts from the counters (O8).
 - **Layout:** deprecating the hashed row prefix (O9); a dictionary encoding (O11), conditional on M5.
