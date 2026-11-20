@@ -31,6 +31,7 @@ import static org.tripatha.api.RdfCloudTripleStoreConstants.SUBJECT_CF;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -107,6 +108,32 @@ public class RyaStoreEvalStatsDAO implements RdfEvalStatsDAO<StoreRdfConfigurati
             throw new IllegalStateException("The statistics DAO is not initialized");
         }
         return graphSizes.sizes(conf != null ? conf : this.conf);
+    }
+
+    /**
+     * Approximate number of {@code rdf:type} statements of each class, from the counters; see
+     * {@link GraphSizes#classSizes}.
+     *
+     * @param classes the classes to count, or null for every class
+     */
+    public Map<String, Long> classSizes(final StoreRdfConfiguration conf, final Set<String> classes) {
+        if (graphSizes == null) {
+            throw new IllegalStateException("The statistics DAO is not initialized");
+        }
+        return graphSizes.classSizes(conf != null ? conf : this.conf, classes);
+    }
+
+    /**
+     * Approximate number of statements of each predicate, from the counters; see
+     * {@link GraphSizes#predicateSizes}.
+     *
+     * @param predicates the predicates to count, or null for every one
+     */
+    public Map<String, Long> predicateSizes(final StoreRdfConfiguration conf, final Set<String> predicates) {
+        if (graphSizes == null) {
+            throw new IllegalStateException("The statistics DAO is not initialized");
+        }
+        return graphSizes.predicateSizes(conf != null ? conf : this.conf, predicates);
     }
 
     public Store getStore() {

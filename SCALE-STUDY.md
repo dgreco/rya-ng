@@ -151,7 +151,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O6 | **Text planning from per-term posting counts** | R7 | an AND is driven by its rarest word | — | 5 | Not started |
 | O7a | **Parallel reads of one large range, constant object:** a star pattern on its own (`?x a :C`: alone, counted, or driving lookups) read as a merge of one list, its subjects in slices at `spo`'s split points (section 6.6) | R2 | every server holding the list reads at once, and the client decodes no statements | O24 | 1 | Done: `query.join.mergesingle` (10,000). A whole class returned is 2.8 times faster on RocksDB and 2.3 on Accumulo at 10M, 4.9 times on RocksDB at 100M; counted without the entity index, 2.1 to 4.3 times; with a lookup per member, 13 to 16 % on RocksDB and nothing on Accumulo, where the lookups are the time (section 4.12) |
 | O7b | **Parallel reads of one large range, variable object:** `?s :p ?o` (a whole predicate, such as a filter no index covers), cut at the table's own split points, statements decoded on the slice threads (section 6.6) | R2 | every server holding the range reads at once | — | 1 | Not started: later, when a workload needs it (decided 2026-11-19) |
-| O8 | **Approximate counts from the counters** (class sizes, like `stats:approxSize`) | R12 | a count in a few reads instead of a scan | — | 5 | Not started |
+| O8 | **Approximate counts from the counters** (class sizes, like `stats:approxSize`) | R12 | a count in a few reads instead of a scan | — | 5 | Done (2026-11-20, section 4.24): `stats:approxInstances` (a class's `rdf:type` statements) and `stats:approxTriples` (a predicate's statements) answered from the counters, with `stats:approxSize`, by `ApproxCountOptimizer`. A class's size: 0.4 ms and 1 cell against 12.4 ms and 53,432 cells counted (RocksDB 10M); 1.2 against 12.7 ms on Accumulo, 0.9 against 14.1 on HBase (3M) |
 | O9 | **Deprecate `tbl.hashprefix`** | R3 | removes a layout that costs 33 B per row and spreads nothing | D7 | 6 | Not started |
 | O10 | **HBase bulk build:** label ordinals in the files, counter timestamps per import | R4, R10 | as O3, on HBase | O3, M6 | 3 | Done (2026-11-20, section 4.20): `tripatha.hbase.bulk`, HFiles with tags of label ordinals (recorded in the canaries by `labels`), loaded as the store's user; coprocessor mode only, increment mode refused (decided 2026-11-20) |
 | O11 | **Dictionary encoding**, only if M5 says go (section 6.5) | R1 | to be measured | M5, D9 | later | Not started |
@@ -1237,7 +1237,35 @@ The first RocksDB run took 17.0 s: an index table created on RocksDB has no spli
 - `LoaderIT.aRebuildResumesAfterACrash` and `IndexRebuildTest` (the weighted split points).
 - All three on RocksDB, Accumulo and HBase in both counter modes: index tables hold no counters, so HBase's increment mode rebuilds too.
 
-**Next:** O8, approximate counts from the counters.
+**Next:** O8, approximate counts from the counters (section 4.24).
+
+## 4.24 Approximate counts from the counters (O8)
+
+**The problem (R12).** An exact count reads what it counts. Counted in the store, as `COUNT(*)` over a class now is (one-pattern counts, then O26's counts in the servers), a class of 53,000 members costs 12 ms; a class of billions at 10^12 costs a read of billions of keys, however parallel. The counters already hold the answer, approximately, as they do for graph sizes (`stats:approxSize`).
+
+**Two more predicates,** answered from the counters by `ApproxCountOptimizer` (the old `GraphSizeOptimizer`, which answers all three):
+- `?class stats:approxInstances ?n`: each class and its approximate number of `rdf:type` statements, from the all-graphs `po` counters of `rdf:type`;
+- `?predicate stats:approxTriples ?n`: each predicate and its approximate number of statements, from its all-graphs `p` counter.
+
+**How they read:**
+- **A constant subject** (`o:Sensor stats:approxInstances ?n`) reads its own counter row: one cell per label, plus HBase's not yet folded deltas.
+- **A variable one** reads every class (one scan of `rdf:type`'s counter rows) or every predicate (the predicate list graph sizes keep, then one row each).
+- **Labels:** under the query's labels, like every counter.
+- **No counters of 1 left out:** the `po` and `p` families keep them, so the only error is the drift every counter has (section 6.3: a re-inserted statement counts twice). No inference: a subclass's members aren't counted.
+
+**Measured** on the join benchmark, `count-class` (exact, counted in the store) against `approx-class` (the same class, from its counter):
+
+| Store | `count-class` | `approx-class` |
+|---|---|---|
+| RocksDB, 10M | 12.4 ms, 53,432 cells | 0.4 ms, 1 cell |
+| Accumulo test cluster, 3M | 12.7 ms, 16,030 cells | 1.2 ms, 1 cell |
+| HBase test cluster, 3M | 14.1 ms, 16,030 cells | 0.9 ms, 1 cell |
+
+The exact count grows with the class, the counter read doesn't: at 10^12 the gap is the size of the class.
+
+**Tests:** `ApproxCountIT` on every backend, both HBase counter modes. Every class's and predicate's approximate count equals the exact `COUNT` of the stored statements, with and without a label, and with a statement in two graphs. Constant subjects, `BIND`, `FILTER` and joins work as for any pattern, a delete counts down, and a store without statistics refuses with an explanation.
+
+**Next:** O6, text planning from per-term posting counts.
 
 ---
 
@@ -1256,7 +1284,7 @@ The first RocksDB run took 17.0 s: an index table created on RocksDB has no spli
 | R9 | A loader that runs at 1T | Present (O2); its rate is R4's | O2 |
 | R10 | Labels in HBase bulk files | Present (O10): tags of label ordinals, read from the canaries | O10 |
 | R11 | Bulk writes checked like online writes | Present: the DAO's checks run in the capture, HBase's codec and row limit and Accumulo's key size in the file writers | O3 |
-| R12 | Counts without reading the data | Partial (graph sizes only) | O8 |
+| R12 | Counts without reading the data | Yes, approximately: graph, class and predicate sizes from the counters (O8, 4.24) | O8 |
 
 ### 5.1 R1: terms stored compactly
 
@@ -1303,7 +1331,7 @@ M4 measures that rate: cells per second for one Scanner, and for one BatchScanne
 - `stats:approxSize` for graph sizes.
 
 **To add:**
-- **Approximate counts** for more shapes (O8);
+- **Approximate counts** for more shapes (O8: class and predicate sizes done, section 4.24);
 - **parallel reads of one large range** (O7a done for a class on its own; O7b, a whole predicate, to add);
 - **a separate engine** for real analytics (O12, D1 (b)).
 
@@ -1854,7 +1882,7 @@ Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, no
 
 7. ~~**O4**, graph drops per D8~~: closed, D8 (c) (2026-11-20): a drop keeps scanning the tables;
 8. **O5**, index rebuilds through the bulk build: a resumable loader job that reads `spo` by split range and imports the index's sorted files, while writes go on (decided 2026-11-20: rebuilds only, purge stays as it is). **Done** (2026-11-20, section 4.23);
-9. **O8**, approximate counts;
+9. **O8**, approximate counts. **Done** (2026-11-20, section 4.24);
 10. **O6**, text planning from posting counts.
 
 **Exit:**

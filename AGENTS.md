@@ -260,7 +260,10 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `build
 - **Inference nodes:** `RyaEvaluationStrategy.prepare(StatementPattern)` handles the two node types inference produces. `FixedStatementPattern` is matched from in-memory ontology statements; `TransitivePropertySP` goes through `InferenceEngine.findTransitiveProperty`.
 - **`InferenceEngine`:** loads the ontology into memory (`ValueGraph` for the subClassOf/subPropertyOf hierarchies) and reloads it on a timer. Ontology changes are invisible until the next `refreshGraph()`; tests call it explicitly.
 - **Wiring:** `RyaSailFactory` builds DAO + stats + inference + sail from a `Store` and a `StoreRdfConfiguration`. The caller owns the store.
-- **Graph sizes:** `GraphSizeOptimizer`, run just before inference, replaces `?g stats:approxSize ?n` patterns with a `FixedStatementPattern` built from `GraphSizes`.
+- **Approximate counts** (O8, SCALE-STUDY.md 4.24): `ApproxCountOptimizer`, run just before inference, replaces `?g stats:approxSize ?n`, `?c stats:approxInstances ?n` and `?p stats:approxTriples ?n` patterns with a `FixedStatementPattern` built from `GraphSizes`. A constant subject reads one counter row.
+  - **Class sizes** (`classSizes`): `rdf:type`'s all-graphs `po` counters, as stored (no inference).
+  - **Predicate sizes** (`predicateSizes`): the all-graphs `p` counters; a variable predicate uses the predicate list below.
+- **Graph sizes:**
   - `GraphSizes` sums each graph's eval `p` counters (qualifier = graph), for graphs that still have a marker.
   - It finds the predicates with a skip scan of `po` (one seek each) and keeps the list 5 minutes per set of auths.
   - Don't scan eval by column family instead: without a locality group that reads the whole table.

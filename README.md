@@ -469,7 +469,7 @@ try (StoreTrace.Scope scope = StoreTrace.start(event -> System.out.println(event
 
 Tracing costs nothing for requests that don't ask for it. `tripatha.sparql.allow-trace=false` turns it off on the endpoint.
 
-## Graph sizes
+## Approximate counts
 
 Counting the statements of each graph with `COUNT(*)` reads every statement, which takes minutes on a large store. The statistics answer the same question approximately, with a handful of reads:
 
@@ -480,6 +480,16 @@ ORDER BY DESC(?statements)
 ```
 
 - **What it returns:** one row per named graph with data the request may see, with its number of statements as an `xsd:long`. The default graph has no IRI, so it isn't listed. `stats:approxSize` combines with the rest of a query like any pattern.
+- **Classes and predicates** come from the same counters, with a handful of reads too:
+
+  ```sparql
+  PREFIX stats: <urn:tripatha:stats#>
+  SELECT ?class ?members WHERE { ?class stats:approxInstances ?members } ORDER BY DESC(?members)
+  SELECT ?statements WHERE { <http://example.org/Person> stats:approxInstances ?statements }
+  SELECT ?predicate ?statements WHERE { ?predicate stats:approxTriples ?statements }
+  ```
+
+  `stats:approxInstances` counts a class's `rdf:type` statements as stored, without inference. `stats:approxTriples` counts a predicate's statements. With the class or predicate given, a single counter is read, so the answer costs the same at any size.
 - **Requirements:** statistics, which are on by default (`tripatha.stats`).
 - **Approximate:**
   - a statement inserted twice counts twice;
