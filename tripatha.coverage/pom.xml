@@ -101,6 +101,10 @@
                             <dataFileIncludes>
                                 <dataFileInclude>target/*.exec</dataFileInclude>
                             </dataFileIncludes>
+                            <!-- protoc's output (tripatha.hbase.coprocessor/generate-protos.sh), not ours to test -->
+                            <excludes>
+                                <exclude>org/tripatha/hbase/coprocessor/protobuf/**</exclude>
+                            </excludes>
                             <formats>
                                 <format>HTML</format>
                                 <format>XML</format>

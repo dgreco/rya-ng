@@ -1,0 +1,67 @@
+// Copyright 2026 David Greco
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// The entity index's intersection in HBase's region servers (SCALE-STUDY.md O23, D14), served by
+// org.tripatha.hbase.coprocessor.IntersectionEndpoint. Regenerate the Java code with
+// tripatha.hbase.coprocessor/generate-protos.sh after changing this file.
+syntax = "proto2";
+
+package tripatha.hbase;
+
+option java_package = "org.tripatha.hbase.coprocessor.protobuf";
+option java_outer_classname = "IntersectionProtos";
+option java_generic_services = true;
+option optimize_for = SPEED;
+
+// One page of one shard row's intersection.
+message IntersectRequest {
+  // The row, as HBase stores it (HBaseCodec.row).
+  required bytes row = 1;
+  // Each term's column prefix (HBaseCodec.familyPrefix: the Tripatha family, then 00). A posting's
+  // subject is the rest of its column up to the first 01 or 00.
+  repeated bytes prefixes = 2;
+  // The scan's labels when set; unset, every label the caller holds. "No labels" is sent as
+  // Tripatha's reserved label, as on every other read.
+  optional bool labels_set = 3;
+  repeated string labels = 4;
+  // HBase's time range: from inclusive, to exclusive.
+  optional int64 from_timestamp = 5;
+  optional int64 to_timestamp = 6;
+  // Only subjects at or after this bound: the previous page's resume point.
+  optional bytes from_subject = 7;
+  // Count only: the response holds the totals, not the subjects.
+  optional bool count = 8;
+  // A page ends, between two subjects, after this many matches, or once this many cells have been
+  // read or this many milliseconds spent. Cells are read at most this many at a time: one after a
+  // seek, doubling while a list is read in order.
+  optional int32 max_matches = 9;
+  optional int64 max_cells = 10;
+  optional int32 max_millis = 11;
+  optional int32 batch = 12;
+}
+
+message IntersectResponse {
+  // The subjects found under every term, in order, and for each the product of its cells per term.
+  repeated bytes subjects = 1;
+  repeated int64 values = 2 [packed = true];
+  // Count only: how many subjects, and the sum of their values.
+  optional int64 subject_count = 3;
+  optional int64 row_count = 4;
+  // Set when the page ended before the row did: the next page's from_subject.
+  optional bytes resume = 5;
+}
+
+service EntityIntersection {
+  rpc intersect(IntersectRequest) returns (IntersectResponse);
+}

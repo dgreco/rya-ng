@@ -376,8 +376,8 @@ public class SubjectMergeIT extends RyaSailITBase {
                     rows(fromIndex, QUERIES.get(0));
                 }
                 assertTrue(reason[0] != null && reason[0].contains("entity index"), String.valueOf(reason[0]));
-                // The store intersects on Accumulo (in its servers) and RocksDB (native seeks); HBase not yet.
-                assertEquals(servers && !onBackend("hbase"), reason[0].contains("by the store"), reason[0]);
+                // The store intersects: in Accumulo's and HBase's servers, with RocksDB's native seeks.
+                assertEquals(servers, reason[0].contains("by the store"), reason[0]);
             }
         }
     }
@@ -424,7 +424,6 @@ public class SubjectMergeIT extends RyaSailITBase {
                 "SELECT (COUNT(*) AS ?c) WHERE { ?x <urn:q> ?o }",
                 "SELECT (COUNT(*) AS ?c) WHERE { <urn:s0> <urn:p> <urn:A> }",
                 "SELECT ?x (COUNT(*) AS ?c) WHERE { ?x a <urn:C> } GROUP BY ?x");
-        final boolean storeCounts = !onBackend("hbase");
         for (final boolean labelled : List.of(true, false)) {
             final SailRepository plain = indexed(labelled, 0, 1, false, false);
             // The shards counted on the query thread, or in groups on 3 threads.
@@ -434,14 +433,13 @@ public class SubjectMergeIT extends RyaSailITBase {
                 for (final String query : counted) {
                     assertEquals(rows(plain, query), rows(fromIndex, query), query + which);
                     final List<String> reasons = reasons(fromIndex, query);
-                    assertEquals(storeCounts, reasons.stream().anyMatch(r -> r.startsWith("count:")), query + which + ": " + reasons);
-                    assertEquals(!storeCounts, reasons.stream().anyMatch(r -> r.startsWith("merge join")),
-                            query + which + ": " + reasons);
+                    // Every backend counts in the store (HBase in its region servers since D14).
+                    assertTrue(reasons.stream().anyMatch(r -> r.startsWith("count:")), query + which + ": " + reasons);
+                    assertFalse(reasons.stream().anyMatch(r -> r.startsWith("merge join")), query + which + ": " + reasons);
                 }
                 for (final String query : onePattern) {
                     assertEquals(rows(plain, query), rows(fromIndex, query), query + which);
-                    assertEquals(storeCounts, reasons(fromIndex, query).stream().anyMatch(r -> r.startsWith("count:")),
-                            query + which);
+                    assertTrue(reasons(fromIndex, query).stream().anyMatch(r -> r.startsWith("count:")), query + which);
                 }
                 for (final String query : grouped) {
                     assertEquals(rows(plain, query), rows(fromIndex, query), query + which);

@@ -37,6 +37,11 @@ limitations under the License.
             <artifactId>hbase-client</artifactId>
         </dependency>
         <dependency>
+            <!-- The intersection endpoint's protocol (its generated classes); hbase-server stays out. -->
+            <groupId>org.tripatha</groupId>
+            <artifactId>tripatha.hbase.coprocessor</artifactId>
+        </dependency>
+        <dependency>
             <!-- Hadoop's client API and its relocated dependencies, shared with the Accumulo backend. -->
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-client-api</artifactId>

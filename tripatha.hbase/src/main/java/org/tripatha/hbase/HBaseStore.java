@@ -103,6 +103,12 @@ public final class HBaseStore implements Store {
     /** The region observer that sums counter deltas (module tripatha.hbase.coprocessor). */
     public static final String COUNTER_COPROCESSOR = "org.tripatha.hbase.coprocessor.CounterObserver";
 
+    /**
+     * The endpoint that intersects the entity index's shards in the region servers (module
+     * tripatha.hbase.coprocessor, SCALE-STUDY.md O23 and D14), attached to every index table.
+     */
+    public static final String INTERSECTION_ENDPOINT = "org.tripatha.hbase.coprocessor.IntersectionEndpoint";
+
     /** How counter deltas are written. */
     public enum CounterMode {
         /**
@@ -297,6 +303,84 @@ public final class HBaseStore implements Store {
         }
         return TracedScans.open("BatchScan", table, ranges, spec, describe(spec),
                 () -> new HBaseBatchScan(this, table, ranges, spec));
+    }
+
+    /** Whether each table's regions serve the intersection endpoint, asked once. */
+    private final java.util.Map<String, Boolean> intersecting = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Whether this table's region servers intersect: its regions answer the endpoint's call. Asked
+     * once per table, by calling it, so an account that can't read descriptors gets the same answer,
+     * and so does an endpoint loaded on every region ({@code hbase.coprocessor.region.classes}).
+     */
+    @Override
+    public boolean canIntersect(final String table) {
+        final Boolean known = intersecting.get(table);
+        if (known != null) {
+            return known;
+        }
+        if (!tables().exists(table)) {
+            return false; // asked again once it exists
+        }
+        return intersecting.computeIfAbsent(table, this::answersIntersections);
+    }
+
+    private boolean answersIntersections(final String table) {
+        final org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.IntersectRequest probe =
+                org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.IntersectRequest.newBuilder()
+                        .setRow(org.apache.hbase.thirdparty.com.google.protobuf.ByteString.copyFrom(HBaseCodec.row(new byte[0]))).build();
+        try {
+            connection.toAsyncConnection().getTable(name(table))
+                    .<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.EntityIntersection.Stub,
+                            org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.IntersectResponse>coprocessorService(
+                            org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.EntityIntersection::newStub,
+                            (stub, controller, done) -> stub.intersect(controller, probe, done), HBaseCodec.row(new byte[0]))
+                    .get(5, TimeUnit.MINUTES);
+            return true;
+        } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RyaDAOException(e);
+        } catch (final java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+            log.info("The region servers of {} don't intersect ({}): stars are intersected on the client. Put the "
+                    + "tripatha.hbase.coprocessor jar on every region server, and attach {} to the table: alter '{}', "
+                    + "METHOD => 'table_att', 'coprocessor' => '|{}|1073741823|'", table, String.valueOf(e.getCause()),
+                    INTERSECTION_ENDPOINT, table, INTERSECTION_ENDPOINT);
+            return false;
+        }
+    }
+
+    /** Each shard row asked of its region's endpoint, page after page ({@link HBaseIntersection}). */
+    @Override
+    public CellScanner intersect(final String table, final List<byte[]> rows, final List<byte[]> families, final ScanSpec spec) {
+        return intersecting(table, rows, families, spec, false);
+    }
+
+    /** The same calls, the endpoint counting each page: a count per page comes back. */
+    @Override
+    public org.tripatha.store.spi.IntersectionCount countIntersection(final String table, final List<byte[]> rows,
+            final List<byte[]> families, final ScanSpec spec) {
+        org.tripatha.store.spi.IntersectionCount total = org.tripatha.store.spi.IntersectionCount.NONE;
+        try (CellScanner cells = intersecting(table, rows, families, spec, true)) {
+            while (cells.hasNext()) {
+                final String[] parts = new String(cells.next().value(), java.nio.charset.StandardCharsets.US_ASCII).split(",");
+                total = total.plus(new org.tripatha.store.spi.IntersectionCount(Long.parseLong(parts[0]), Long.parseLong(parts[1])));
+            }
+        }
+        return total;
+    }
+
+    private CellScanner intersecting(final String table, final List<byte[]> rows, final List<byte[]> families, final ScanSpec spec,
+            final boolean count) {
+        checkSpec(spec);
+        final List<KeyRange> ranges = new ArrayList<>(rows.size());
+        for (final byte[] row : rows) {
+            ranges.add(KeyRange.row(row));
+        }
+        final List<String> filters = new ArrayList<>(describe(spec));
+        filters.add(0, "IntersectionEndpoint" + (count ? " count" : "") + " terms=" + families.size());
+        return TracedScans.open("Intersect", table, ranges, spec, filters,
+                () -> new HBaseIntersection(connection.toAsyncConnection().getTable(name(table)), connection.getConfiguration(), rows,
+                        families, authorizations(spec.auths()), spec, count));
     }
 
     @Override
@@ -652,14 +736,26 @@ public final class HBaseStore implements Store {
                                 .setDataBlockEncoding(DataBlockEncoding.FAST_DIFF)
                                 .build());
                 if (summed) {
-                    final var cp = org.apache.hadoop.hbase.client.CoprocessorDescriptorBuilder.newBuilder(COUNTER_COPROCESSOR);
-                    if (options.coprocessorJar() != null) {
-                        cp.setJarPath(options.coprocessorJar());
-                    }
-                    descriptor.setCoprocessor(cp.build());
+                    descriptor.setCoprocessor(coprocessor(COUNTER_COPROCESSOR));
+                }
+                final boolean intersects = kind == TableKind.INDEX;
+                if (intersects) {
+                    descriptor.setCoprocessor(coprocessor(INTERSECTION_ENDPOINT));
                 }
                 try {
-                    admin.createTable(descriptor.build());
+                    try {
+                        admin.createTable(descriptor.build());
+                    } catch (final org.apache.hadoop.hbase.DoNotRetryIOException e) {
+                        if (!intersects || !String.valueOf(e.getMessage()).contains(INTERSECTION_ENDPOINT)) {
+                            throw e;
+                        }
+                        // A cluster without Tripatha's jar (increment counters): the index works without it.
+                        log.info("HBase can't load {} on {} ({}): its stars will be intersected on the client. Put the "
+                                + "tripatha.hbase.coprocessor jar on the region servers to intersect there.", INTERSECTION_ENDPOINT,
+                                table, e.getMessage());
+                        descriptor.removeCoprocessor(INTERSECTION_ENDPOINT);
+                        admin.createTable(descriptor.build());
+                    }
                 } catch (final org.apache.hadoop.hbase.DoNotRetryIOException e) {
                     if (summed && String.valueOf(e.getMessage()).contains(COUNTER_COPROCESSOR)) {
                         throw new RyaDAOException("HBase can't load Tripatha's counter coprocessor " + COUNTER_COPROCESSOR
@@ -678,6 +774,15 @@ public final class HBaseStore implements Store {
             } catch (final IOException e) {
                 throw new RyaDAOException(e);
             }
+        }
+
+        /** A coprocessor of Tripatha's jar: from the region servers' classpath, or the configured path. */
+        private org.apache.hadoop.hbase.client.CoprocessorDescriptor coprocessor(final String className) {
+            final var cp = org.apache.hadoop.hbase.client.CoprocessorDescriptorBuilder.newBuilder(className);
+            if (options.coprocessorJar() != null) {
+                cp.setJarPath(options.coprocessorJar());
+            }
+            return cp.build();
         }
 
         @Override
