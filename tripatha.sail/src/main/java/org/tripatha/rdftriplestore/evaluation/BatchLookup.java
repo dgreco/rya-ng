@@ -220,6 +220,75 @@ public final class BatchLookup {
         return counts;
     }
 
+    /** What {@link #fetchAndCount} got: the statements (null when over the limit) and the counts. */
+    public record Fetched(Map<LookupKey, List<Statement>> statements, Map<LookupKey, Long> counts) {
+    }
+
+    /**
+     * Fetches some lookups' statements and counts others' at the same time (SCALE-STUDY.md O26):
+     * the count runs on a lookup thread, under the query's trace, while this thread reads, so a
+     * window waits for the longer of the two instead of both. A store's count of its own is one
+     * more round trip, and on the Accumulo test cluster one after the other made a chain of two
+     * counted links 91 % slower. Both are done before this returns or throws.
+     */
+    public static <C extends RdfCloudTripleStoreConfiguration> Fetched fetchAndCount(final RyaDAO<C> dao, final C conf,
+            final Collection<LookupKey> keys, final Collection<LookupKey> counted, final long limit) {
+        if (counted.isEmpty()) {
+            return new Fetched(keys.isEmpty() ? Map.of() : fetch(dao, conf, keys, limit), Map.of());
+        }
+        if (keys.isEmpty()) {
+            return new Fetched(Map.of(), count(dao, conf, counted));
+        }
+        final Trace trace = StoreTrace.current();
+        final String why = trace == null ? "" : trace.reason();
+        final String reason = (why.isEmpty() ? "" : why + " › ") + "counted on a thread of its own";
+        final java.util.concurrent.FutureTask<Map<LookupKey, Long>> counting = new java.util.concurrent.FutureTask<>(() -> {
+            try (StoreTrace.Scope joined = StoreTrace.join(trace, reason)) {
+                return count(dao, conf, counted);
+            }
+        });
+        try {
+            LOOKUP_THREADS.execute(counting);
+        } catch (final RuntimeException e) {
+            counting.run(); // not started: count here
+        }
+        Map<LookupKey, List<Statement>> statements = null;
+        Throwable failed = null;
+        try {
+            statements = fetch(dao, conf, keys, limit);
+        } catch (final RuntimeException | Error e) {
+            failed = e;
+        }
+        Map<LookupKey, Long> counts = null;
+        boolean interrupted = false;
+        while (true) {
+            try {
+                counts = counting.get();
+                break;
+            } catch (final InterruptedException e) {
+                interrupted = true;
+            } catch (final java.util.concurrent.ExecutionException e) {
+                if (failed == null) {
+                    failed = e.getCause();
+                }
+                break;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        if (failed instanceof RuntimeException e) {
+            throw e;
+        }
+        if (failed instanceof Error e) {
+            throw e;
+        }
+        if (failed != null) {
+            throw new IllegalStateException(failed);
+        }
+        return new Fetched(statements, counts);
+    }
+
     /**
      * Counts patterns in {@code chunks} parts at once, the first on this thread, each under the
      * query's trace; every part is finished before this returns or throws.
