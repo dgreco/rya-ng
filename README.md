@@ -338,7 +338,7 @@ Instead of the connection arguments, `--tripatha.accumulo.client-properties` can
 | `tripatha.geo-index` | `false` | Keep the geospatial index |
 | `tripatha.entity-index` | `false` | Keep the entity index (`<prefix>entity`): every subject filed under its predicate and object in a fixed number of shards, so stars of constant patterns are intersected shard by shard, and their counts, or a class's size, are counted by the store. Raises the store's version to 1.2.0 |
 | `tripatha.entity-index-shards` | the store's | The entity index's shard count, fixed when it is built: about one per 200M triples of the expected size, 16 at least |
-| `tripatha.rebuild-indexes` | `false` | At startup, build indexes that don't cover the stored data yet |
+| `tripatha.rebuild-indexes` | `false` | At startup, build indexes that don't cover the stored data yet (for a large store, use the loader's `rebuild` instead) |
 | `tripatha.sparql.authorizations` | `[]` | The most a request may read with. The store account must hold all of them; on HBase the endpoint checks it at startup. |
 | `tripatha.sparql.default-visibility` | `""` | Visibility label written on inserted statements |
 | `tripatha.sparql.allow-request-visibility` | `false` | Let an update set its own label with `visibility=` |
@@ -584,7 +584,10 @@ Without an index, these filters still work: they check every candidate, so they 
 - The plan starts elsewhere and looks up each subject directly. That lookup is cheaper anyway.
 
 **Lifecycle:**
-- **Turning an index on for a store that already has data:** queries don't use the index until it is built. Build it by starting once with `tripatha.rebuild-indexes=true`. The build runs during startup and reads every statement, so the Accumulo user must hold every visibility label in the store.
+- **Turning an index on for a store that already has data:** queries don't use the index until it is built.
+  - **For a large store,** run the loader's `rebuild` with the endpoint's index options (`tripatha.loader/run.sh rebuild --table-prefix P --entity-index …`). It reads `spo` on parallel threads and processes, imports the index as sorted files, and resumes after a failure. The endpoint may keep writing meanwhile with the index on: deletes are recorded and replayed, graph drops are refused until the job is done, and queries start using the index on their own within a minute of it.
+  - **For a small one,** start once with `tripatha.rebuild-indexes=true`.
+  - **Either way** the build reads every statement with the account's labels, so it must hold every visibility label in the store.
 - **Turning an index off:** delete its table, or the store refuses to start. An index that stopped receiving writes would silently miss data.
 - **Changing the indexed predicates:** this also needs a rebuild.
 
