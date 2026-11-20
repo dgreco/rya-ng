@@ -57,6 +57,16 @@ public interface BulkImport {
         return Optional.empty();
     }
 
+    /**
+     * Whether a split point is the last row of the tablet before it, as in Accumulo, rather than
+     * the first row of the region after it (HBase; RocksDB's hints). A file the bulk build writes
+     * per tablet covers {@code (previous, point]} in the first case and {@code [previous, point)}
+     * in the second, so each falls in one tablet.
+     */
+    default boolean splitPointEndsTablet() {
+        return false;
+    }
+
     /** One file being written, in key order. */
     interface BulkFile extends AutoCloseable {
         /** A cell of a statement, index or metadata table. */

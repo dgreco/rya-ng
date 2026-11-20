@@ -94,7 +94,13 @@ public final class Spills {
      * @param counters whether the files hold counter deltas (an eval table's) rather than puts
      */
     public Reader read(final List<String> files, final byte[] from, final byte[] to, final boolean counters) {
-        return new Reader(files, from, to, counters);
+        return new Reader(files, from, true, to, false, counters);
+    }
+
+    /** As {@link #read(List, byte[], byte[], boolean)}, with the inclusivity of each bound given. */
+    public Reader read(final List<String> files, final byte[] from, final boolean fromInclusive, final byte[] to,
+            final boolean toInclusive, final boolean counters) {
+        return new Reader(files, from, fromInclusive, to, toInclusive, counters);
     }
 
     public void delete(final List<String> files) {
@@ -143,7 +149,8 @@ public final class Spills {
         private Map.Entry<Key, Value> lookahead;
         private Combined next;
 
-        private Reader(final List<String> files, final byte[] from, final byte[] to, final boolean counters) {
+        private Reader(final List<String> files, final byte[] from, final boolean fromInclusive, final byte[] to,
+                final boolean toInclusive, final boolean counters) {
             this.counters = counters;
             if (files.isEmpty()) {
                 this.scanner = null;
@@ -152,7 +159,8 @@ public final class Spills {
             }
             final String[] paths = files.stream().map(Spills.this::path).toArray(String[]::new);
             this.scanner = RFile.newScanner().from(paths).withFileSystem(fs).withoutSystemIterators().build();
-            scanner.setRange(new Range(from == null ? null : new Text(from), true, to == null ? null : new Text(to), false));
+            scanner.setRange(new Range(from == null ? null : new Text(from), fromInclusive, to == null ? null : new Text(to),
+                    toInclusive));
             this.entries = scanner.iterator();
             lookahead = entries.hasNext() ? entries.next() : null;
         }
