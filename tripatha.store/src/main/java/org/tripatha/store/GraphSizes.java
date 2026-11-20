@@ -16,6 +16,7 @@
 package org.tripatha.store;
 
 import static org.tripatha.api.RdfCloudTripleStoreConstants.DELIM_BYTE;
+import static org.tripatha.api.RdfCloudTripleStoreConstants.PREDOBJECT_CF;
 import static org.tripatha.api.RdfCloudTripleStoreConstants.PRED_CF;
 import static org.tripatha.api.RdfCloudTripleStoreConstants.TYPE_DELIM_BYTE;
 
@@ -57,6 +58,10 @@ import org.tripatha.store.trace.StoreTrace;
  * The sizes are as approximate as the counters: re-inserting a statement counts it twice.
  * Only graphs with a visible marker in the graphs table are listed, so a dropped graph is left
  * out even though its counters remain, and only counters the reader may see are added up.
+ * <p>
+ * The same counters give the size of a class ({@link #classSizes}: its {@code rdf:type}
+ * statements, the all-graphs {@code po} counter) and of a predicate ({@link #predicateSizes}:
+ * the all-graphs {@code p} counter), SCALE-STUDY.md O8. Neither family leaves out counters of 1.
  */
 public final class GraphSizes {
     /** How long a list of predicates is reused before the po table is read again. */
@@ -71,8 +76,86 @@ public final class GraphSizes {
     /** Predicate lists, by the authorizations they were read with. */
     private final Map<Set<String>, Predicates> predicates = new ConcurrentHashMap<>();
 
+    /** {@code rdf:type}, whose {@code po} counters are the classes' sizes. */
+    private static final String RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    private static final byte[] EMPTY = new byte[0];
+
     public GraphSizes(final Store store) {
         this(store, System::currentTimeMillis);
+    }
+
+    /**
+     * Approximate number of {@code rdf:type} statements of each class, from the all-graphs
+     * {@code po} counters of {@code rdf:type}, as stored: no inference.
+     *
+     * @param conf the reader's configuration: its tables and authorizations
+     * @param classes the classes to count (one counter row each), or null for every class (one
+     *        scan of {@code rdf:type}'s counter rows, one per class)
+     * @return class IRI to approximate size, sorted; classes the reader sees no statement of are left out
+     */
+    public Map<String, Long> classSizes(final StoreRdfConfiguration conf, final Set<String> classes) {
+        final byte[] prefix = (RDF_TYPE + (char) DELIM_BYTE).getBytes(StandardCharsets.UTF_8);
+        final List<KeyRange> rows = new ArrayList<>();
+        if (classes == null) {
+            rows.add(KeyRange.prefix(prefix));
+        } else {
+            for (final String c : classes) {
+                final byte[] cls = c.getBytes(StandardCharsets.UTF_8);
+                final byte[] row = Arrays.copyOf(prefix, prefix.length + cls.length);
+                System.arraycopy(cls, 0, row, prefix.length, cls.length);
+                rows.add(KeyRange.row(row));
+            }
+        }
+        return counters(conf, rows, PREDOBJECT_CF, prefix.length, "approximate counts: class sizes from the rdf:type counters");
+    }
+
+    /**
+     * Approximate number of statements of each predicate, from its all-graphs {@code p} counter.
+     *
+     * @param conf the reader's configuration: its tables and authorizations
+     * @param predicates the predicates to count (one counter row each), or null for every one (the
+     *        predicates of {@code po}, listed one seek each and reused as for graph sizes)
+     * @return predicate IRI to approximate size, sorted; predicates the reader sees nothing of are left out
+     */
+    public Map<String, Long> predicateSizes(final StoreRdfConfiguration conf, final Set<String> predicates) {
+        final List<String> preds;
+        if (predicates != null) {
+            preds = new ArrayList<>(predicates);
+        } else {
+            if (conf.isPrefixRowsWithHash()) {
+                throw new UnsupportedOperationException("Listing the predicates needs the default table layout (tbl.hashprefix off)");
+            }
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "approximate counts: list the predicates (one seek each, unless cached)")) {
+                preds = predicates(conf.getTableLayoutStrategy().getPo(), conf.getStoreAuths());
+            }
+        }
+        final List<KeyRange> rows = new ArrayList<>(preds.size());
+        for (final String p : preds) {
+            rows.add(KeyRange.row(p.getBytes(StandardCharsets.UTF_8)));
+        }
+        return counters(conf, rows, PRED_CF, 0, "approximate counts: predicate sizes from the p counters");
+    }
+
+    /** The all-graphs counters of a family in these rows, added up per row (minus a prefix of {@code skip} bytes). */
+    private Map<String, Long> counters(final StoreRdfConfiguration conf, final List<KeyRange> rows, final String family,
+            final int skip, final String why) {
+        final Map<String, Long> sizes = new TreeMap<>();
+        if (rows.isEmpty()) {
+            return sizes;
+        }
+        final ScanSpec spec = ScanSpec.builder(conf.getStoreAuths()).column(family.getBytes(StandardCharsets.UTF_8), EMPTY)
+                .threads(THREADS).build();
+        try (StoreTrace.Reason reason = StoreTrace.reason(() -> why);
+                CellScanner scanner = store.batchScan(conf.getTableLayoutStrategy().getEval(), rows, spec)) {
+            while (scanner.hasNext()) {
+                final Cell c = scanner.next();
+                // HBase's coprocessor mode keeps a counter's deltas as cells until a compaction: add them all.
+                sizes.merge(new String(c.row(), skip, c.row().length - skip, StandardCharsets.UTF_8), store.counterValue(c.value()),
+                        Long::sum);
+            }
+        }
+        sizes.values().removeIf(n -> n <= 0);
+        return sizes;
     }
 
     GraphSizes(final Store store, final LongSupplier clock) {

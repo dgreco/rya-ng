@@ -72,7 +72,7 @@ import org.tripatha.rdftriplestore.evaluation.ValueRangeOptimizer;
 import org.tripatha.rdftriplestore.inference.InferenceEngine;
 import org.tripatha.rdftriplestore.inference.InferenceOptimizer;
 import org.tripatha.rdftriplestore.namespace.NamespaceManager;
-import org.tripatha.rdftriplestore.stats.GraphSizeOptimizer;
+import org.tripatha.rdftriplestore.stats.ApproxCountOptimizer;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.common.iteration.CloseableIteratorIteration;
 import org.eclipse.rdf4j.common.iteration.ConvertingIteration;
@@ -279,10 +279,25 @@ public class RdfCloudTripleStoreConnection<C extends RdfCloudTripleStoreConfigur
                         }
                     }
                 } : null;
-        // Graph sizes come from the counters, read with this query's authorizations.
-        final GraphSizeOptimizer graphSizes = new GraphSizeOptimizer(
+        // Approximate counts come from the counters, read with this query's authorizations.
+        final ApproxCountOptimizer graphSizes = new ApproxCountOptimizer(
                 rdfEvalStatsDAO instanceof RyaStoreEvalStatsDAO stats && queryConf instanceof StoreRdfConfiguration accumuloConf
-                        ? () -> stats.graphSizes(accumuloConf)
+                        ? new ApproxCountOptimizer.Counts() {
+                            @Override
+                            public Map<String, Long> graphs() {
+                                return stats.graphSizes(accumuloConf);
+                            }
+
+                            @Override
+                            public Map<String, Long> classes(final Set<String> only) {
+                                return stats.classSizes(accumuloConf, only);
+                            }
+
+                            @Override
+                            public Map<String, Long> predicates(final Set<String> only) {
+                                return stats.predicateSizes(accumuloConf, only);
+                            }
+                        }
                         : null);
         strategy.setOptimizerPipeline(new RyaQueryOptimizerPipeline(strategy, tripleSource, statistics,
                 new InferenceOptimizer(queryConf, inferenceEngine), indexes, queryConf, graphSizes, valueRangeStore));

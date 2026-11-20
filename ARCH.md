@@ -845,11 +845,28 @@ flowchart TD
 
 Scanning `eval` for family `p` directly would be simpler but much slower. A column-family restriction still reads the whole table unless the family has its own locality group, and `eval` holds about 50 bytes per statement.
 
-**How the query uses it.** `GraphSizeOptimizer` (`tripatha.sail`) runs just before the inference rewrite ([section 12.3](#123-the-optimizer-pipeline)). It replaces every pattern whose predicate is `stats:approxSize` with a `FixedStatementPattern` holding one statement per graph (`<graph> stats:approxSize "n"^^xsd:long`), the same in-memory node inference uses ([section 14.3](#143-example-rdfssubclassof)). The rest of the query, such as filters, joins, bound subjects and `ORDER BY`, works as for any pattern. The sizes are read only if the query contains such a pattern, and fail with an explanation when the store was opened without statistics.
+**How the query uses it.** `ApproxCountOptimizer` (`tripatha.sail`, which also answers the predicates of [section 11.5](#115-class-and-predicate-sizes)) runs just before the inference rewrite ([section 12.3](#123-the-optimizer-pipeline)). It replaces every pattern whose predicate is `stats:approxSize` with a `FixedStatementPattern` holding one statement per graph (`<graph> stats:approxSize "n"^^xsd:long`), the same in-memory node inference uses ([section 14.3](#143-example-rdfssubclassof)). The rest of the query, such as filters, joins, bound subjects and `ORDER BY`, works as for any pattern. The sizes are read only if the query contains such a pattern, and fail with an explanation when the store was opened without statistics.
 
 **Approximate**, like every counter: re-inserted statements and resumed load blocks count twice, and a new predicate shows up only after the predicate list is read again.
 
 ---
+
+### 11.5 Class and predicate sizes
+
+The same counters give two more sizes (SCALE-STUDY.md O8), answered by the same optimizer:
+
+```sparql
+PREFIX stats: <urn:tripatha:stats#>
+SELECT ?class ?members WHERE { ?class stats:approxInstances ?members } ORDER BY DESC(?members)
+SELECT ?predicate ?statements WHERE { ?predicate stats:approxTriples ?statements }
+```
+
+- **`stats:approxInstances`:** a class's `rdf:type` statements, its all-graphs `po` counter (row `rdf:type 00 class`, family `po`, empty qualifier). With the class constant, that one row is read; with a variable, one scan of `rdf:type`'s counter rows, one per class.
+- **`stats:approxTriples`:** a predicate's statements, its all-graphs `p` counter. With a variable, the predicates come from the list graph sizes keep (step 2 above).
+- **Counted as stored:** no inference, so a subclass's members aren't a class's. The `po` and `p` families never leave out counters of 1, so the counts drift only as every counter does ([section 11.3](#113-approximate-by-design)).
+- **Labels:** read under the query's labels, and HBase's unfolded deltas added up.
+
+A class's size costs one counter cell where `COUNT(*)` reads every member: on the join benchmark 0.4 against 12.4 ms on RocksDB at 10M.
 
 ## 12. The query path
 
@@ -921,7 +938,7 @@ flowchart TD
     o1["BindingAssigner<br/>BindingSetAssignmentInliner"] --> o2["★ TextQueryValidator<br/>rejects malformed constant text:matches queries"]
     o2 --> o3["ConstantOptimizer, RegexAsStringFunctionOptimizer,<br/>CompareOptimizer, ConjunctiveConstraintSplitter,<br/>DisjunctiveConstraintOptimizer, SameTermFilterOptimizer,<br/>UnionScopeChangeOptimizer, QueryModelNormalizer,<br/>ProjectionRemovalOptimizer"]
     o3 --> o3a["★ TripleTermOptimizer.fold<br/>constant triple terms become values (section 12.7)"]
-    o3a --> o3b["★ GraphSizeOptimizer<br/>stats:approxSize patterns from the counters (section 11.4)"]
+    o3a --> o3b["★ ApproxCountOptimizer<br/>stats: patterns from the counters (sections 11.4, 11.5)"]
     o3b --> o4["★ InferenceOptimizer<br/>15 OWL/RDFS rewrites (section 14)"]
     o4 --> o5["★ IndexSearchOptimizer<br/>text and geo patterns (section 15)<br/>only when the store has indexes"]
     o5 --> o5b["★ ValueRangeOptimizer<br/>comparisons narrow patterns to value ranges (section 12.9)"]
@@ -1977,6 +1994,7 @@ A nested-loop join asks the store once per row; on a cluster each ask is a netwo
 | `STRSTARTS` as a prefix range (O13) | The objects starting with the prefix are read, the filter kept | | [12.8](#128-strstarts-as-a-prefix-range) |
 | Comparisons as value ranges (O14, O25) | `?o > 60` reads only the matching values, one range per stored type, with a real estimate for the join order | range queries 5 to 36 times faster on Accumulo, `class-value` 26 times | [12.9](#129-comparisons-as-value-ranges) |
 | Text and geo indexes | Search filters read candidates from an index; the filter stays exact | | [15](#15-text-and-geo-search) |
+| Approximate counts (O8) | `stats:approxSize`, `stats:approxInstances` and `stats:approxTriples`: graph, class and predicate sizes from the counters, one counter row each | a class's size: 0.4 ms and 1 cell against 12.4 ms and 53,432 cells counted (RocksDB 10M); constant at any size | [11.4](#114-graph-sizes-from-the-counters), [11.5](#115-class-and-predicate-sizes), SCALE-STUDY.md 4.24 |
 
 ### 20.3 Stars: merged, then intersected in the servers
 
@@ -2023,7 +2041,7 @@ At 10^12 what must not happen is a client reading billions of cells to keep a fe
 ### 20.7 Still open
 
 - **Graph drops** still scan every table (D8 (c): O4 closed); index rebuilds are a batch job (O5, 20.5), and `purge` stays as it is.
-- **Planning at scale:** text planning from per-term counts (O6), approximate counts from the counters (O8).
+- **Planning at scale:** text planning from per-term counts (O6).
 - **Layout:** deprecating the hashed row prefix (O9); a dictionary encoding (O11), conditional on M5.
 - **Analytics** over the whole store, which need an engine of their own (O12).
 - **Cluster defaults:** Accumulo and HBase read a batch on one thread and don't fetch ahead until both are measured on a cluster (M3, M4).

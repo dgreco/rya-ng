@@ -29,7 +29,7 @@ import org.tripatha.api.RdfCloudTripleStoreConfiguration;
 import org.tripatha.rdftriplestore.evaluation.index.IndexSearchOptimizer;
 import org.tripatha.rdftriplestore.evaluation.index.TextQueryValidator;
 import org.tripatha.rdftriplestore.inference.InferenceOptimizer;
-import org.tripatha.rdftriplestore.stats.GraphSizeOptimizer;
+import org.tripatha.rdftriplestore.stats.ApproxCountOptimizer;
 import org.eclipse.rdf4j.query.algebra.evaluation.EvaluationStrategy;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryOptimizer;
 import org.eclipse.rdf4j.query.algebra.evaluation.QueryOptimizerPipeline;
@@ -52,7 +52,7 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
     private final EvaluationStatistics statistics;
     private final InferenceOptimizer inference;
     private final IndexSearchOptimizer indexSearch;
-    private final GraphSizeOptimizer graphSizes;
+    private final ApproxCountOptimizer graphSizes;
     private final RdfCloudTripleStoreConfiguration conf;
     private final ValueRangeOptimizer valueRanges;
 
@@ -73,12 +73,12 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
     }
 
     /**
-     * @param graphSizes answers {@code stats:approxSize} patterns from the statistics; null
+     * @param graphSizes answers the {@code stats:} patterns (graph, class and predicate sizes) from the statistics; null
      *        leaves them as ordinary patterns
      */
     public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
             final EvaluationStatistics statistics, final InferenceOptimizer inference, final IndexCatalog indexes,
-            final RdfCloudTripleStoreConfiguration conf, final GraphSizeOptimizer graphSizes) {
+            final RdfCloudTripleStoreConfiguration conf, final ApproxCountOptimizer graphSizes) {
         this(strategy, tripleSource, statistics, inference, indexes, conf, graphSizes, null);
     }
 
@@ -88,7 +88,7 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
      */
     public RyaQueryOptimizerPipeline(final EvaluationStrategy strategy, final TripleSource tripleSource,
             final EvaluationStatistics statistics, final InferenceOptimizer inference, final IndexCatalog indexes,
-            final RdfCloudTripleStoreConfiguration conf, final GraphSizeOptimizer graphSizes,
+            final RdfCloudTripleStoreConfiguration conf, final ApproxCountOptimizer graphSizes,
             final ValueRangeOptimizer.Store valueRangeStore) {
         this.valueRanges = valueRangeStore == null || conf == null ? null
                 : new ValueRangeOptimizer(conf, valueRangeStore, statistics);

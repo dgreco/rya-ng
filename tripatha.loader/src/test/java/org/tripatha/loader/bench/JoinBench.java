@@ -369,6 +369,9 @@ public final class JoinBench {
                 "SELECT ?g ?w WHERE { ?g geo:asWKT ?w FILTER(geof:sfWithin(?w, \"" + c.box + "\"^^geo:wktLiteral)) }"));
         q.add(new Query("count-class", "the size of a class, counted",
                 "SELECT (COUNT(*) AS ?n) WHERE { ?s a o:Sensor }"));
+        // O8: the same size, approximate, from the class's counter.
+        q.add(new Query("approx-class", "the size of a class, from the counters",
+                "SELECT ?n WHERE { o:Sensor <urn:tripatha:stats#approxInstances> ?n }"));
         // O7a: a class on its own, a long list read as a merge of one list.
         q.add(new Query("class-scan", "a whole class, its members returned",
                 "SELECT ?s WHERE { ?s a o:Sensor }"));

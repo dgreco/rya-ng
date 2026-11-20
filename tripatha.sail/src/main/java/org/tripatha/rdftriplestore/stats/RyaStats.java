@@ -15,6 +15,8 @@
  */
 package org.tripatha.rdftriplestore.stats;
 
+import java.util.Set;
+
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
 
@@ -27,6 +29,18 @@ public final class RyaStats {
      * of statements (an {@code xsd:long}), read from the statistics counters.
      */
     public static final IRI APPROX_SIZE = SimpleValueFactory.getInstance().createIRI(NAMESPACE, "approxSize");
+    /**
+     * {@code ?class stats:approxInstances ?n}: each class with {@code rdf:type} statements, and
+     * their approximate number (an {@code xsd:long}), read from the counters; no inference.
+     */
+    public static final IRI APPROX_INSTANCES = SimpleValueFactory.getInstance().createIRI(NAMESPACE, "approxInstances");
+    /**
+     * {@code ?predicate stats:approxTriples ?n}: each predicate with statements, and their
+     * approximate number (an {@code xsd:long}), read from the counters.
+     */
+    public static final IRI APPROX_TRIPLES = SimpleValueFactory.getInstance().createIRI(NAMESPACE, "approxTriples");
+    /** Every predicate answered from the counters. */
+    public static final Set<IRI> COUNTED = Set.of(APPROX_SIZE, APPROX_INSTANCES, APPROX_TRIPLES);
 
     private RyaStats() {
     }
