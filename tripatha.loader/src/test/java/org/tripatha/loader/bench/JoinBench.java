@@ -345,6 +345,11 @@ public final class JoinBench {
         q.add(new Query("chain", "two hops of incoming links, then attributes (batched joins)",
                 "SELECT ?r ?prod ?x ?n WHERE { ?prod o:manufacturer <" + c.popularManufacturer + "> . ?r o:reviewOf ?prod . "
                         + "?r o:rating ?x . ?prod rdfs:label ?n }"));
+        q.add(new Query("star-unused", "attributes whose values aren't returned: their lookups counted, not read (O26)",
+                "SELECT ?p ?n WHERE { ?p o:worksFor <" + c.popularEmployer + "> ; rdfs:label ?n ; o:knows ?f ; o:email ?e }"));
+        q.add(new Query("chain-unused", "chain, the rating's value not returned: its lookups counted (O26)",
+                "SELECT ?r ?prod WHERE { ?prod o:manufacturer <" + c.popularManufacturer + "> . ?r o:reviewOf ?prod . "
+                        + "?r o:rating ?x }"));
         q.add(new Query("chain-limit", "an unanchored two-hop join, first 10 rows only",
                 "SELECT ?a ?b ?org WHERE { ?a o:knows ?b . ?b o:worksFor ?org } LIMIT 10"));
         q.add(new Query("type-limit", "a class, two hops, first 100 rows only",

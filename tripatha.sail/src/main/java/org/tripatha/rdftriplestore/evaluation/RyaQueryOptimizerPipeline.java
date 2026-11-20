@@ -155,6 +155,8 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
             // The counts of a whole star, or of one pattern, done by the store too.
             optimizers.add(new SubjectMergeCountOptimizer(conf, untracked));
         }
+        // Lookups whose object nothing else uses ask for counts (SCALE-STUDY.md O26): on the final joins.
+        optimizers.add(new CountedPatternOptimizer(conf));
         return optimizers;
     }
 }

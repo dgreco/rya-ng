@@ -114,6 +114,26 @@ public interface Store extends AutoCloseable {
         return new IntersectionCount(subjects, matches);
     }
 
+    /**
+     * How many cells a scan of each range with this spec would return, without returning them
+     * (SCALE-STUDY.md O26): the cells its labels, families, columns, time range and row and
+     * qualifier filters show. The ranges must not overlap, and the counts come in their order.
+     * This default reads the ranges with one {@link #batchScan} and counts each cell in the range
+     * holding its row; a store that counts in its servers, or without decoding cells, overrides it.
+     */
+    default long[] countRanges(final String table, final List<KeyRange> ranges, final ScanSpec spec) {
+        return RangeCounts.byScanning(this, table, ranges, spec);
+    }
+
+    /**
+     * Whether {@link #countRanges} counts without sending the cells to the client: in the store's
+     * servers, or in its own process. When it doesn't, a count costs what a read does, and a caller
+     * that reads other ranges at the same time is better off reading these with them.
+     */
+    default boolean countsWithoutReading(final String table) {
+        return false;
+    }
+
     /** Releases what the store opened itself. A client supplied by the caller stays open. */
     @Override
     void close();

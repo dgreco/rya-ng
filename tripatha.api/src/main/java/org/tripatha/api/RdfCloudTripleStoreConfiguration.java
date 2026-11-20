@@ -56,6 +56,8 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
      * (their attributes) in one batch per window of driver rows, instead of one per join.
      */
     public static final String CONF_JOIN_ENTITY_PREFETCH = "query.join.entityprefetch";
+    /** Whether lookups of patterns whose object no other part of the query uses are counted, not read (SCALE-STUDY.md O26). */
+    public static final String CONF_JOIN_COUNT_UNUSED = "query.join.countunused";
     /**
      * Read a subject asked for by several lookups of one batch as one range (default false: on
      * the warm join benchmark it read 4 times the cells for no gain, SCALE-STUDY.md O21).
@@ -825,6 +827,18 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setJoinEntityPrefetch(final boolean enabled) {
         setBoolean(CONF_JOIN_ENTITY_PREFETCH, enabled);
+    }
+
+    /**
+     * @return whether the lookups of a pattern whose object no other part of the query uses are
+     *         counted by the store instead of read (SCALE-STUDY.md O26; default true)
+     */
+    public boolean isJoinCountUnused() {
+        return getBoolean(CONF_JOIN_COUNT_UNUSED, true);
+    }
+
+    public void setJoinCountUnused(final boolean enabled) {
+        setBoolean(CONF_JOIN_COUNT_UNUSED, enabled);
     }
 
     /** Whether a subject asked for by several lookups of one batch is read as one range. */

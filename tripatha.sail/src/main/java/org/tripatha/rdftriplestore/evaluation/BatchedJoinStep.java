@@ -91,6 +91,23 @@ final class BatchedJoinStep implements QueryEvaluationStep {
         return LookupKey.of((Resource) s, (IRI) p, o, (Resource) c);
     }
 
+    /**
+     * Adds the lookup a row will make for a pattern: to {@code counted} when the pattern's object
+     * is used nowhere else and the row can be counted ({@link CountedPattern}, SCALE-STUDY.md O26),
+     * else to {@code keys}.
+     */
+    static void addKey(final StatementPattern sp, final BindingSet row, final Set<LookupKey> keys, final Set<LookupKey> counted) {
+        final LookupKey count = sp instanceof CountedPattern ? CountedPattern.countKey(sp, row) : null;
+        if (count != null) {
+            counted.add(count);
+            return;
+        }
+        final LookupKey key = lookupFor(sp, row);
+        if (key != null) {
+            keys.add(key);
+        }
+    }
+
     private static Value value(final Var var, final BindingSet bindings) {
         return var == null ? null : DefaultEvaluationStrategy.getVarValue(var, bindings);
     }
@@ -126,16 +143,14 @@ final class BatchedJoinStep implements QueryEvaluationStep {
                 }
                 final List<BindingSet> rows = new ArrayList<>(window);
                 final Set<LookupKey> keys = new LinkedHashSet<>();
+                final Set<LookupKey> counted = new LinkedHashSet<>();
                 while (rows.size() < window && leftRows.hasNext()) {
                     final BindingSet row = leftRows.next();
                     rows.add(row);
-                    final LookupKey key = lookupFor(rightPattern, row);
-                    if (key != null) {
-                        keys.add(key);
-                    }
+                    addKey(rightPattern, row, keys, counted);
                 }
-                if (!keys.isEmpty() && rows.size() > 1) {
-                    prefetch = source.prefetch(keys);
+                if (keys.size() + counted.size() > 0 && rows.size() > 1) {
+                    prefetch = source.prefetch(keys, counted);
                 }
                 window = (int) Math.min(2L * window, batchSize);
                 chunk = rows.iterator();

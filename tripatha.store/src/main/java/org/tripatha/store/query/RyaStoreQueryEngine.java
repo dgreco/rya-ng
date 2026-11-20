@@ -462,6 +462,69 @@ public class RyaStoreQueryEngine implements RyaQueryEngine<StoreRdfConfiguration
         }
     }
 
+    /**
+     * How many statements a lookup of each pattern would return (SCALE-STUDY.md O26): the cells of
+     * its range under the configuration's labels, graph, time range and row filters, counted by the
+     * store ({@link org.tripatha.store.spi.Store#countRanges}), so none is read or decoded here. The
+     * patterns must resolve to one table and context, and their ranges must not overlap (no two
+     * patterns may have the same range).
+     */
+    @Override
+    public long[] countBatch(final List<RyaStatement> stmts, StoreRdfConfiguration conf) {
+        Preconditions.checkNotNull(stmts);
+        if (conf == null) {
+            conf = configuration;
+        }
+        if (stmts.isEmpty()) {
+            return new long[0];
+        }
+        try {
+            final List<KeyRange> ranges = new ArrayList<>(stmts.size());
+            TABLE_LAYOUT layout = null;
+            TriplePatternStrategy strategy = null;
+            RyaIRI context = null;
+            for (int i = 0; i < stmts.size(); i++) {
+                final RyaStatement stmt = stmts.get(i);
+                context = stmt.getContext();
+                strategy = ryaContext.retrieveStrategy(stmt);
+                if (strategy == null) {
+                    throw new IllegalArgumentException("TriplePattern[" + stmt + "] not supported");
+                }
+                final Map.Entry<TABLE_LAYOUT, ByteRange> entry = strategy.defineRange(stmt.getSubject(),
+                        stmt.getPredicate(), stmt.getObject(), stmt.getContext(), conf);
+                if (layout != null && layout != entry.getKey()) {
+                    throw new IllegalArgumentException("All counted patterns must use the same table");
+                }
+                layout = entry.getKey();
+                ranges.add(toRange(entry.getValue()));
+            }
+            final TripleRowRegex regex = strategy.buildRegex(conf.getRegexSubject(), conf.getRegexPredicate(),
+                    conf.getRegexObject(), null, null);
+            final ScanSpec spec = spec(context, null, regex, null, conf, null).toBuilder().threads(numThreads(conf)).build();
+            final TABLE_LAYOUT counted = layout;
+            try (StoreTrace.Reason why = StoreTrace.reason(() -> "counted lookup of " + ranges.size() + " pattern"
+                    + (ranges.size() == 1 ? "" : "s") + " on " + counted)) {
+                return store.countRanges(table(layout, conf), ranges, spec);
+            }
+        } catch (final RyaDAOException e) {
+            throw e;
+        } catch (final Exception e) {
+            throw new RyaDAOException(e);
+        }
+    }
+
+    /**
+     * Whether the store counts a lookup's statements without sending them to the client
+     * ({@link org.tripatha.store.spi.Store#countsWithoutReading}, on {@code spo}): only then is
+     * {@link #countBatch} cheaper than reading.
+     */
+    public boolean countsWithoutReading(StoreRdfConfiguration conf) {
+        if (conf == null) {
+            conf = configuration;
+        }
+        return store.countsWithoutReading(conf.getTableLayoutStrategy().getSpo());
+    }
+
     /** The cells of several scanners, one after the other; closing it closes them all. */
     private static final class Concat implements CellScanner {
         private final List<CellScanner> parts;

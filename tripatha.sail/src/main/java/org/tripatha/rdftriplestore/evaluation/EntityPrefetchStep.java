@@ -21,7 +21,6 @@ import java.util.Deque;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -31,7 +30,6 @@ import java.util.concurrent.FutureTask;
 import org.tripatha.rdftriplestore.RdfCloudTripleStoreConnection.StoreTripleSource;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.common.iteration.LookAheadIteration;
-import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.query.BindingSet;
 import org.eclipse.rdf4j.query.QueryEvaluationException;
 import org.eclipse.rdf4j.query.algebra.StatementPattern;
@@ -147,12 +145,15 @@ final class EntityPrefetchStep implements QueryEvaluationStep {
             final String reason = (why.isEmpty() ? "" : why + " › ") + "the next window, fetched on a thread of its own";
             final FutureTask<Fetched> task = new FutureTask<>(() -> {
                 try (StoreTrace.Scope joined = StoreTrace.join(trace, reason)) {
-                    final Set<LookupKey> keys = keysFor(next);
-                    if (keys.size() < 2) {
+                    final Set<LookupKey> keys = new LinkedHashSet<>();
+                    final Set<LookupKey> counted = new LinkedHashSet<>();
+                    keysFor(next, keys, counted);
+                    if (keys.size() + counted.size() < 2) {
                         return new Fetched(null, false);
                     }
-                    final Map<LookupKey, List<Statement>> fetched = source.fetch(keys, () -> "entity prefetch: " + keys.size()
-                            + " lookups for " + next.size() + " row" + (next.size() == 1 ? "" : "s") + " fetched together");
+                    final StoreTripleSource.Batch fetched = source.fetch(keys, counted, () -> "entity prefetch: "
+                            + (keys.size() + counted.size()) + " lookups for " + next.size() + " row" + (next.size() == 1 ? "" : "s")
+                            + " fetched together");
                     return new Fetched(fetched, fetched == null);
                 }
             });
@@ -170,7 +171,7 @@ final class EntityPrefetchStep implements QueryEvaluationStep {
                 fetchAhead();
                 return;
             }
-            prefetch = result.statements() == null ? null : source.hold(result.statements());
+            prefetch = result.batch() == null ? null : source.hold(result.batch());
             ready.addAll(a.rows());
             window = Math.min(a.rows().size() * 2, batchSize);
         }
@@ -180,11 +181,13 @@ final class EntityPrefetchStep implements QueryEvaluationStep {
             int n = pending.size();
             while (true) {
                 final List<BindingSet> head = head(n);
-                final Set<LookupKey> keys = keysFor(head);
+                final Set<LookupKey> keys = new LinkedHashSet<>();
+                final Set<LookupKey> counted = new LinkedHashSet<>();
+                keysFor(head, keys, counted);
                 // A single lookup is cheapest done on its own, when it is made.
-                final StoreTripleSource<?>.Prefetch fetched = keys.size() < 2 ? null
-                        : source.prefetch(keys, () -> "entity prefetch: " + keys.size() + " lookups for "
-                                + head.size() + " row" + (head.size() == 1 ? "" : "s") + " fetched together");
+                final StoreTripleSource<?>.Prefetch fetched = keys.size() + counted.size() < 2 ? null
+                        : source.prefetch(keys, counted, () -> "entity prefetch: " + (keys.size() + counted.size())
+                                + " lookups for " + head.size() + " row" + (head.size() == 1 ? "" : "s") + " fetched together");
                 if (fetched == null || !fetched.isOverflow() || n == 1) {
                     prefetch = fetched;
                     for (int i = 0; i < n; i++) {
@@ -206,17 +209,22 @@ final class EntityPrefetchStep implements QueryEvaluationStep {
             return head;
         }
 
-        private Set<LookupKey> keysFor(final List<BindingSet> head) {
-            final Set<LookupKey> keys = new LinkedHashSet<>();
+        /**
+         * The lookups the rows will make: those that read statements into {@code keys}, those
+         * counted instead into {@code counted} ({@link CountedPattern}, SCALE-STUDY.md O26).
+         */
+        private void keysFor(final List<BindingSet> head, final Set<LookupKey> keys, final Set<LookupKey> counted) {
+            final Set<LookupKey> all = new LinkedHashSet<>();
             for (final BindingSet row : head) {
                 for (final StatementPattern sp : patterns) {
-                    final LookupKey key = BatchedJoinStep.lookupFor(sp, row);
-                    if (key != null && (key.subject() != null || key.object() != null)) {
-                        keys.add(key);
-                    }
+                    BatchedJoinStep.addKey(sp, row, all, counted);
                 }
             }
-            return keys;
+            for (final LookupKey key : all) {
+                if (key.subject() != null || key.object() != null) {
+                    keys.add(key);
+                }
+            }
         }
 
         private void release() {
@@ -241,8 +249,8 @@ final class EntityPrefetchStep implements QueryEvaluationStep {
         }
     }
 
-    /** What a fetch ahead found: the statements per lookup (null when the window had one lookup or none), or that they were too many to hold. */
-    private record Fetched(Map<LookupKey, List<Statement>> statements, boolean overflow) {
+    /** What a fetch ahead found: the statements and counts per lookup (null when the window had one lookup or none), or that they were too many to hold. */
+    private record Fetched(StoreTripleSource.Batch batch, boolean overflow) {
     }
 
     /** A window's rows and their fetch, running on another thread. */
