@@ -92,7 +92,7 @@ A lookup on a sorted key-value store costs about the same at 1T as at 1B. It is 
    - Short codes for common IRI prefixes save only 4 to 5 % on disk: RFile already stores shared prefixes once, and compresses the rest.
    - They save 25 to 35 % in the block cache and 44 to 57 % of the bytes a writer sends, which isn't enough to justify a storage-format change now (section 6.9).
 9. **Whole-table operations and planning at scale (O4 to O6, O8, O9).**
-10. **Next (2026-11-19): the load work,** no longer deferred, since it blocks 1T outright: the loader at 1T (O2, done: section 4.16), the bulk spikes (M6), then the bulk builds of Accumulo and RocksDB (O3) and of HBase (O10).
+10. **Next (2026-11-19): the load work,** no longer deferred, since it blocks 1T outright: the loader at 1T (O2, done: section 4.16), the bulk spikes (M6, done: section 4.17), then the bulk builds of Accumulo and RocksDB (O3) and of HBase (O10).
 11. **Then queries in the servers, on every backend:** HBase's coprocessor endpoint (D14 (a)), then patterns whose object is never used, counted in the servers (O26). Every optimization must hold on Accumulo, HBase and RocksDB at 10^12. Whole-table operations and planning at scale follow (item 9), then the fixed cost per query (M14). Dictionary encoding (O11) and an analytics engine (O12) stay conditional.
 
 **Dictionary encoding comes late on purpose (R1, section 5.1).**
@@ -181,7 +181,7 @@ All on a real cluster with NVMe disks, unless the row says otherwise.
 | M3 | **The query suite:** lookups, star and chain joins, entity prefetch, text, geo, `stats:approxSize`, inference. p50 and p99, cold and warm, with scans and cells per query from the trace. Also `query.join.subjectranges` on and off, on a cold cache (O21) | the 1T run's acceptance | Not started |
 | M4 | **Single-client scan rates**, Scanner and BatchScanner | R2, O7, D1 | Not started |
 | M5 | **The dictionary spike,** offline, on a 1B-triple sample (section 6.5) | D9, O11 | Not started |
-| M6 | **Bulk spikes:**<br>• Accumulo RFiles with labels and counters, written from JDK 25 and imported into a live table (with a `LoadPlan`)<br>• RocksDB SST files with `merge` entries, ingested into a family that already has counters<br>• HBase HFiles with visibility tags through the expression resolver, and the same counter file imported twice in coprocessor mode<br>• Spark executors running `tripatha.api` code on JDK 25 | O3, O10, D5 | Next: phase 3, item 2 (2026-11-19) |
+| M6 | **Bulk spikes:**<br>• Accumulo RFiles with labels and counters, written from JDK 25 and imported into a live table (with a `LoadPlan`)<br>• RocksDB SST files with `merge` entries, ingested into a family that already has counters<br>• HBase HFiles with visibility tags through the expression resolver, and the same counter file imported twice in coprocessor mode<br>• Spark executors running `tripatha.api` code on JDK 25 | O3, O10, D5 | Done (2026-11-20, section 4.17) for Accumulo, RocksDB and HBase in both counter modes: `AccumuloBulkSpikeIT`, `RocksBulkSpikeTest`, `HBaseBulkSpikeIT`. The Spark spike wasn't run: D5 (a) was taken with the plan |
 | M7 | **Maintenance at 10B:** `DROP GRAPH` of a small and of a large graph, graph sizes, an index rebuild | O4, O5 | Not started (with phase 5) |
 | M8 | **A local join benchmark,** no cluster needed: a fixed query suite over a generated store of about 10M triples, on RocksDB and the Accumulo test cluster. Star and chain joins, entity prefetch, OPTIONAL, `LIMIT`, value and prefix filters, text and geo. Reports p50 and p99, a profile of where the time goes, and scans and cells per query from the trace. Checked in, so each optimization reports before and after | O13 to O17 | Done: `tripatha.loader/bench.sh` (`JoinBench`); baseline in section 4.6. Follow-ups: report CPU samples apart from threads blocked in native code, and compare settings back to back in one run (`--conf` variants) |
 | M9 | **IRI prefix codes, measured offline:** the generator's `spo`, `po` and `osp` rows written to RFiles as today and with prefix codes. Compares bytes sent, compressed size, and scan and decode time (section 6.9) | D11, O18 | Done 2026-11-16: results in section 6.9 |
@@ -930,6 +930,30 @@ That is about section 4.4's 2,100 tablets per statement table. At 1B and 10B eve
 
 ---
 
+## 4.17 The bulk spikes (M6)
+
+Before building the bulk build (O3, O10), each backend's import was tried on its own. Files were written from this JDK 25 JVM in the store's own cell layout, then imported into live tables that already held online writes. They were read back through the Store SPI, under labels, as a normal account. These are now tests that stay: `AccumuloBulkSpikeIT` and `HBaseBulkSpikeIT` in `tripatha.test`, each on its own backend, and `RocksBulkSpikeTest` in `tripatha.rocksdb`.
+
+| | Accumulo | RocksDB | HBase |
+|---|---|---|---|
+| Files | the public `RFile` writer, cells from `AccumuloStore.toMutation` | `SstFileWriter`, keys and values from `RocksCodec` | `HFile` writer with tags, cells laid out by `HBaseCodec` |
+| Import | `importDirectory(…).load()`, also with a `LoadPlan`, so Accumulo doesn't read the file | `ingestExternalFile` into the table's column family, over data still in the memtable | `BulkLoadHFiles`, as the superuser |
+| Labels and timestamps | kept | kept | kept: the visibility tag holds label ordinals, resolved from `hbase:labels` as HBase's import tools do |
+| Counters into a table that has them | added by the combiner, whatever the timestamps | added: the file's `merge` entries apply on reads and after a compaction | coprocessor mode: added, if each import has a timestamp of its own; increment mode: hidden or replaced |
+| The same counter file imported twice | counted twice | counted twice | coprocessor mode, same timestamp: counted once (the cells collapse) |
+| Online deltas after the import, then a compaction | sums kept | sums kept | sums kept, even after a future import timestamp: the coprocessor stamps later deltas after the region files' newest |
+
+**What O3 and O10 take from it:**
+- **Imports are recorded per table and file,** since importing again counts again (Accumulo, RocksDB) or not at all (HBase).
+- **HBase, coprocessor mode:** each import stamps its counter cells with a timestamp of its own, for example the time the import starts.
+- **HBase, increment mode:** counters can only go into a table that doesn't hold them. The build refuses otherwise.
+- **HBase's writer needs read access to `hbase:labels`,** to turn labels into ordinals. The account that bulk-loads needs the table rights HBase asks for. Both are what HBase's import tools need too (R10).
+- **The SPI of section 6.2 stands:** a sorted-file writer per table that takes cells and counter deltas in key order, an import call, and a `BULK_IMPORT` capability. Each backend writes its native format with the codec it already has.
+
+**Spark** (D5) wasn't tried: D5 (a) was taken with the plan, so the loader sorts. The spike is for if D5 is reopened.
+
+---
+
 ## 5. Requirements at 1T, and where Tripatha stands
 
 | # | Requirement | Status | Closed by |
@@ -1162,10 +1186,10 @@ Parts, progress and resume work as in the loader today, per step.
 
   | Backend | What a bulk file of counters does | Hazard |
   |---|---|---|
-  | Accumulo | the combiner adds imported cells to existing ones | none |
-  | RocksDB | the file holds `merge` entries, added on read and compaction, like online deltas | to confirm in M6 |
-  | HBase, coprocessor mode | the coprocessor sums versions | two files carrying the same counter cell with the same timestamp collapse into one cell, so each import stamps its counters with a timestamp of its own |
-  | HBase, increment mode | an imported value replaces, it doesn't add | refuse bulk counters into a non-empty table |
+  | Accumulo | the combiner adds imported cells to existing ones, whatever their timestamps | none (M6) |
+  | RocksDB | the file holds `merge` entries, added on read and compaction, like online deltas | none (M6) |
+  | HBase, coprocessor mode | the coprocessor sums versions | two files carrying the same counter cell with the same timestamp collapse into one cell, so each import stamps its counters with a timestamp of its own (M6 saw the collapse) |
+  | HBase, increment mode | an imported value hides behind an older one or replaces it, it doesn't add (M6) | refuse bulk counters into a non-empty table |
 
   Importing the same counter files twice counts them twice on every backend. The progress file records imports per table.
 - **Labels:**
@@ -1526,7 +1550,7 @@ Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, no
 ### Phase 3: the load at 1T
 
 1. **O2**, the loader at 1T: `--triples 1T`, split points by target tablet or region size, a progress file that isn't rewritten whole at every commit, and `dry-run` reporting stored counter cells. Done (section 4.16).
-2. **M6**, the bulk spikes, all local: labelled Accumulo RFiles with counters into a live table, RocksDB SST files with merge entries, HBase HFiles with visibility tags and a counter file imported twice, and Spark on JDK 25 (D5).
+2. **M6**, the bulk spikes, all local: labelled Accumulo RFiles with counters into a live table, RocksDB SST files with merge entries, HBase HFiles with visibility tags and a counter file imported twice, and Spark on JDK 25 (D5). Done (section 4.17), without Spark.
 3. **O3**, the bulk build on Accumulo and RocksDB: sorted files per tablet, every counter of 1 but `p` left out, the DAO's guards in the writer, checked cell by cell against the online path.
 4. **O10**, the bulk build on HBase: label ordinals in the files, unique counter timestamps per import.
 
