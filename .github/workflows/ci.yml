@@ -209,7 +209,14 @@ jobs:
         with:
           java-version: '25'
           distribution: graalvm-community
-          cache: maven
+
+      # As in the other jobs: setup-graalvm's own cache is keyed on the POMs with no fallback, so a PR that
+      # changed one downloaded everything from Maven Central, and failed when Central didn't answer.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ github.job }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: maven-${{ github.job }}-
 
       # The endpoint with the RocksDB backend only, compiled ahead of time.
       - name: Build the native executable
