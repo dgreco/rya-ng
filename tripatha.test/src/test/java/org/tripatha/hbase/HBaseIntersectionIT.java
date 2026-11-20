@@ -163,6 +163,53 @@ class HBaseIntersectionIT extends StoreITBase {
         assertFalse(getStore().canIntersect(getTablePrefix() + "missing"));
     }
 
+    /**
+     * The count endpoint (O26) counts what a scan returns, under the account's labels (one it
+     * doesn't hold stays hidden, whatever the request asks), across regions, and in pages of one row.
+     */
+    @Test
+    void rangesAreCountedInTheRegionsAsScansReturnThem() {
+        final String spo = getTablePrefix() + "spo";
+        getStore().tables().create(spo, TableKind.STATEMENTS);
+        final java.util.SortedSet<byte[]> splits = new java.util.TreeSet<>(java.util.Arrays::compareUnsigned);
+        splits.add(b("s10"));
+        splits.add(b("s20"));
+        getStore().tables().addSplits(spo, splits);
+        try (CellWriter w = getStore().newWriter(WriterOptions.DEFAULT)) {
+            for (int i = 0; i < 30; i++) {
+                final RowMutation m = new RowMutation(b(String.format("s%02d", i) + "\u0000p\u0000o\u0001\u0003"));
+                m.put(b(""), b(""), b(""), 5, b(""));
+                m.put(b("urn:g1"), b(""), b(i % 2 == 0 ? "A" : "notGranted"), 5 + i % 3, b(""));
+                w.table(spo).write(m);
+            }
+        }
+        final List<KeyRange> ranges = List.of(KeyRange.closed(b("s00"), b("s04\u00ff")), KeyRange.closed(b("s08"), b("s23\u00ff")),
+                KeyRange.prefix(b("s25")), KeyRange.closed(b("s27"), b("s99")), KeyRange.closed(b("t"), b("u")));
+        try (Store paged = HBaseStore.owning(MiniHBaseSingleton.newTestConnection(Map.of("tripatha.count.page.rows", "1")),
+                MiniHBaseSingleton.testUser(), HBaseStore.Options.DEFAULT.withCounters(
+                        org.tripatha.test.hbase.HBaseTestBackend.counterMode()))) {
+            assertTrue(getStore().countsWithoutReading(spo), "statement tables get the count endpoint");
+            assertFalse(getStore().countsWithoutReading(table), "index tables don't");
+            for (final ScanSpec spec : List.of(ScanSpec.of(Auths.NONE), ScanSpec.of(Auths.of("A")),
+                    ScanSpec.of(Auths.of("A", "notGranted")), ScanSpec.of(Auths.ALL_HELD),
+                    ScanSpec.builder(Auths.of("A")).family(b("urn:g1")).build(), ScanSpec.builder(Auths.of("A")).timestamps(6L, 6L).build())) {
+                final long[] scanned = new long[ranges.size()];
+                for (int i = 0; i < ranges.size(); i++) {
+                    try (CellScanner cells = getStore().scan(spo, ranges.get(i), spec)) {
+                        while (cells.hasNext()) {
+                            cells.next();
+                            scanned[i]++;
+                        }
+                    }
+                }
+                assertEquals(java.util.Arrays.toString(scanned), java.util.Arrays.toString(getStore().countRanges(spo, ranges, spec)),
+                        spec.auths().toString());
+                assertEquals(java.util.Arrays.toString(scanned), java.util.Arrays.toString(paged.countRanges(spo, ranges, spec)),
+                        "pages of one row, " + spec.auths());
+            }
+        }
+    }
+
     /** What the endpoint should find: each term read by the client, subjects counted, multiplied. */
     private Map<String, Long> expected(final List<byte[]> rows, final List<byte[]> terms, final ScanSpec spec) {
         final Map<String, Long> out = new TreeMap<>();

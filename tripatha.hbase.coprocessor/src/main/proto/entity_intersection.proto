@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // The entity index's intersection in HBase's region servers (SCALE-STUDY.md O23, D14), served by
-// org.tripatha.hbase.coprocessor.IntersectionEndpoint. Regenerate the Java code with
+// org.tripatha.hbase.coprocessor.IntersectionEndpoint, and the counts of ranges (O26), served by
+// org.tripatha.hbase.coprocessor.RangeCountEndpoint. Regenerate the Java code with
 // tripatha.hbase.coprocessor/generate-protos.sh after changing this file.
 syntax = "proto2";
 
@@ -64,4 +65,45 @@ message IntersectResponse {
 
 service EntityIntersection {
   rpc intersect(IntersectRequest) returns (IntersectResponse);
+}
+
+// A range of rows, as HBase stores them (HBaseCodec.bound). An empty stop is the table's end.
+message RowRange {
+  required bytes start = 1;
+  optional bool start_inclusive = 2 [default = true];
+  optional bytes stop = 3;
+  optional bool stop_inclusive = 4;
+}
+
+// How many cells each range holds in this region (SCALE-STUDY.md O26): the cells a scan with these
+// labels, column prefixes and time range would return. The ranges are sorted and don't overlap.
+message CountRequest {
+  repeated RowRange ranges = 1;
+  // The scan's labels, as for an intersection.
+  optional bool labels_set = 2;
+  repeated string labels = 3;
+  // Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+  repeated bytes prefixes = 4;
+  optional int64 from_timestamp = 5;
+  optional int64 to_timestamp = 6;
+  // A page ends between two rows once this many rows have been read or this many milliseconds
+  // spent; hidden rows count.
+  optional int64 max_rows = 7;
+  optional int32 max_millis = 8;
+}
+
+message CountResponse {
+  // The cells of each range inside this region, in the request's order.
+  repeated int64 counts = 1 [packed = true];
+  // The region's bounds: a range's part outside them is for another region (a split, a stale location).
+  optional bytes region_start = 2;
+  optional bytes region_end = 3;
+  // Set when the page ended early: the range it ended in, and its first row not counted. Later
+  // ranges weren't counted either.
+  optional int32 resume_range = 4;
+  optional bytes resume_row = 5;
+}
+
+service RangeCount {
+  rpc count(CountRequest) returns (CountResponse);
 }

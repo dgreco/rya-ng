@@ -109,6 +109,12 @@ public final class HBaseStore implements Store {
      */
     public static final String INTERSECTION_ENDPOINT = "org.tripatha.hbase.coprocessor.IntersectionEndpoint";
 
+    /**
+     * The endpoint that counts ranges in the region servers (module tripatha.hbase.coprocessor,
+     * SCALE-STUDY.md O26), attached to every statement table.
+     */
+    public static final String COUNT_ENDPOINT = "org.tripatha.hbase.coprocessor.RangeCountEndpoint";
+
     /** How counter deltas are written. */
     public enum CounterMode {
         /**
@@ -347,6 +353,66 @@ public final class HBaseStore implements Store {
                     INTERSECTION_ENDPOINT, table, INTERSECTION_ENDPOINT);
             return false;
         }
+    }
+
+    /** Whether each table's regions answer the count endpoint, asked once. */
+    private final java.util.Map<String, Boolean> rangeCounting = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * In the region servers, when this table's regions answer the count endpoint: asked once per
+     * table by calling it, so an older jar (whose regions intersect but don't count) answers no.
+     */
+    @Override
+    public boolean countsWithoutReading(final String table) {
+        final Boolean known = rangeCounting.get(table);
+        if (known != null) {
+            return known;
+        }
+        if (!tables().exists(table)) {
+            return false; // asked again once it exists
+        }
+        return rangeCounting.computeIfAbsent(table, this::answersCounts);
+    }
+
+    private boolean answersCounts(final String table) {
+        final org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest probe =
+                org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest.getDefaultInstance();
+        try {
+            connection.toAsyncConnection().getTable(name(table))
+                    .<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RangeCount.Stub,
+                            org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse>coprocessorService(
+                            org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RangeCount::newStub,
+                            (stub, controller, done) -> stub.count(controller, probe, done), HBaseCodec.row(new byte[0]))
+                    .get(5, TimeUnit.MINUTES);
+            return true;
+        } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RyaDAOException(e);
+        } catch (final java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+            log.info("The region servers of {} don't count ({}): lookups are counted on the client. Put the "
+                    + "tripatha.hbase.coprocessor jar on every region server, and attach {} to the table: alter '{}', "
+                    + "METHOD => 'table_att', 'coprocessor' => '|{}|1073741823|'", table, String.valueOf(e.getCause()),
+                    COUNT_ENDPOINT, table, COUNT_ENDPOINT);
+            return false;
+        }
+    }
+
+    /**
+     * Each range counted by the region holding it, the regions at once ({@link HBaseRangeCount}).
+     * A spec with row or qualifier filters, or a table whose regions don't count, is counted by
+     * scanning (the default).
+     */
+    @Override
+    public long[] countRanges(final String table, final List<KeyRange> ranges, final ScanSpec spec) {
+        checkSpec(spec);
+        if (ranges.isEmpty() || !HBaseRangeCount.handles(spec) || !countsWithoutReading(table)) {
+            return Store.super.countRanges(table, ranges, spec);
+        }
+        final java.util.function.LongConsumer done = TracedScans.counting("Count", table, ranges, spec, describe(spec));
+        final long[] counts = new HBaseRangeCount(connection.toAsyncConnection(), name(table), connection.getConfiguration(), spec,
+                authorizations(spec.auths())).count(ranges);
+        done.accept(counts.length);
+        return counts;
     }
 
     /** Each shard row asked of its region's endpoint, page after page ({@link HBaseIntersection}). */
@@ -738,22 +804,24 @@ public final class HBaseStore implements Store {
                 if (summed) {
                     descriptor.setCoprocessor(coprocessor(COUNTER_COPROCESSOR));
                 }
-                final boolean intersects = kind == TableKind.INDEX;
-                if (intersects) {
-                    descriptor.setCoprocessor(coprocessor(INTERSECTION_ENDPOINT));
+                // The endpoints of Tripatha's jar: stars intersected on index tables, lookups counted on statement tables.
+                final String endpoint = kind == TableKind.INDEX ? INTERSECTION_ENDPOINT
+                        : kind == TableKind.STATEMENTS ? COUNT_ENDPOINT : null;
+                if (endpoint != null) {
+                    descriptor.setCoprocessor(coprocessor(endpoint));
                 }
                 try {
                     try {
                         admin.createTable(descriptor.build());
                     } catch (final org.apache.hadoop.hbase.DoNotRetryIOException e) {
-                        if (!intersects || !String.valueOf(e.getMessage()).contains(INTERSECTION_ENDPOINT)) {
+                        if (endpoint == null || !String.valueOf(e.getMessage()).contains(endpoint)) {
                             throw e;
                         }
-                        // A cluster without Tripatha's jar (increment counters): the index works without it.
-                        log.info("HBase can't load {} on {} ({}): its stars will be intersected on the client. Put the "
-                                + "tripatha.hbase.coprocessor jar on the region servers to intersect there.", INTERSECTION_ENDPOINT,
-                                table, e.getMessage());
-                        descriptor.removeCoprocessor(INTERSECTION_ENDPOINT);
+                        // A cluster without Tripatha's jar (increment counters): the table works without it.
+                        log.info("HBase can't load {} on {} ({}): the client will do its work. Put the "
+                                + "tripatha.hbase.coprocessor jar on the region servers to do it there.", endpoint, table,
+                                e.getMessage());
+                        descriptor.removeCoprocessor(endpoint);
                         admin.createTable(descriptor.build());
                     }
                 } catch (final org.apache.hadoop.hbase.DoNotRetryIOException e) {
