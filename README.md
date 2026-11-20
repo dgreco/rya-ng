@@ -25,8 +25,8 @@ under the License. -->
 # Tripatha
 
 [![CI](https://github.com/dgreco/tripatha/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dgreco/tripatha/actions/workflows/ci.yml)
-[![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fdgreco.github.io%2Ftripatha%2Fbadge.json)](https://dgreco.github.io/tripatha/coverage/)
-[![tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fdgreco.github.io%2Ftripatha%2Ftests.json)](#build-and-test)
+[![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Ftripatha.org%2Fbadge.json)](https://tripatha.org/coverage/)
+[![tests](https://img.shields.io/endpoint?url=https%3A%2F%2Ftripatha.org%2Ftests.json)](#build-and-test)
 [![license](https://img.shields.io/github/license/dgreco/tripatha?color=blue)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-25%2B-orange)](#requirements)
 
@@ -78,7 +78,7 @@ mvn clean verify -Pcoverage
 
 GitHub Actions (`.github/workflows/ci.yml`) runs `mvn clean verify -Pcoverage` on every push and pull request, and the integration tests again on HBase and on RocksDB:
 - Each run's summary lists the tests and the coverage per module, and the HTML coverage report is attached to the run.
-- For pushes to `main`, the report is published at <https://dgreco.github.io/tripatha/coverage/>. The coverage and tests badges above show its line coverage and test count.
+- For pushes to `main`, the report is published at <https://tripatha.org/coverage/>. The coverage and tests badges above show its line coverage and test count.
 
 The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.jar`. `tripatha.standalone` packages it with the RocksDB backend only, as a jar and as a native executable (see [Standalone](#standalone-one-program-no-cluster-no-jvm)).
 
