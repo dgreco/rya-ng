@@ -1350,7 +1350,11 @@ Names are counted over the whole query, every scope included: a name used in a s
   - **A range across tablets** gives one partial count per tablet. The client adds each count to the range holding its row (`RangeCounts.Locator`), which is why the ranges must not overlap: Accumulo's batch scanner would also merge overlapping ones.
   - **When it can:** the store asks once per table whether the servers load the class (`Store.countsWithoutReading`), as it does for the intersecting iterator; without the jar the client counts.
 - **A window's count runs alongside its reads** (`BatchLookup.fetchAndCount`): on a lookup thread, under the query's trace, while the window's statements are read. One after the other, the count's extra round trip made a chain of two counted links 91 % slower on the Accumulo test cluster; at the same time it is within 1 %.
-- **HBase** doesn't count without reading yet, so its counted lookups are read with the others, as above. The endpoint of [section 13.7](#137-the-entity-index-stars-shard-by-shard) counting them is the next step.
+- **HBase counts in its region servers** (`RangeCountEndpoint`, in the coprocessor jar, which the store attaches to its statement tables).
+  - **One call per region and page.** The client (`HBaseRangeCount`) groups the ranges by the region holding their start and asks the regions at once. Each counts its ranges with one region scanner: a `MultiRowRangeFilter` over them, the graphs as column prefixes, the time range, and the region's `preScannerOpen` for the caller's labels, as the intersection endpoint does.
+  - **Region bounds:** each range is counted inside the region only, and the response gives the region's bounds. The client queues every part it didn't count for the next round: past the region's end, before its start (a stale location), or after the page. A split or a move costs a round, never a count.
+  - **Pages** end between two rows once a number of rows or milliseconds is spent. A filter that sees every row the scan reads, hidden ones included, ends the scan, and the response says where to go on.
+  - **When it can:** the store asks each table once by calling the count method, so a table created before it, or regions with an older jar, answer no, and the client counts.
 
 **Measured** (SCALE-STUDY.md 4.22, WatDiv C3-01 in-process on RocksDB): reading every row went from 536 to 337 ms, and reading and writing TSV from 556 to 283 ms. The 444,070 rows were the same.
 
@@ -1938,7 +1942,7 @@ A nested-loop join asks the store once per row; on a cluster each ask is a netwo
 | Entity prefetch | A chain of joins and OPTIONALs over one driver (an entity's attributes) fetched together, per window | one batch for the whole chain | [13.5](#135-entity-prefetch-a-chain-of-joins-at-once) |
 | More lookups in flight (O16) | A batch of disjoint lookups read on several threads (4 by default on RocksDB); the next window fetched while the current one is joined | WatDiv C3 −50 %, the complex queries 112.2 → 97.7 ms | SCALE-STUDY.md 4.14 |
 | Less work per looked-up row (O17) | A batch whose ranges can't overlap skips the cell check and the objects' re-encoding; rows decoded in one pass | WatDiv C3 −41 %, complex −24 %, all 100 −11 % | SCALE-STUDY.md 4.14 |
-| Counted patterns (O26) | A joined pattern whose object nothing else uses asks for a count per lookup, and repeats its row that many times: counted by the store where it counts without reading (RocksDB in its process, Accumulo in its tablet servers), from the fetched lists on HBase for now | WatDiv C3-01 in-process −37 to −49 %; Accumulo `star-unused` 23 % fewer cells to the client | [13.8](#138-counted-patterns-a-matchs-number-not-its-statements) |
+| Counted patterns (O26) | A joined pattern whose object nothing else uses asks for a count per lookup, and repeats its row that many times: counted by the store without reading: RocksDB in its process, Accumulo in its tablet servers, HBase in its region servers | WatDiv C3-01 in-process −37 to −49 %; `star-unused` 23 % fewer cells to the client on Accumulo, 12 % on HBase | [13.8](#138-counted-patterns-a-matchs-number-not-its-statements) |
 | One range per subject (O21) | A subject's links read as one range | built, off by default: no gain on a warm cache | [13.4](#134-keeping-the-answers-identical) |
 
 ### 20.2 Reading only what the query needs
@@ -1991,11 +1995,10 @@ At 10^12 what must not happen is a client reading billions of cells to keep a fe
   - HBase's endpoint answers in pages: a 200M-posting shard never holds a call past its timeout.
   - It applies the caller's labels through the region's own `preScannerOpen`.
 - **Parallel by split:** merges and single large patterns are cut at `spo`'s split points, one thread per slice (O24, O7a).
-- **Counts instead of matches:** a star's `COUNT` (O23), and the lookups of a pattern whose object nothing else uses (O26), counted in Accumulo's tablet servers by `RangeCountingIterator`: one cell per range comes back. On HBase those lookups are still counted on the client, until the endpoint counts them.
+- **Counts instead of matches:** a star's `COUNT` (O23), and the lookups of a pattern whose object nothing else uses (O26), counted in Accumulo's tablet servers by `RangeCountingIterator` and in HBase's region servers by `RangeCountEndpoint`: one number per range comes back.
 
 ### 20.7 Still open
 
-- **Server-side counts for O26 on HBase,** a method of the endpoint (Accumulo's iterator is done).
 - **Whole-table operations in time proportional to what they change:** graph drops (O4), index rebuilds and purges (O5).
 - **Planning at scale:** text planning from per-term counts (O6), approximate counts from the counters (O8).
 - **Layout:** deprecating the hashed row prefix (O9); a dictionary encoding (O11), conditional on M5.

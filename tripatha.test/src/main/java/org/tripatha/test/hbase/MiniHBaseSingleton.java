@@ -150,7 +150,8 @@ public final class MiniHBaseSingleton {
 
     /**
      * {@code -Dtripatha.test.hbaseIntersectPage=N}: the intersection endpoint's pages end after N
-     * matches or N cells read, N cells per scanner call, so every test crosses page boundaries
+     * matches or N cells read, N cells per scanner call, and the count endpoint's after N rows, so
+     * every test crosses page boundaries
      * (client settings, as {@code hbase.conf.<key>} for code that connects on its own).
      */
     public static java.util.Map<String, String> intersectionPages() {
@@ -159,7 +160,7 @@ public final class MiniHBaseSingleton {
             return java.util.Map.of();
         }
         return java.util.Map.of("tripatha.intersect.page.matches", n.trim(), "tripatha.intersect.page.cells", n.trim(),
-                "tripatha.intersect.batch", n.trim());
+                "tripatha.intersect.batch", n.trim(), "tripatha.count.page.rows", n.trim());
     }
 
     private static synchronized void stop() {

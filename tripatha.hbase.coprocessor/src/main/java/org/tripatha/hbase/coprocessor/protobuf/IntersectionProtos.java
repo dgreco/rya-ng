@@ -3239,6 +3239,3658 @@ public final class IntersectionProtos extends org.apache.hbase.thirdparty.com.go
 
   }
 
+  public interface RowRangeOrBuilder extends
+      // @@protoc_insertion_point(interface_extends:tripatha.hbase.RowRange)
+      org.apache.hbase.thirdparty.com.google.protobuf.MessageOrBuilder {
+
+    /**
+     * <code>required bytes start = 1;</code>
+     * @return Whether the start field is set.
+     */
+    boolean hasStart();
+    /**
+     * <code>required bytes start = 1;</code>
+     * @return The start.
+     */
+    org.apache.hbase.thirdparty.com.google.protobuf.ByteString getStart();
+
+    /**
+     * <code>optional bool start_inclusive = 2 [default = true];</code>
+     * @return Whether the startInclusive field is set.
+     */
+    boolean hasStartInclusive();
+    /**
+     * <code>optional bool start_inclusive = 2 [default = true];</code>
+     * @return The startInclusive.
+     */
+    boolean getStartInclusive();
+
+    /**
+     * <code>optional bytes stop = 3;</code>
+     * @return Whether the stop field is set.
+     */
+    boolean hasStop();
+    /**
+     * <code>optional bytes stop = 3;</code>
+     * @return The stop.
+     */
+    org.apache.hbase.thirdparty.com.google.protobuf.ByteString getStop();
+
+    /**
+     * <code>optional bool stop_inclusive = 4;</code>
+     * @return Whether the stopInclusive field is set.
+     */
+    boolean hasStopInclusive();
+    /**
+     * <code>optional bool stop_inclusive = 4;</code>
+     * @return The stopInclusive.
+     */
+    boolean getStopInclusive();
+  }
+  /**
+   * <pre>
+   * A range of rows, as HBase stores them (HBaseCodec.bound). An empty stop is the table's end.
+   * </pre>
+   *
+   * Protobuf type {@code tripatha.hbase.RowRange}
+   */
+  public static final class RowRange extends
+      org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage implements
+      // @@protoc_insertion_point(message_implements:tripatha.hbase.RowRange)
+      RowRangeOrBuilder {
+  private static final long serialVersionUID = 0L;
+    static {
+      org.apache.hbase.thirdparty.com.google.protobuf.RuntimeVersion.validateProtobufGencodeVersion(
+        org.apache.hbase.thirdparty.com.google.protobuf.RuntimeVersion.RuntimeDomain.PUBLIC,
+        /* major= */ 4,
+        /* minor= */ 34,
+        /* patch= */ 0,
+        /* suffix= */ "",
+        "RowRange");
+    }
+    // Use RowRange.newBuilder() to construct.
+    private RowRange(org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.Builder<?> builder) {
+      super(builder);
+    }
+    private RowRange() {
+      start_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+      startInclusive_ = true;
+      stop_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+    }
+
+    public static final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+        getDescriptor() {
+      return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_RowRange_descriptor;
+    }
+
+    @java.lang.Override
+    public org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor getDescriptorForType() {
+      return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_RowRange_descriptor;
+    }
+
+    @java.lang.Override
+    protected org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable
+        internalGetFieldAccessorTable() {
+      return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_RowRange_fieldAccessorTable
+          .ensureFieldAccessorsInitialized(
+              org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.class, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder.class);
+    }
+
+    private int bitField0_;
+    public static final int START_FIELD_NUMBER = 1;
+    private org.apache.hbase.thirdparty.com.google.protobuf.ByteString start_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+    /**
+     * <code>required bytes start = 1;</code>
+     * @return Whether the start field is set.
+     */
+    @java.lang.Override
+    public boolean hasStart() {
+      return ((bitField0_ & 0x00000001) != 0);
+    }
+    /**
+     * <code>required bytes start = 1;</code>
+     * @return The start.
+     */
+    @java.lang.Override
+    public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getStart() {
+      return start_;
+    }
+
+    public static final int START_INCLUSIVE_FIELD_NUMBER = 2;
+    private boolean startInclusive_ = true;
+    /**
+     * <code>optional bool start_inclusive = 2 [default = true];</code>
+     * @return Whether the startInclusive field is set.
+     */
+    @java.lang.Override
+    public boolean hasStartInclusive() {
+      return ((bitField0_ & 0x00000002) != 0);
+    }
+    /**
+     * <code>optional bool start_inclusive = 2 [default = true];</code>
+     * @return The startInclusive.
+     */
+    @java.lang.Override
+    public boolean getStartInclusive() {
+      return startInclusive_;
+    }
+
+    public static final int STOP_FIELD_NUMBER = 3;
+    private org.apache.hbase.thirdparty.com.google.protobuf.ByteString stop_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+    /**
+     * <code>optional bytes stop = 3;</code>
+     * @return Whether the stop field is set.
+     */
+    @java.lang.Override
+    public boolean hasStop() {
+      return ((bitField0_ & 0x00000004) != 0);
+    }
+    /**
+     * <code>optional bytes stop = 3;</code>
+     * @return The stop.
+     */
+    @java.lang.Override
+    public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getStop() {
+      return stop_;
+    }
+
+    public static final int STOP_INCLUSIVE_FIELD_NUMBER = 4;
+    private boolean stopInclusive_ = false;
+    /**
+     * <code>optional bool stop_inclusive = 4;</code>
+     * @return Whether the stopInclusive field is set.
+     */
+    @java.lang.Override
+    public boolean hasStopInclusive() {
+      return ((bitField0_ & 0x00000008) != 0);
+    }
+    /**
+     * <code>optional bool stop_inclusive = 4;</code>
+     * @return The stopInclusive.
+     */
+    @java.lang.Override
+    public boolean getStopInclusive() {
+      return stopInclusive_;
+    }
+
+    private byte memoizedIsInitialized = -1;
+    @java.lang.Override
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized == 1) return true;
+      if (isInitialized == 0) return false;
+
+      if (!hasStart()) {
+        memoizedIsInitialized = 0;
+        return false;
+      }
+      memoizedIsInitialized = 1;
+      return true;
+    }
+
+    @java.lang.Override
+    public void writeTo(org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream output)
+                        throws java.io.IOException {
+      if (((bitField0_ & 0x00000001) != 0)) {
+        output.writeBytes(1, start_);
+      }
+      if (((bitField0_ & 0x00000002) != 0)) {
+        output.writeBool(2, startInclusive_);
+      }
+      if (((bitField0_ & 0x00000004) != 0)) {
+        output.writeBytes(3, stop_);
+      }
+      if (((bitField0_ & 0x00000008) != 0)) {
+        output.writeBool(4, stopInclusive_);
+      }
+      getUnknownFields().writeTo(output);
+    }
+
+    @java.lang.Override
+    public int getSerializedSize() {
+      int size = memoizedSize;
+      if (size != -1) return size;
+
+      size = 0;
+      if (((bitField0_ & 0x00000001) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeBytesSize(1, start_);
+      }
+      if (((bitField0_ & 0x00000002) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeBoolSize(2, startInclusive_);
+      }
+      if (((bitField0_ & 0x00000004) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeBytesSize(3, stop_);
+      }
+      if (((bitField0_ & 0x00000008) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeBoolSize(4, stopInclusive_);
+      }
+      size += getUnknownFields().getSerializedSize();
+      memoizedSize = size;
+      return size;
+    }
+
+    @java.lang.Override
+    public boolean equals(final java.lang.Object obj) {
+      if (obj == this) {
+       return true;
+      }
+      if (!(obj instanceof org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange)) {
+        return super.equals(obj);
+      }
+      org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange other = (org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange) obj;
+
+      if (hasStart() != other.hasStart()) return false;
+      if (hasStart()) {
+        if (!getStart()
+            .equals(other.getStart())) return false;
+      }
+      if (hasStartInclusive() != other.hasStartInclusive()) return false;
+      if (hasStartInclusive()) {
+        if (getStartInclusive()
+            != other.getStartInclusive()) return false;
+      }
+      if (hasStop() != other.hasStop()) return false;
+      if (hasStop()) {
+        if (!getStop()
+            .equals(other.getStop())) return false;
+      }
+      if (hasStopInclusive() != other.hasStopInclusive()) return false;
+      if (hasStopInclusive()) {
+        if (getStopInclusive()
+            != other.getStopInclusive()) return false;
+      }
+      if (!getUnknownFields().equals(other.getUnknownFields())) return false;
+      return true;
+    }
+
+    @java.lang.Override
+    public int hashCode() {
+      if (memoizedHashCode != 0) {
+        return memoizedHashCode;
+      }
+      int hash = 41;
+      hash = (19 * hash) + getDescriptor().hashCode();
+      if (hasStart()) {
+        hash = (37 * hash) + START_FIELD_NUMBER;
+        hash = (53 * hash) + getStart().hashCode();
+      }
+      if (hasStartInclusive()) {
+        hash = (37 * hash) + START_INCLUSIVE_FIELD_NUMBER;
+        hash = (53 * hash) + org.apache.hbase.thirdparty.com.google.protobuf.Internal.hashBoolean(
+            getStartInclusive());
+      }
+      if (hasStop()) {
+        hash = (37 * hash) + STOP_FIELD_NUMBER;
+        hash = (53 * hash) + getStop().hashCode();
+      }
+      if (hasStopInclusive()) {
+        hash = (37 * hash) + STOP_INCLUSIVE_FIELD_NUMBER;
+        hash = (53 * hash) + org.apache.hbase.thirdparty.com.google.protobuf.Internal.hashBoolean(
+            getStopInclusive());
+      }
+      hash = (29 * hash) + getUnknownFields().hashCode();
+      memoizedHashCode = hash;
+      return hash;
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseFrom(
+        java.nio.ByteBuffer data)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseFrom(
+        java.nio.ByteBuffer data,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.ByteString data)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.ByteString data,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseFrom(byte[] data)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseFrom(
+        byte[] data,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseFrom(
+        java.io.InputStream input,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseDelimitedWithIOException(PARSER, input);
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseDelimitedFrom(
+        java.io.InputStream input,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    @java.lang.Override
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder() {
+      return DEFAULT_INSTANCE.toBuilder();
+    }
+    public static Builder newBuilder(org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange prototype) {
+      return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
+    }
+    @java.lang.Override
+    public Builder toBuilder() {
+      return this == DEFAULT_INSTANCE
+          ? new Builder() : new Builder().mergeFrom(this);
+    }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(
+        org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+      Builder builder = new Builder(parent);
+      return builder;
+    }
+    /**
+     * <pre>
+     * A range of rows, as HBase stores them (HBaseCodec.bound). An empty stop is the table's end.
+     * </pre>
+     *
+     * Protobuf type {@code tripatha.hbase.RowRange}
+     */
+    public static final class Builder extends
+        org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.Builder<Builder> implements
+        // @@protoc_insertion_point(builder_implements:tripatha.hbase.RowRange)
+        org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRangeOrBuilder {
+      public static final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+          getDescriptor() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_RowRange_descriptor;
+      }
+
+      @java.lang.Override
+      protected org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_RowRange_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.class, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder.class);
+      }
+
+      // Construct using org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.newBuilder()
+      private Builder() {
+
+      }
+
+      private Builder(
+          org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+        super(parent);
+
+      }
+      @java.lang.Override
+      public Builder clear() {
+        super.clear();
+        bitField0_ = 0;
+        start_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+        startInclusive_ = true;
+        stop_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+        stopInclusive_ = false;
+        return this;
+      }
+
+      @java.lang.Override
+      public org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+          getDescriptorForType() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_RowRange_descriptor;
+      }
+
+      @java.lang.Override
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange getDefaultInstanceForType() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.getDefaultInstance();
+      }
+
+      @java.lang.Override
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange build() {
+        org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+
+      @java.lang.Override
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange buildPartial() {
+        org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange result = new org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange(this);
+        if (bitField0_ != 0) { buildPartial0(result); }
+        onBuilt();
+        return result;
+      }
+
+      private void buildPartial0(org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange result) {
+        int from_bitField0_ = bitField0_;
+        int to_bitField0_ = 0;
+        if (((from_bitField0_ & 0x00000001) != 0)) {
+          result.start_ = start_;
+          to_bitField0_ |= 0x00000001;
+        }
+        if (((from_bitField0_ & 0x00000002) != 0)) {
+          result.startInclusive_ = startInclusive_;
+          to_bitField0_ |= 0x00000002;
+        }
+        if (((from_bitField0_ & 0x00000004) != 0)) {
+          result.stop_ = stop_;
+          to_bitField0_ |= 0x00000004;
+        }
+        if (((from_bitField0_ & 0x00000008) != 0)) {
+          result.stopInclusive_ = stopInclusive_;
+          to_bitField0_ |= 0x00000008;
+        }
+        result.bitField0_ |= to_bitField0_;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(org.apache.hbase.thirdparty.com.google.protobuf.Message other) {
+        if (other instanceof org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange) {
+          return mergeFrom((org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange)other);
+        } else {
+          super.mergeFrom(other);
+          return this;
+        }
+      }
+
+      public Builder mergeFrom(org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange other) {
+        if (other == org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.getDefaultInstance()) return this;
+        if (other.hasStart()) {
+          setStart(other.getStart());
+        }
+        if (other.hasStartInclusive()) {
+          setStartInclusive(other.getStartInclusive());
+        }
+        if (other.hasStop()) {
+          setStop(other.getStop());
+        }
+        if (other.hasStopInclusive()) {
+          setStopInclusive(other.getStopInclusive());
+        }
+        this.mergeUnknownFields(other.getUnknownFields());
+        onChanged();
+        return this;
+      }
+
+      @java.lang.Override
+      public final boolean isInitialized() {
+        if (!hasStart()) {
+          return false;
+        }
+        return true;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(
+          org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input,
+          org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        if (extensionRegistry == null) {
+          throw new java.lang.NullPointerException();
+        }
+        try {
+          boolean done = false;
+          while (!done) {
+            int tag = input.readTag();
+            switch (tag) {
+              case 0:
+                done = true;
+                break;
+              case 10: {
+                start_ = input.readBytes();
+                bitField0_ |= 0x00000001;
+                break;
+              } // case 10
+              case 16: {
+                startInclusive_ = input.readBool();
+                bitField0_ |= 0x00000002;
+                break;
+              } // case 16
+              case 26: {
+                stop_ = input.readBytes();
+                bitField0_ |= 0x00000004;
+                break;
+              } // case 26
+              case 32: {
+                stopInclusive_ = input.readBool();
+                bitField0_ |= 0x00000008;
+                break;
+              } // case 32
+              default: {
+                if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                  done = true; // was an endgroup tag
+                }
+                break;
+              } // default:
+            } // switch (tag)
+          } // while (!done)
+        } catch (org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException e) {
+          throw e.unwrapIOException();
+        } finally {
+          onChanged();
+        } // finally
+        return this;
+      }
+      private int bitField0_;
+
+      private org.apache.hbase.thirdparty.com.google.protobuf.ByteString start_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+      /**
+       * <code>required bytes start = 1;</code>
+       * @return Whether the start field is set.
+       */
+      @java.lang.Override
+      public boolean hasStart() {
+        return ((bitField0_ & 0x00000001) != 0);
+      }
+      /**
+       * <code>required bytes start = 1;</code>
+       * @return The start.
+       */
+      @java.lang.Override
+      public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getStart() {
+        return start_;
+      }
+      /**
+       * <code>required bytes start = 1;</code>
+       * @param value The start to set.
+       * @return This builder for chaining.
+       */
+      public Builder setStart(org.apache.hbase.thirdparty.com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        start_ = value;
+        bitField0_ |= 0x00000001;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>required bytes start = 1;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearStart() {
+        bitField0_ = (bitField0_ & ~0x00000001);
+        start_ = getDefaultInstance().getStart();
+        onChanged();
+        return this;
+      }
+
+      private boolean startInclusive_ = true;
+      /**
+       * <code>optional bool start_inclusive = 2 [default = true];</code>
+       * @return Whether the startInclusive field is set.
+       */
+      @java.lang.Override
+      public boolean hasStartInclusive() {
+        return ((bitField0_ & 0x00000002) != 0);
+      }
+      /**
+       * <code>optional bool start_inclusive = 2 [default = true];</code>
+       * @return The startInclusive.
+       */
+      @java.lang.Override
+      public boolean getStartInclusive() {
+        return startInclusive_;
+      }
+      /**
+       * <code>optional bool start_inclusive = 2 [default = true];</code>
+       * @param value The startInclusive to set.
+       * @return This builder for chaining.
+       */
+      public Builder setStartInclusive(boolean value) {
+
+        startInclusive_ = value;
+        bitField0_ |= 0x00000002;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>optional bool start_inclusive = 2 [default = true];</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearStartInclusive() {
+        bitField0_ = (bitField0_ & ~0x00000002);
+        startInclusive_ = true;
+        onChanged();
+        return this;
+      }
+
+      private org.apache.hbase.thirdparty.com.google.protobuf.ByteString stop_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+      /**
+       * <code>optional bytes stop = 3;</code>
+       * @return Whether the stop field is set.
+       */
+      @java.lang.Override
+      public boolean hasStop() {
+        return ((bitField0_ & 0x00000004) != 0);
+      }
+      /**
+       * <code>optional bytes stop = 3;</code>
+       * @return The stop.
+       */
+      @java.lang.Override
+      public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getStop() {
+        return stop_;
+      }
+      /**
+       * <code>optional bytes stop = 3;</code>
+       * @param value The stop to set.
+       * @return This builder for chaining.
+       */
+      public Builder setStop(org.apache.hbase.thirdparty.com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        stop_ = value;
+        bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>optional bytes stop = 3;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearStop() {
+        bitField0_ = (bitField0_ & ~0x00000004);
+        stop_ = getDefaultInstance().getStop();
+        onChanged();
+        return this;
+      }
+
+      private boolean stopInclusive_ ;
+      /**
+       * <code>optional bool stop_inclusive = 4;</code>
+       * @return Whether the stopInclusive field is set.
+       */
+      @java.lang.Override
+      public boolean hasStopInclusive() {
+        return ((bitField0_ & 0x00000008) != 0);
+      }
+      /**
+       * <code>optional bool stop_inclusive = 4;</code>
+       * @return The stopInclusive.
+       */
+      @java.lang.Override
+      public boolean getStopInclusive() {
+        return stopInclusive_;
+      }
+      /**
+       * <code>optional bool stop_inclusive = 4;</code>
+       * @param value The stopInclusive to set.
+       * @return This builder for chaining.
+       */
+      public Builder setStopInclusive(boolean value) {
+
+        stopInclusive_ = value;
+        bitField0_ |= 0x00000008;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>optional bool stop_inclusive = 4;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearStopInclusive() {
+        bitField0_ = (bitField0_ & ~0x00000008);
+        stopInclusive_ = false;
+        onChanged();
+        return this;
+      }
+
+      // @@protoc_insertion_point(builder_scope:tripatha.hbase.RowRange)
+    }
+
+    // @@protoc_insertion_point(class_scope:tripatha.hbase.RowRange)
+    private static final org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange DEFAULT_INSTANCE;
+    static {
+      DEFAULT_INSTANCE = new org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange();
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange getDefaultInstance() {
+      return DEFAULT_INSTANCE;
+    }
+
+    private static final org.apache.hbase.thirdparty.com.google.protobuf.Parser<RowRange>
+        PARSER = new org.apache.hbase.thirdparty.com.google.protobuf.AbstractParser<RowRange>() {
+      @java.lang.Override
+      public RowRange parsePartialFrom(
+          org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input,
+          org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+        Builder builder = newBuilder();
+        try {
+          builder.mergeFrom(input, extensionRegistry);
+        } catch (org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException e) {
+          throw e.setUnfinishedMessage(builder.buildPartial());
+        } catch (org.apache.hbase.thirdparty.com.google.protobuf.UninitializedMessageException e) {
+          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(builder.buildPartial());
+        } catch (java.io.IOException e) {
+          throw new org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException(e)
+              .setUnfinishedMessage(builder.buildPartial());
+        }
+        return builder.buildPartial();
+      }
+    };
+
+    public static org.apache.hbase.thirdparty.com.google.protobuf.Parser<RowRange> parser() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public org.apache.hbase.thirdparty.com.google.protobuf.Parser<RowRange> getParserForType() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange getDefaultInstanceForType() {
+      return DEFAULT_INSTANCE;
+    }
+
+  }
+
+  public interface CountRequestOrBuilder extends
+      // @@protoc_insertion_point(interface_extends:tripatha.hbase.CountRequest)
+      org.apache.hbase.thirdparty.com.google.protobuf.MessageOrBuilder {
+
+    /**
+     * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+     */
+    java.util.List<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange> 
+        getRangesList();
+    /**
+     * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+     */
+    org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange getRanges(int index);
+    /**
+     * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+     */
+    int getRangesCount();
+    /**
+     * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+     */
+    java.util.List<? extends org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRangeOrBuilder> 
+        getRangesOrBuilderList();
+    /**
+     * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+     */
+    org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRangeOrBuilder getRangesOrBuilder(
+        int index);
+
+    /**
+     * <pre>
+     * The scan's labels, as for an intersection.
+     * </pre>
+     *
+     * <code>optional bool labels_set = 2;</code>
+     * @return Whether the labelsSet field is set.
+     */
+    boolean hasLabelsSet();
+    /**
+     * <pre>
+     * The scan's labels, as for an intersection.
+     * </pre>
+     *
+     * <code>optional bool labels_set = 2;</code>
+     * @return The labelsSet.
+     */
+    boolean getLabelsSet();
+
+    /**
+     * <code>repeated string labels = 3;</code>
+     * @return A list containing the labels.
+     */
+    java.util.List<java.lang.String>
+        getLabelsList();
+    /**
+     * <code>repeated string labels = 3;</code>
+     * @return The count of labels.
+     */
+    int getLabelsCount();
+    /**
+     * <code>repeated string labels = 3;</code>
+     * @param index The index of the element to return.
+     * @return The labels at the given index.
+     */
+    java.lang.String getLabels(int index);
+    /**
+     * <code>repeated string labels = 3;</code>
+     * @param index The index of the value to return.
+     * @return The bytes of the labels at the given index.
+     */
+    org.apache.hbase.thirdparty.com.google.protobuf.ByteString
+        getLabelsBytes(int index);
+
+    /**
+     * <pre>
+     * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+     * </pre>
+     *
+     * <code>repeated bytes prefixes = 4;</code>
+     * @return A list containing the prefixes.
+     */
+    java.util.List<org.apache.hbase.thirdparty.com.google.protobuf.ByteString> getPrefixesList();
+    /**
+     * <pre>
+     * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+     * </pre>
+     *
+     * <code>repeated bytes prefixes = 4;</code>
+     * @return The count of prefixes.
+     */
+    int getPrefixesCount();
+    /**
+     * <pre>
+     * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+     * </pre>
+     *
+     * <code>repeated bytes prefixes = 4;</code>
+     * @param index The index of the element to return.
+     * @return The prefixes at the given index.
+     */
+    org.apache.hbase.thirdparty.com.google.protobuf.ByteString getPrefixes(int index);
+
+    /**
+     * <code>optional int64 from_timestamp = 5;</code>
+     * @return Whether the fromTimestamp field is set.
+     */
+    boolean hasFromTimestamp();
+    /**
+     * <code>optional int64 from_timestamp = 5;</code>
+     * @return The fromTimestamp.
+     */
+    long getFromTimestamp();
+
+    /**
+     * <code>optional int64 to_timestamp = 6;</code>
+     * @return Whether the toTimestamp field is set.
+     */
+    boolean hasToTimestamp();
+    /**
+     * <code>optional int64 to_timestamp = 6;</code>
+     * @return The toTimestamp.
+     */
+    long getToTimestamp();
+
+    /**
+     * <pre>
+     * A page ends between two rows once this many rows have been read or this many milliseconds
+     * spent; hidden rows count.
+     * </pre>
+     *
+     * <code>optional int64 max_rows = 7;</code>
+     * @return Whether the maxRows field is set.
+     */
+    boolean hasMaxRows();
+    /**
+     * <pre>
+     * A page ends between two rows once this many rows have been read or this many milliseconds
+     * spent; hidden rows count.
+     * </pre>
+     *
+     * <code>optional int64 max_rows = 7;</code>
+     * @return The maxRows.
+     */
+    long getMaxRows();
+
+    /**
+     * <code>optional int32 max_millis = 8;</code>
+     * @return Whether the maxMillis field is set.
+     */
+    boolean hasMaxMillis();
+    /**
+     * <code>optional int32 max_millis = 8;</code>
+     * @return The maxMillis.
+     */
+    int getMaxMillis();
+  }
+  /**
+   * <pre>
+   * How many cells each range holds in this region (SCALE-STUDY.md O26): the cells a scan with these
+   * labels, column prefixes and time range would return. The ranges are sorted and don't overlap.
+   * </pre>
+   *
+   * Protobuf type {@code tripatha.hbase.CountRequest}
+   */
+  public static final class CountRequest extends
+      org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage implements
+      // @@protoc_insertion_point(message_implements:tripatha.hbase.CountRequest)
+      CountRequestOrBuilder {
+  private static final long serialVersionUID = 0L;
+    static {
+      org.apache.hbase.thirdparty.com.google.protobuf.RuntimeVersion.validateProtobufGencodeVersion(
+        org.apache.hbase.thirdparty.com.google.protobuf.RuntimeVersion.RuntimeDomain.PUBLIC,
+        /* major= */ 4,
+        /* minor= */ 34,
+        /* patch= */ 0,
+        /* suffix= */ "",
+        "CountRequest");
+    }
+    // Use CountRequest.newBuilder() to construct.
+    private CountRequest(org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.Builder<?> builder) {
+      super(builder);
+    }
+    private CountRequest() {
+      ranges_ = java.util.Collections.emptyList();
+      labels_ =
+          org.apache.hbase.thirdparty.com.google.protobuf.LazyStringArrayList.emptyList();
+      prefixes_ = emptyList(org.apache.hbase.thirdparty.com.google.protobuf.ByteString.class);
+    }
+
+    public static final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+        getDescriptor() {
+      return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountRequest_descriptor;
+    }
+
+    @java.lang.Override
+    public org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor getDescriptorForType() {
+      return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountRequest_descriptor;
+    }
+
+    @java.lang.Override
+    protected org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable
+        internalGetFieldAccessorTable() {
+      return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountRequest_fieldAccessorTable
+          .ensureFieldAccessorsInitialized(
+              org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest.class, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest.Builder.class);
+    }
+
+    private int bitField0_;
+    public static final int RANGES_FIELD_NUMBER = 1;
+    @SuppressWarnings("serial")
+    private java.util.List<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange> ranges_;
+    /**
+     * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+     */
+    @java.lang.Override
+    public java.util.List<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange> getRangesList() {
+      return ranges_;
+    }
+    /**
+     * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+     */
+    @java.lang.Override
+    public java.util.List<? extends org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRangeOrBuilder> 
+        getRangesOrBuilderList() {
+      return ranges_;
+    }
+    /**
+     * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+     */
+    @java.lang.Override
+    public int getRangesCount() {
+      return ranges_.size();
+    }
+    /**
+     * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+     */
+    @java.lang.Override
+    public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange getRanges(int index) {
+      return ranges_.get(index);
+    }
+    /**
+     * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+     */
+    @java.lang.Override
+    public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRangeOrBuilder getRangesOrBuilder(
+        int index) {
+      return ranges_.get(index);
+    }
+
+    public static final int LABELS_SET_FIELD_NUMBER = 2;
+    private boolean labelsSet_ = false;
+    /**
+     * <pre>
+     * The scan's labels, as for an intersection.
+     * </pre>
+     *
+     * <code>optional bool labels_set = 2;</code>
+     * @return Whether the labelsSet field is set.
+     */
+    @java.lang.Override
+    public boolean hasLabelsSet() {
+      return ((bitField0_ & 0x00000001) != 0);
+    }
+    /**
+     * <pre>
+     * The scan's labels, as for an intersection.
+     * </pre>
+     *
+     * <code>optional bool labels_set = 2;</code>
+     * @return The labelsSet.
+     */
+    @java.lang.Override
+    public boolean getLabelsSet() {
+      return labelsSet_;
+    }
+
+    public static final int LABELS_FIELD_NUMBER = 3;
+    @SuppressWarnings("serial")
+    private org.apache.hbase.thirdparty.com.google.protobuf.LazyStringArrayList labels_ =
+        org.apache.hbase.thirdparty.com.google.protobuf.LazyStringArrayList.emptyList();
+    /**
+     * <code>repeated string labels = 3;</code>
+     * @return A list containing the labels.
+     */
+    public org.apache.hbase.thirdparty.com.google.protobuf.ProtocolStringList
+        getLabelsList() {
+      return labels_;
+    }
+    /**
+     * <code>repeated string labels = 3;</code>
+     * @return The count of labels.
+     */
+    public int getLabelsCount() {
+      return labels_.size();
+    }
+    /**
+     * <code>repeated string labels = 3;</code>
+     * @param index The index of the element to return.
+     * @return The labels at the given index.
+     */
+    public java.lang.String getLabels(int index) {
+      return labels_.get(index);
+    }
+    /**
+     * <code>repeated string labels = 3;</code>
+     * @param index The index of the value to return.
+     * @return The bytes of the labels at the given index.
+     */
+    public org.apache.hbase.thirdparty.com.google.protobuf.ByteString
+        getLabelsBytes(int index) {
+      return labels_.getByteString(index);
+    }
+
+    public static final int PREFIXES_FIELD_NUMBER = 4;
+    @SuppressWarnings("serial")
+    private org.apache.hbase.thirdparty.com.google.protobuf.Internal.ProtobufList<org.apache.hbase.thirdparty.com.google.protobuf.ByteString> prefixes_ =
+        emptyList(org.apache.hbase.thirdparty.com.google.protobuf.ByteString.class);
+    /**
+     * <pre>
+     * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+     * </pre>
+     *
+     * <code>repeated bytes prefixes = 4;</code>
+     * @return A list containing the prefixes.
+     */
+    @java.lang.Override
+    public java.util.List<org.apache.hbase.thirdparty.com.google.protobuf.ByteString>
+        getPrefixesList() {
+      return prefixes_;
+    }
+    /**
+     * <pre>
+     * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+     * </pre>
+     *
+     * <code>repeated bytes prefixes = 4;</code>
+     * @return The count of prefixes.
+     */
+    public int getPrefixesCount() {
+      return prefixes_.size();
+    }
+    /**
+     * <pre>
+     * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+     * </pre>
+     *
+     * <code>repeated bytes prefixes = 4;</code>
+     * @param index The index of the element to return.
+     * @return The prefixes at the given index.
+     */
+    public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getPrefixes(int index) {
+      return prefixes_.get(index);
+    }
+
+    public static final int FROM_TIMESTAMP_FIELD_NUMBER = 5;
+    private long fromTimestamp_ = 0L;
+    /**
+     * <code>optional int64 from_timestamp = 5;</code>
+     * @return Whether the fromTimestamp field is set.
+     */
+    @java.lang.Override
+    public boolean hasFromTimestamp() {
+      return ((bitField0_ & 0x00000002) != 0);
+    }
+    /**
+     * <code>optional int64 from_timestamp = 5;</code>
+     * @return The fromTimestamp.
+     */
+    @java.lang.Override
+    public long getFromTimestamp() {
+      return fromTimestamp_;
+    }
+
+    public static final int TO_TIMESTAMP_FIELD_NUMBER = 6;
+    private long toTimestamp_ = 0L;
+    /**
+     * <code>optional int64 to_timestamp = 6;</code>
+     * @return Whether the toTimestamp field is set.
+     */
+    @java.lang.Override
+    public boolean hasToTimestamp() {
+      return ((bitField0_ & 0x00000004) != 0);
+    }
+    /**
+     * <code>optional int64 to_timestamp = 6;</code>
+     * @return The toTimestamp.
+     */
+    @java.lang.Override
+    public long getToTimestamp() {
+      return toTimestamp_;
+    }
+
+    public static final int MAX_ROWS_FIELD_NUMBER = 7;
+    private long maxRows_ = 0L;
+    /**
+     * <pre>
+     * A page ends between two rows once this many rows have been read or this many milliseconds
+     * spent; hidden rows count.
+     * </pre>
+     *
+     * <code>optional int64 max_rows = 7;</code>
+     * @return Whether the maxRows field is set.
+     */
+    @java.lang.Override
+    public boolean hasMaxRows() {
+      return ((bitField0_ & 0x00000008) != 0);
+    }
+    /**
+     * <pre>
+     * A page ends between two rows once this many rows have been read or this many milliseconds
+     * spent; hidden rows count.
+     * </pre>
+     *
+     * <code>optional int64 max_rows = 7;</code>
+     * @return The maxRows.
+     */
+    @java.lang.Override
+    public long getMaxRows() {
+      return maxRows_;
+    }
+
+    public static final int MAX_MILLIS_FIELD_NUMBER = 8;
+    private int maxMillis_ = 0;
+    /**
+     * <code>optional int32 max_millis = 8;</code>
+     * @return Whether the maxMillis field is set.
+     */
+    @java.lang.Override
+    public boolean hasMaxMillis() {
+      return ((bitField0_ & 0x00000010) != 0);
+    }
+    /**
+     * <code>optional int32 max_millis = 8;</code>
+     * @return The maxMillis.
+     */
+    @java.lang.Override
+    public int getMaxMillis() {
+      return maxMillis_;
+    }
+
+    private byte memoizedIsInitialized = -1;
+    @java.lang.Override
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized == 1) return true;
+      if (isInitialized == 0) return false;
+
+      for (int i = 0; i < getRangesCount(); i++) {
+        if (!getRanges(i).isInitialized()) {
+          memoizedIsInitialized = 0;
+          return false;
+        }
+      }
+      memoizedIsInitialized = 1;
+      return true;
+    }
+
+    @java.lang.Override
+    public void writeTo(org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream output)
+                        throws java.io.IOException {
+      for (int i = 0; i < ranges_.size(); i++) {
+        output.writeMessage(1, ranges_.get(i));
+      }
+      if (((bitField0_ & 0x00000001) != 0)) {
+        output.writeBool(2, labelsSet_);
+      }
+      for (int i = 0; i < labels_.size(); i++) {
+        org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.writeString(output, 3, labels_.getRaw(i));
+      }
+      for (int i = 0; i < prefixes_.size(); i++) {
+        output.writeBytes(4, prefixes_.get(i));
+      }
+      if (((bitField0_ & 0x00000002) != 0)) {
+        output.writeInt64(5, fromTimestamp_);
+      }
+      if (((bitField0_ & 0x00000004) != 0)) {
+        output.writeInt64(6, toTimestamp_);
+      }
+      if (((bitField0_ & 0x00000008) != 0)) {
+        output.writeInt64(7, maxRows_);
+      }
+      if (((bitField0_ & 0x00000010) != 0)) {
+        output.writeInt32(8, maxMillis_);
+      }
+      getUnknownFields().writeTo(output);
+    }
+
+    @java.lang.Override
+    public int getSerializedSize() {
+      int size = memoizedSize;
+      if (size != -1) return size;
+
+      size = 0;
+
+          {
+            final int count = ranges_.size();
+            for (int i = 0; i < count; i++) {
+              size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+                .computeMessageSizeNoTag(ranges_.get(i));
+            }
+            size += 1 * count;
+          }
+      if (((bitField0_ & 0x00000001) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeBoolSize(2, labelsSet_);
+      }
+      {
+        int dataSize = 0;
+        for (int i = 0; i < labels_.size(); i++) {
+          dataSize += computeStringSizeNoTag(labels_.getRaw(i));
+        }
+        size += dataSize;
+        size += 1 * getLabelsList().size();
+      }
+      {
+        int dataSize = 0;
+        for (int i = 0; i < prefixes_.size(); i++) {
+          dataSize += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+            .computeBytesSizeNoTag(prefixes_.get(i));
+        }
+        size += dataSize;
+        size += 1 * getPrefixesList().size();
+      }
+      if (((bitField0_ & 0x00000002) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeInt64Size(5, fromTimestamp_);
+      }
+      if (((bitField0_ & 0x00000004) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeInt64Size(6, toTimestamp_);
+      }
+      if (((bitField0_ & 0x00000008) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeInt64Size(7, maxRows_);
+      }
+      if (((bitField0_ & 0x00000010) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeInt32Size(8, maxMillis_);
+      }
+      size += getUnknownFields().getSerializedSize();
+      memoizedSize = size;
+      return size;
+    }
+
+    @java.lang.Override
+    public boolean equals(final java.lang.Object obj) {
+      if (obj == this) {
+       return true;
+      }
+      if (!(obj instanceof org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest)) {
+        return super.equals(obj);
+      }
+      org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest other = (org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest) obj;
+
+      if (!getRangesList()
+          .equals(other.getRangesList())) return false;
+      if (hasLabelsSet() != other.hasLabelsSet()) return false;
+      if (hasLabelsSet()) {
+        if (getLabelsSet()
+            != other.getLabelsSet()) return false;
+      }
+      if (!getLabelsList()
+          .equals(other.getLabelsList())) return false;
+      if (!getPrefixesList()
+          .equals(other.getPrefixesList())) return false;
+      if (hasFromTimestamp() != other.hasFromTimestamp()) return false;
+      if (hasFromTimestamp()) {
+        if (getFromTimestamp()
+            != other.getFromTimestamp()) return false;
+      }
+      if (hasToTimestamp() != other.hasToTimestamp()) return false;
+      if (hasToTimestamp()) {
+        if (getToTimestamp()
+            != other.getToTimestamp()) return false;
+      }
+      if (hasMaxRows() != other.hasMaxRows()) return false;
+      if (hasMaxRows()) {
+        if (getMaxRows()
+            != other.getMaxRows()) return false;
+      }
+      if (hasMaxMillis() != other.hasMaxMillis()) return false;
+      if (hasMaxMillis()) {
+        if (getMaxMillis()
+            != other.getMaxMillis()) return false;
+      }
+      if (!getUnknownFields().equals(other.getUnknownFields())) return false;
+      return true;
+    }
+
+    @java.lang.Override
+    public int hashCode() {
+      if (memoizedHashCode != 0) {
+        return memoizedHashCode;
+      }
+      int hash = 41;
+      hash = (19 * hash) + getDescriptor().hashCode();
+      if (getRangesCount() > 0) {
+        hash = (37 * hash) + RANGES_FIELD_NUMBER;
+        hash = (53 * hash) + getRangesList().hashCode();
+      }
+      if (hasLabelsSet()) {
+        hash = (37 * hash) + LABELS_SET_FIELD_NUMBER;
+        hash = (53 * hash) + org.apache.hbase.thirdparty.com.google.protobuf.Internal.hashBoolean(
+            getLabelsSet());
+      }
+      if (getLabelsCount() > 0) {
+        hash = (37 * hash) + LABELS_FIELD_NUMBER;
+        hash = (53 * hash) + getLabelsList().hashCode();
+      }
+      if (getPrefixesCount() > 0) {
+        hash = (37 * hash) + PREFIXES_FIELD_NUMBER;
+        hash = (53 * hash) + getPrefixesList().hashCode();
+      }
+      if (hasFromTimestamp()) {
+        hash = (37 * hash) + FROM_TIMESTAMP_FIELD_NUMBER;
+        hash = (53 * hash) + org.apache.hbase.thirdparty.com.google.protobuf.Internal.hashLong(
+            getFromTimestamp());
+      }
+      if (hasToTimestamp()) {
+        hash = (37 * hash) + TO_TIMESTAMP_FIELD_NUMBER;
+        hash = (53 * hash) + org.apache.hbase.thirdparty.com.google.protobuf.Internal.hashLong(
+            getToTimestamp());
+      }
+      if (hasMaxRows()) {
+        hash = (37 * hash) + MAX_ROWS_FIELD_NUMBER;
+        hash = (53 * hash) + org.apache.hbase.thirdparty.com.google.protobuf.Internal.hashLong(
+            getMaxRows());
+      }
+      if (hasMaxMillis()) {
+        hash = (37 * hash) + MAX_MILLIS_FIELD_NUMBER;
+        hash = (53 * hash) + getMaxMillis();
+      }
+      hash = (29 * hash) + getUnknownFields().hashCode();
+      memoizedHashCode = hash;
+      return hash;
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseFrom(
+        java.nio.ByteBuffer data)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseFrom(
+        java.nio.ByteBuffer data,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.ByteString data)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.ByteString data,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseFrom(byte[] data)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseFrom(
+        byte[] data,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseFrom(
+        java.io.InputStream input,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseDelimitedWithIOException(PARSER, input);
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseDelimitedFrom(
+        java.io.InputStream input,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    @java.lang.Override
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder() {
+      return DEFAULT_INSTANCE.toBuilder();
+    }
+    public static Builder newBuilder(org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest prototype) {
+      return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
+    }
+    @java.lang.Override
+    public Builder toBuilder() {
+      return this == DEFAULT_INSTANCE
+          ? new Builder() : new Builder().mergeFrom(this);
+    }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(
+        org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+      Builder builder = new Builder(parent);
+      return builder;
+    }
+    /**
+     * <pre>
+     * How many cells each range holds in this region (SCALE-STUDY.md O26): the cells a scan with these
+     * labels, column prefixes and time range would return. The ranges are sorted and don't overlap.
+     * </pre>
+     *
+     * Protobuf type {@code tripatha.hbase.CountRequest}
+     */
+    public static final class Builder extends
+        org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.Builder<Builder> implements
+        // @@protoc_insertion_point(builder_implements:tripatha.hbase.CountRequest)
+        org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequestOrBuilder {
+      public static final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+          getDescriptor() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountRequest_descriptor;
+      }
+
+      @java.lang.Override
+      protected org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountRequest_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest.class, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest.Builder.class);
+      }
+
+      // Construct using org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest.newBuilder()
+      private Builder() {
+
+      }
+
+      private Builder(
+          org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+        super(parent);
+
+      }
+      @java.lang.Override
+      public Builder clear() {
+        super.clear();
+        bitField0_ = 0;
+        if (rangesBuilder_ == null) {
+          ranges_ = java.util.Collections.emptyList();
+        } else {
+          ranges_ = null;
+          rangesBuilder_.clear();
+        }
+        bitField0_ = (bitField0_ & ~0x00000001);
+        labelsSet_ = false;
+        labels_ =
+            org.apache.hbase.thirdparty.com.google.protobuf.LazyStringArrayList.emptyList();
+        prefixes_ = emptyList(org.apache.hbase.thirdparty.com.google.protobuf.ByteString.class);
+        fromTimestamp_ = 0L;
+        toTimestamp_ = 0L;
+        maxRows_ = 0L;
+        maxMillis_ = 0;
+        return this;
+      }
+
+      @java.lang.Override
+      public org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+          getDescriptorForType() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountRequest_descriptor;
+      }
+
+      @java.lang.Override
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest getDefaultInstanceForType() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest.getDefaultInstance();
+      }
+
+      @java.lang.Override
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest build() {
+        org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+
+      @java.lang.Override
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest buildPartial() {
+        org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest result = new org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest(this);
+        buildPartialRepeatedFields(result);
+        if (bitField0_ != 0) { buildPartial0(result); }
+        onBuilt();
+        return result;
+      }
+
+      private void buildPartialRepeatedFields(org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest result) {
+        if (rangesBuilder_ == null) {
+          if (((bitField0_ & 0x00000001) != 0)) {
+            ranges_ = java.util.Collections.unmodifiableList(ranges_);
+            bitField0_ = (bitField0_ & ~0x00000001);
+          }
+          result.ranges_ = ranges_;
+        } else {
+          result.ranges_ = rangesBuilder_.build();
+        }
+      }
+
+      private void buildPartial0(org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest result) {
+        int from_bitField0_ = bitField0_;
+        int to_bitField0_ = 0;
+        if (((from_bitField0_ & 0x00000002) != 0)) {
+          result.labelsSet_ = labelsSet_;
+          to_bitField0_ |= 0x00000001;
+        }
+        if (((from_bitField0_ & 0x00000004) != 0)) {
+          labels_.makeImmutable();
+          result.labels_ = labels_;
+        }
+        if (((from_bitField0_ & 0x00000008) != 0)) {
+          prefixes_.makeImmutable();
+          result.prefixes_ = prefixes_;
+        }
+        if (((from_bitField0_ & 0x00000010) != 0)) {
+          result.fromTimestamp_ = fromTimestamp_;
+          to_bitField0_ |= 0x00000002;
+        }
+        if (((from_bitField0_ & 0x00000020) != 0)) {
+          result.toTimestamp_ = toTimestamp_;
+          to_bitField0_ |= 0x00000004;
+        }
+        if (((from_bitField0_ & 0x00000040) != 0)) {
+          result.maxRows_ = maxRows_;
+          to_bitField0_ |= 0x00000008;
+        }
+        if (((from_bitField0_ & 0x00000080) != 0)) {
+          result.maxMillis_ = maxMillis_;
+          to_bitField0_ |= 0x00000010;
+        }
+        result.bitField0_ |= to_bitField0_;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(org.apache.hbase.thirdparty.com.google.protobuf.Message other) {
+        if (other instanceof org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest) {
+          return mergeFrom((org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest)other);
+        } else {
+          super.mergeFrom(other);
+          return this;
+        }
+      }
+
+      public Builder mergeFrom(org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest other) {
+        if (other == org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest.getDefaultInstance()) return this;
+        if (rangesBuilder_ == null) {
+          if (!other.ranges_.isEmpty()) {
+            if (ranges_.isEmpty()) {
+              ranges_ = other.ranges_;
+              bitField0_ = (bitField0_ & ~0x00000001);
+            } else {
+              ensureRangesIsMutable();
+              ranges_.addAll(other.ranges_);
+            }
+            onChanged();
+          }
+        } else {
+          if (!other.ranges_.isEmpty()) {
+            if (rangesBuilder_.isEmpty()) {
+              rangesBuilder_.dispose();
+              rangesBuilder_ = null;
+              ranges_ = other.ranges_;
+              bitField0_ = (bitField0_ & ~0x00000001);
+              rangesBuilder_ = 
+                org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.alwaysUseFieldBuilders ?
+                   internalGetRangesFieldBuilder() : null;
+            } else {
+              rangesBuilder_.addAllMessages(other.ranges_);
+            }
+          }
+        }
+        if (other.hasLabelsSet()) {
+          setLabelsSet(other.getLabelsSet());
+        }
+        if (!other.labels_.isEmpty()) {
+          if (labels_.isEmpty()) {
+            labels_ = other.labels_;
+            bitField0_ |= 0x00000004;
+          } else {
+            ensureLabelsIsMutable();
+            labels_.addAll(other.labels_);
+          }
+          onChanged();
+        }
+        if (!other.prefixes_.isEmpty()) {
+          if (prefixes_.isEmpty()) {
+            prefixes_ = other.prefixes_;
+            prefixes_.makeImmutable();
+            bitField0_ |= 0x00000008;
+          } else {
+            ensurePrefixesIsMutable();
+            prefixes_.addAll(other.prefixes_);
+          }
+          onChanged();
+        }
+        if (other.hasFromTimestamp()) {
+          setFromTimestamp(other.getFromTimestamp());
+        }
+        if (other.hasToTimestamp()) {
+          setToTimestamp(other.getToTimestamp());
+        }
+        if (other.hasMaxRows()) {
+          setMaxRows(other.getMaxRows());
+        }
+        if (other.hasMaxMillis()) {
+          setMaxMillis(other.getMaxMillis());
+        }
+        this.mergeUnknownFields(other.getUnknownFields());
+        onChanged();
+        return this;
+      }
+
+      @java.lang.Override
+      public final boolean isInitialized() {
+        for (int i = 0; i < getRangesCount(); i++) {
+          if (!getRanges(i).isInitialized()) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(
+          org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input,
+          org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        if (extensionRegistry == null) {
+          throw new java.lang.NullPointerException();
+        }
+        try {
+          boolean done = false;
+          while (!done) {
+            int tag = input.readTag();
+            switch (tag) {
+              case 0:
+                done = true;
+                break;
+              case 10: {
+                org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange m =
+                    input.readMessage(
+                        org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.parser(),
+                        extensionRegistry);
+                if (rangesBuilder_ == null) {
+                  ensureRangesIsMutable();
+                  ranges_.add(m);
+                } else {
+                  rangesBuilder_.addMessage(m);
+                }
+                break;
+              } // case 10
+              case 16: {
+                labelsSet_ = input.readBool();
+                bitField0_ |= 0x00000002;
+                break;
+              } // case 16
+              case 26: {
+                org.apache.hbase.thirdparty.com.google.protobuf.ByteString bs = input.readBytes();
+                ensureLabelsIsMutable();
+                labels_.add(bs);
+                break;
+              } // case 26
+              case 34: {
+                org.apache.hbase.thirdparty.com.google.protobuf.ByteString v = input.readBytes();
+                ensurePrefixesIsMutable();
+                prefixes_.add(v);
+                break;
+              } // case 34
+              case 40: {
+                fromTimestamp_ = input.readInt64();
+                bitField0_ |= 0x00000010;
+                break;
+              } // case 40
+              case 48: {
+                toTimestamp_ = input.readInt64();
+                bitField0_ |= 0x00000020;
+                break;
+              } // case 48
+              case 56: {
+                maxRows_ = input.readInt64();
+                bitField0_ |= 0x00000040;
+                break;
+              } // case 56
+              case 64: {
+                maxMillis_ = input.readInt32();
+                bitField0_ |= 0x00000080;
+                break;
+              } // case 64
+              default: {
+                if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                  done = true; // was an endgroup tag
+                }
+                break;
+              } // default:
+            } // switch (tag)
+          } // while (!done)
+        } catch (org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException e) {
+          throw e.unwrapIOException();
+        } finally {
+          onChanged();
+        } // finally
+        return this;
+      }
+      private int bitField0_;
+
+      private java.util.List<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange> ranges_ =
+        java.util.Collections.emptyList();
+      private void ensureRangesIsMutable() {
+        if (!((bitField0_ & 0x00000001) != 0)) {
+          ranges_ = new java.util.ArrayList<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange>(ranges_);
+          bitField0_ |= 0x00000001;
+         }
+      }
+
+      private org.apache.hbase.thirdparty.com.google.protobuf.RepeatedFieldBuilder<
+          org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRangeOrBuilder> rangesBuilder_;
+
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public java.util.List<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange> getRangesList() {
+        if (rangesBuilder_ == null) {
+          return java.util.Collections.unmodifiableList(ranges_);
+        } else {
+          return rangesBuilder_.getMessageList();
+        }
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public int getRangesCount() {
+        if (rangesBuilder_ == null) {
+          return ranges_.size();
+        } else {
+          return rangesBuilder_.getCount();
+        }
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange getRanges(int index) {
+        if (rangesBuilder_ == null) {
+          return ranges_.get(index);
+        } else {
+          return rangesBuilder_.getMessage(index);
+        }
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public Builder setRanges(
+          int index, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange value) {
+        if (rangesBuilder_ == null) {
+          if (value == null) {
+            throw new NullPointerException();
+          }
+          ensureRangesIsMutable();
+          ranges_.set(index, value);
+          onChanged();
+        } else {
+          rangesBuilder_.setMessage(index, value);
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public Builder setRanges(
+          int index, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder builderForValue) {
+        if (rangesBuilder_ == null) {
+          ensureRangesIsMutable();
+          ranges_.set(index, builderForValue.build());
+          onChanged();
+        } else {
+          rangesBuilder_.setMessage(index, builderForValue.build());
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public Builder addRanges(org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange value) {
+        if (rangesBuilder_ == null) {
+          if (value == null) {
+            throw new NullPointerException();
+          }
+          ensureRangesIsMutable();
+          ranges_.add(value);
+          onChanged();
+        } else {
+          rangesBuilder_.addMessage(value);
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public Builder addRanges(
+          int index, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange value) {
+        if (rangesBuilder_ == null) {
+          if (value == null) {
+            throw new NullPointerException();
+          }
+          ensureRangesIsMutable();
+          ranges_.add(index, value);
+          onChanged();
+        } else {
+          rangesBuilder_.addMessage(index, value);
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public Builder addRanges(
+          org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder builderForValue) {
+        if (rangesBuilder_ == null) {
+          ensureRangesIsMutable();
+          ranges_.add(builderForValue.build());
+          onChanged();
+        } else {
+          rangesBuilder_.addMessage(builderForValue.build());
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public Builder addRanges(
+          int index, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder builderForValue) {
+        if (rangesBuilder_ == null) {
+          ensureRangesIsMutable();
+          ranges_.add(index, builderForValue.build());
+          onChanged();
+        } else {
+          rangesBuilder_.addMessage(index, builderForValue.build());
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public Builder addAllRanges(
+          java.lang.Iterable<? extends org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange> values) {
+        if (rangesBuilder_ == null) {
+          ensureRangesIsMutable();
+          org.apache.hbase.thirdparty.com.google.protobuf.AbstractMessageLite.Builder.addAll(
+              values, ranges_);
+          onChanged();
+        } else {
+          rangesBuilder_.addAllMessages(values);
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public Builder clearRanges() {
+        if (rangesBuilder_ == null) {
+          ranges_ = java.util.Collections.emptyList();
+          bitField0_ = (bitField0_ & ~0x00000001);
+          onChanged();
+        } else {
+          rangesBuilder_.clear();
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public Builder removeRanges(int index) {
+        if (rangesBuilder_ == null) {
+          ensureRangesIsMutable();
+          ranges_.remove(index);
+          onChanged();
+        } else {
+          rangesBuilder_.remove(index);
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder getRangesBuilder(
+          int index) {
+        return internalGetRangesFieldBuilder().getBuilder(index);
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRangeOrBuilder getRangesOrBuilder(
+          int index) {
+        if (rangesBuilder_ == null) {
+          return ranges_.get(index);  } else {
+          return rangesBuilder_.getMessageOrBuilder(index);
+        }
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public java.util.List<? extends org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRangeOrBuilder> 
+           getRangesOrBuilderList() {
+        if (rangesBuilder_ != null) {
+          return rangesBuilder_.getMessageOrBuilderList();
+        } else {
+          return java.util.Collections.unmodifiableList(ranges_);
+        }
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder addRangesBuilder() {
+        return internalGetRangesFieldBuilder().addBuilder(
+            org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.getDefaultInstance());
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder addRangesBuilder(
+          int index) {
+        return internalGetRangesFieldBuilder().addBuilder(
+            index, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.getDefaultInstance());
+      }
+      /**
+       * <code>repeated .tripatha.hbase.RowRange ranges = 1;</code>
+       */
+      public java.util.List<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder> 
+           getRangesBuilderList() {
+        return internalGetRangesFieldBuilder().getBuilderList();
+      }
+      private org.apache.hbase.thirdparty.com.google.protobuf.RepeatedFieldBuilder<
+          org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRangeOrBuilder> 
+          internalGetRangesFieldBuilder() {
+        if (rangesBuilder_ == null) {
+          rangesBuilder_ = new org.apache.hbase.thirdparty.com.google.protobuf.RepeatedFieldBuilder<
+              org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRange.Builder, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RowRangeOrBuilder>(
+                  ranges_,
+                  ((bitField0_ & 0x00000001) != 0),
+                  getParentForChildren(),
+                  isClean());
+          ranges_ = null;
+        }
+        return rangesBuilder_;
+      }
+
+      private boolean labelsSet_ ;
+      /**
+       * <pre>
+       * The scan's labels, as for an intersection.
+       * </pre>
+       *
+       * <code>optional bool labels_set = 2;</code>
+       * @return Whether the labelsSet field is set.
+       */
+      @java.lang.Override
+      public boolean hasLabelsSet() {
+        return ((bitField0_ & 0x00000002) != 0);
+      }
+      /**
+       * <pre>
+       * The scan's labels, as for an intersection.
+       * </pre>
+       *
+       * <code>optional bool labels_set = 2;</code>
+       * @return The labelsSet.
+       */
+      @java.lang.Override
+      public boolean getLabelsSet() {
+        return labelsSet_;
+      }
+      /**
+       * <pre>
+       * The scan's labels, as for an intersection.
+       * </pre>
+       *
+       * <code>optional bool labels_set = 2;</code>
+       * @param value The labelsSet to set.
+       * @return This builder for chaining.
+       */
+      public Builder setLabelsSet(boolean value) {
+
+        labelsSet_ = value;
+        bitField0_ |= 0x00000002;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * The scan's labels, as for an intersection.
+       * </pre>
+       *
+       * <code>optional bool labels_set = 2;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearLabelsSet() {
+        bitField0_ = (bitField0_ & ~0x00000002);
+        labelsSet_ = false;
+        onChanged();
+        return this;
+      }
+
+      private org.apache.hbase.thirdparty.com.google.protobuf.LazyStringArrayList labels_ =
+          org.apache.hbase.thirdparty.com.google.protobuf.LazyStringArrayList.emptyList();
+      private void ensureLabelsIsMutable() {
+        if (!labels_.isModifiable()) {
+          labels_ = new org.apache.hbase.thirdparty.com.google.protobuf.LazyStringArrayList(labels_);
+        }
+        bitField0_ |= 0x00000004;
+      }
+      /**
+       * <code>repeated string labels = 3;</code>
+       * @return A list containing the labels.
+       */
+      public org.apache.hbase.thirdparty.com.google.protobuf.ProtocolStringList
+          getLabelsList() {
+        labels_.makeImmutable();
+        return labels_;
+      }
+      /**
+       * <code>repeated string labels = 3;</code>
+       * @return The count of labels.
+       */
+      public int getLabelsCount() {
+        return labels_.size();
+      }
+      /**
+       * <code>repeated string labels = 3;</code>
+       * @param index The index of the element to return.
+       * @return The labels at the given index.
+       */
+      public java.lang.String getLabels(int index) {
+        return labels_.get(index);
+      }
+      /**
+       * <code>repeated string labels = 3;</code>
+       * @param index The index of the value to return.
+       * @return The bytes of the labels at the given index.
+       */
+      public org.apache.hbase.thirdparty.com.google.protobuf.ByteString
+          getLabelsBytes(int index) {
+        return labels_.getByteString(index);
+      }
+      /**
+       * <code>repeated string labels = 3;</code>
+       * @param index The index to set the value at.
+       * @param value The labels to set.
+       * @return This builder for chaining.
+       */
+      public Builder setLabels(
+          int index, java.lang.String value) {
+        if (value == null) { throw new NullPointerException(); }
+        ensureLabelsIsMutable();
+        labels_.set(index, value);
+        bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string labels = 3;</code>
+       * @param value The labels to add.
+       * @return This builder for chaining.
+       */
+      public Builder addLabels(
+          java.lang.String value) {
+        if (value == null) { throw new NullPointerException(); }
+        ensureLabelsIsMutable();
+        labels_.add(value);
+        bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string labels = 3;</code>
+       * @param values The labels to add.
+       * @return This builder for chaining.
+       */
+      public Builder addAllLabels(
+          java.lang.Iterable<java.lang.String> values) {
+        ensureLabelsIsMutable();
+        org.apache.hbase.thirdparty.com.google.protobuf.AbstractMessageLite.Builder.addAll(
+            values, labels_);
+        bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string labels = 3;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearLabels() {
+        labels_ =
+          org.apache.hbase.thirdparty.com.google.protobuf.LazyStringArrayList.emptyList();
+        bitField0_ = (bitField0_ & ~0x00000004);;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string labels = 3;</code>
+       * @param value The bytes of the labels to add.
+       * @return This builder for chaining.
+       */
+      public Builder addLabelsBytes(
+          org.apache.hbase.thirdparty.com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        ensureLabelsIsMutable();
+        labels_.add(value);
+        bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+
+      private org.apache.hbase.thirdparty.com.google.protobuf.Internal.ProtobufList<org.apache.hbase.thirdparty.com.google.protobuf.ByteString> prefixes_ = emptyList(org.apache.hbase.thirdparty.com.google.protobuf.ByteString.class);
+      private void ensurePrefixesIsMutable() {
+        if (!prefixes_.isModifiable()) {
+          prefixes_ = makeMutableCopy(prefixes_);
+        }
+        bitField0_ |= 0x00000008;
+      }
+      /**
+       * <pre>
+       * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+       * </pre>
+       *
+       * <code>repeated bytes prefixes = 4;</code>
+       * @return A list containing the prefixes.
+       */
+      public java.util.List<org.apache.hbase.thirdparty.com.google.protobuf.ByteString>
+          getPrefixesList() {
+        prefixes_.makeImmutable();
+        return prefixes_;
+      }
+      /**
+       * <pre>
+       * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+       * </pre>
+       *
+       * <code>repeated bytes prefixes = 4;</code>
+       * @return The count of prefixes.
+       */
+      public int getPrefixesCount() {
+        return prefixes_.size();
+      }
+      /**
+       * <pre>
+       * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+       * </pre>
+       *
+       * <code>repeated bytes prefixes = 4;</code>
+       * @param index The index of the element to return.
+       * @return The prefixes at the given index.
+       */
+      public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getPrefixes(int index) {
+        return prefixes_.get(index);
+      }
+      /**
+       * <pre>
+       * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+       * </pre>
+       *
+       * <code>repeated bytes prefixes = 4;</code>
+       * @param index The index to set the value at.
+       * @param value The prefixes to set.
+       * @return This builder for chaining.
+       */
+      public Builder setPrefixes(
+          int index, org.apache.hbase.thirdparty.com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        ensurePrefixesIsMutable();
+        prefixes_.set(index, value);
+        bitField0_ |= 0x00000008;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+       * </pre>
+       *
+       * <code>repeated bytes prefixes = 4;</code>
+       * @param value The prefixes to add.
+       * @return This builder for chaining.
+       */
+      public Builder addPrefixes(org.apache.hbase.thirdparty.com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        ensurePrefixesIsMutable();
+        prefixes_.add(value);
+        bitField0_ |= 0x00000008;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+       * </pre>
+       *
+       * <code>repeated bytes prefixes = 4;</code>
+       * @param values The prefixes to add.
+       * @return This builder for chaining.
+       */
+      public Builder addAllPrefixes(
+          java.lang.Iterable<? extends org.apache.hbase.thirdparty.com.google.protobuf.ByteString> values) {
+        ensurePrefixesIsMutable();
+        org.apache.hbase.thirdparty.com.google.protobuf.AbstractMessageLite.Builder.addAll(
+            values, prefixes_);
+        bitField0_ |= 0x00000008;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * Only cells whose column starts with one of these (HBaseCodec.familyPrefix); none: every cell.
+       * </pre>
+       *
+       * <code>repeated bytes prefixes = 4;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearPrefixes() {
+        prefixes_ = emptyList(org.apache.hbase.thirdparty.com.google.protobuf.ByteString.class);
+        bitField0_ = (bitField0_ & ~0x00000008);
+        onChanged();
+        return this;
+      }
+
+      private long fromTimestamp_ ;
+      /**
+       * <code>optional int64 from_timestamp = 5;</code>
+       * @return Whether the fromTimestamp field is set.
+       */
+      @java.lang.Override
+      public boolean hasFromTimestamp() {
+        return ((bitField0_ & 0x00000010) != 0);
+      }
+      /**
+       * <code>optional int64 from_timestamp = 5;</code>
+       * @return The fromTimestamp.
+       */
+      @java.lang.Override
+      public long getFromTimestamp() {
+        return fromTimestamp_;
+      }
+      /**
+       * <code>optional int64 from_timestamp = 5;</code>
+       * @param value The fromTimestamp to set.
+       * @return This builder for chaining.
+       */
+      public Builder setFromTimestamp(long value) {
+
+        fromTimestamp_ = value;
+        bitField0_ |= 0x00000010;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>optional int64 from_timestamp = 5;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearFromTimestamp() {
+        bitField0_ = (bitField0_ & ~0x00000010);
+        fromTimestamp_ = 0L;
+        onChanged();
+        return this;
+      }
+
+      private long toTimestamp_ ;
+      /**
+       * <code>optional int64 to_timestamp = 6;</code>
+       * @return Whether the toTimestamp field is set.
+       */
+      @java.lang.Override
+      public boolean hasToTimestamp() {
+        return ((bitField0_ & 0x00000020) != 0);
+      }
+      /**
+       * <code>optional int64 to_timestamp = 6;</code>
+       * @return The toTimestamp.
+       */
+      @java.lang.Override
+      public long getToTimestamp() {
+        return toTimestamp_;
+      }
+      /**
+       * <code>optional int64 to_timestamp = 6;</code>
+       * @param value The toTimestamp to set.
+       * @return This builder for chaining.
+       */
+      public Builder setToTimestamp(long value) {
+
+        toTimestamp_ = value;
+        bitField0_ |= 0x00000020;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>optional int64 to_timestamp = 6;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearToTimestamp() {
+        bitField0_ = (bitField0_ & ~0x00000020);
+        toTimestamp_ = 0L;
+        onChanged();
+        return this;
+      }
+
+      private long maxRows_ ;
+      /**
+       * <pre>
+       * A page ends between two rows once this many rows have been read or this many milliseconds
+       * spent; hidden rows count.
+       * </pre>
+       *
+       * <code>optional int64 max_rows = 7;</code>
+       * @return Whether the maxRows field is set.
+       */
+      @java.lang.Override
+      public boolean hasMaxRows() {
+        return ((bitField0_ & 0x00000040) != 0);
+      }
+      /**
+       * <pre>
+       * A page ends between two rows once this many rows have been read or this many milliseconds
+       * spent; hidden rows count.
+       * </pre>
+       *
+       * <code>optional int64 max_rows = 7;</code>
+       * @return The maxRows.
+       */
+      @java.lang.Override
+      public long getMaxRows() {
+        return maxRows_;
+      }
+      /**
+       * <pre>
+       * A page ends between two rows once this many rows have been read or this many milliseconds
+       * spent; hidden rows count.
+       * </pre>
+       *
+       * <code>optional int64 max_rows = 7;</code>
+       * @param value The maxRows to set.
+       * @return This builder for chaining.
+       */
+      public Builder setMaxRows(long value) {
+
+        maxRows_ = value;
+        bitField0_ |= 0x00000040;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * A page ends between two rows once this many rows have been read or this many milliseconds
+       * spent; hidden rows count.
+       * </pre>
+       *
+       * <code>optional int64 max_rows = 7;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearMaxRows() {
+        bitField0_ = (bitField0_ & ~0x00000040);
+        maxRows_ = 0L;
+        onChanged();
+        return this;
+      }
+
+      private int maxMillis_ ;
+      /**
+       * <code>optional int32 max_millis = 8;</code>
+       * @return Whether the maxMillis field is set.
+       */
+      @java.lang.Override
+      public boolean hasMaxMillis() {
+        return ((bitField0_ & 0x00000080) != 0);
+      }
+      /**
+       * <code>optional int32 max_millis = 8;</code>
+       * @return The maxMillis.
+       */
+      @java.lang.Override
+      public int getMaxMillis() {
+        return maxMillis_;
+      }
+      /**
+       * <code>optional int32 max_millis = 8;</code>
+       * @param value The maxMillis to set.
+       * @return This builder for chaining.
+       */
+      public Builder setMaxMillis(int value) {
+
+        maxMillis_ = value;
+        bitField0_ |= 0x00000080;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>optional int32 max_millis = 8;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearMaxMillis() {
+        bitField0_ = (bitField0_ & ~0x00000080);
+        maxMillis_ = 0;
+        onChanged();
+        return this;
+      }
+
+      // @@protoc_insertion_point(builder_scope:tripatha.hbase.CountRequest)
+    }
+
+    // @@protoc_insertion_point(class_scope:tripatha.hbase.CountRequest)
+    private static final org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest DEFAULT_INSTANCE;
+    static {
+      DEFAULT_INSTANCE = new org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest();
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest getDefaultInstance() {
+      return DEFAULT_INSTANCE;
+    }
+
+    private static final org.apache.hbase.thirdparty.com.google.protobuf.Parser<CountRequest>
+        PARSER = new org.apache.hbase.thirdparty.com.google.protobuf.AbstractParser<CountRequest>() {
+      @java.lang.Override
+      public CountRequest parsePartialFrom(
+          org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input,
+          org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+        Builder builder = newBuilder();
+        try {
+          builder.mergeFrom(input, extensionRegistry);
+        } catch (org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException e) {
+          throw e.setUnfinishedMessage(builder.buildPartial());
+        } catch (org.apache.hbase.thirdparty.com.google.protobuf.UninitializedMessageException e) {
+          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(builder.buildPartial());
+        } catch (java.io.IOException e) {
+          throw new org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException(e)
+              .setUnfinishedMessage(builder.buildPartial());
+        }
+        return builder.buildPartial();
+      }
+    };
+
+    public static org.apache.hbase.thirdparty.com.google.protobuf.Parser<CountRequest> parser() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public org.apache.hbase.thirdparty.com.google.protobuf.Parser<CountRequest> getParserForType() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest getDefaultInstanceForType() {
+      return DEFAULT_INSTANCE;
+    }
+
+  }
+
+  public interface CountResponseOrBuilder extends
+      // @@protoc_insertion_point(interface_extends:tripatha.hbase.CountResponse)
+      org.apache.hbase.thirdparty.com.google.protobuf.MessageOrBuilder {
+
+    /**
+     * <pre>
+     * The cells of each range inside this region, in the request's order.
+     * </pre>
+     *
+     * <code>repeated int64 counts = 1 [packed = true];</code>
+     * @return A list containing the counts.
+     */
+    java.util.List<java.lang.Long> getCountsList();
+    /**
+     * <pre>
+     * The cells of each range inside this region, in the request's order.
+     * </pre>
+     *
+     * <code>repeated int64 counts = 1 [packed = true];</code>
+     * @return The count of counts.
+     */
+    int getCountsCount();
+    /**
+     * <pre>
+     * The cells of each range inside this region, in the request's order.
+     * </pre>
+     *
+     * <code>repeated int64 counts = 1 [packed = true];</code>
+     * @param index The index of the element to return.
+     * @return The counts at the given index.
+     */
+    long getCounts(int index);
+
+    /**
+     * <pre>
+     * The region's bounds: a range's part outside them is for another region (a split, a stale location).
+     * </pre>
+     *
+     * <code>optional bytes region_start = 2;</code>
+     * @return Whether the regionStart field is set.
+     */
+    boolean hasRegionStart();
+    /**
+     * <pre>
+     * The region's bounds: a range's part outside them is for another region (a split, a stale location).
+     * </pre>
+     *
+     * <code>optional bytes region_start = 2;</code>
+     * @return The regionStart.
+     */
+    org.apache.hbase.thirdparty.com.google.protobuf.ByteString getRegionStart();
+
+    /**
+     * <code>optional bytes region_end = 3;</code>
+     * @return Whether the regionEnd field is set.
+     */
+    boolean hasRegionEnd();
+    /**
+     * <code>optional bytes region_end = 3;</code>
+     * @return The regionEnd.
+     */
+    org.apache.hbase.thirdparty.com.google.protobuf.ByteString getRegionEnd();
+
+    /**
+     * <pre>
+     * Set when the page ended early: the range it ended in, and its first row not counted. Later
+     * ranges weren't counted either.
+     * </pre>
+     *
+     * <code>optional int32 resume_range = 4;</code>
+     * @return Whether the resumeRange field is set.
+     */
+    boolean hasResumeRange();
+    /**
+     * <pre>
+     * Set when the page ended early: the range it ended in, and its first row not counted. Later
+     * ranges weren't counted either.
+     * </pre>
+     *
+     * <code>optional int32 resume_range = 4;</code>
+     * @return The resumeRange.
+     */
+    int getResumeRange();
+
+    /**
+     * <code>optional bytes resume_row = 5;</code>
+     * @return Whether the resumeRow field is set.
+     */
+    boolean hasResumeRow();
+    /**
+     * <code>optional bytes resume_row = 5;</code>
+     * @return The resumeRow.
+     */
+    org.apache.hbase.thirdparty.com.google.protobuf.ByteString getResumeRow();
+  }
+  /**
+   * Protobuf type {@code tripatha.hbase.CountResponse}
+   */
+  public static final class CountResponse extends
+      org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage implements
+      // @@protoc_insertion_point(message_implements:tripatha.hbase.CountResponse)
+      CountResponseOrBuilder {
+  private static final long serialVersionUID = 0L;
+    static {
+      org.apache.hbase.thirdparty.com.google.protobuf.RuntimeVersion.validateProtobufGencodeVersion(
+        org.apache.hbase.thirdparty.com.google.protobuf.RuntimeVersion.RuntimeDomain.PUBLIC,
+        /* major= */ 4,
+        /* minor= */ 34,
+        /* patch= */ 0,
+        /* suffix= */ "",
+        "CountResponse");
+    }
+    // Use CountResponse.newBuilder() to construct.
+    private CountResponse(org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.Builder<?> builder) {
+      super(builder);
+    }
+    private CountResponse() {
+      counts_ = emptyLongList();
+      regionStart_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+      regionEnd_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+      resumeRow_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+    }
+
+    public static final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+        getDescriptor() {
+      return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountResponse_descriptor;
+    }
+
+    @java.lang.Override
+    public org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor getDescriptorForType() {
+      return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountResponse_descriptor;
+    }
+
+    @java.lang.Override
+    protected org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable
+        internalGetFieldAccessorTable() {
+      return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountResponse_fieldAccessorTable
+          .ensureFieldAccessorsInitialized(
+              org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.class, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.Builder.class);
+    }
+
+    private int bitField0_;
+    public static final int COUNTS_FIELD_NUMBER = 1;
+    @SuppressWarnings("serial")
+    private org.apache.hbase.thirdparty.com.google.protobuf.Internal.LongList counts_ =
+        emptyLongList();
+    /**
+     * <pre>
+     * The cells of each range inside this region, in the request's order.
+     * </pre>
+     *
+     * <code>repeated int64 counts = 1 [packed = true];</code>
+     * @return A list containing the counts.
+     */
+    @java.lang.Override
+    public java.util.List<java.lang.Long>
+        getCountsList() {
+      return counts_;
+    }
+    /**
+     * <pre>
+     * The cells of each range inside this region, in the request's order.
+     * </pre>
+     *
+     * <code>repeated int64 counts = 1 [packed = true];</code>
+     * @return The count of counts.
+     */
+    public int getCountsCount() {
+      return counts_.size();
+    }
+    /**
+     * <pre>
+     * The cells of each range inside this region, in the request's order.
+     * </pre>
+     *
+     * <code>repeated int64 counts = 1 [packed = true];</code>
+     * @param index The index of the element to return.
+     * @return The counts at the given index.
+     */
+    public long getCounts(int index) {
+      return counts_.getLong(index);
+    }
+    private int countsMemoizedSerializedSize = -1;
+
+    public static final int REGION_START_FIELD_NUMBER = 2;
+    private org.apache.hbase.thirdparty.com.google.protobuf.ByteString regionStart_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+    /**
+     * <pre>
+     * The region's bounds: a range's part outside them is for another region (a split, a stale location).
+     * </pre>
+     *
+     * <code>optional bytes region_start = 2;</code>
+     * @return Whether the regionStart field is set.
+     */
+    @java.lang.Override
+    public boolean hasRegionStart() {
+      return ((bitField0_ & 0x00000001) != 0);
+    }
+    /**
+     * <pre>
+     * The region's bounds: a range's part outside them is for another region (a split, a stale location).
+     * </pre>
+     *
+     * <code>optional bytes region_start = 2;</code>
+     * @return The regionStart.
+     */
+    @java.lang.Override
+    public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getRegionStart() {
+      return regionStart_;
+    }
+
+    public static final int REGION_END_FIELD_NUMBER = 3;
+    private org.apache.hbase.thirdparty.com.google.protobuf.ByteString regionEnd_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+    /**
+     * <code>optional bytes region_end = 3;</code>
+     * @return Whether the regionEnd field is set.
+     */
+    @java.lang.Override
+    public boolean hasRegionEnd() {
+      return ((bitField0_ & 0x00000002) != 0);
+    }
+    /**
+     * <code>optional bytes region_end = 3;</code>
+     * @return The regionEnd.
+     */
+    @java.lang.Override
+    public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getRegionEnd() {
+      return regionEnd_;
+    }
+
+    public static final int RESUME_RANGE_FIELD_NUMBER = 4;
+    private int resumeRange_ = 0;
+    /**
+     * <pre>
+     * Set when the page ended early: the range it ended in, and its first row not counted. Later
+     * ranges weren't counted either.
+     * </pre>
+     *
+     * <code>optional int32 resume_range = 4;</code>
+     * @return Whether the resumeRange field is set.
+     */
+    @java.lang.Override
+    public boolean hasResumeRange() {
+      return ((bitField0_ & 0x00000004) != 0);
+    }
+    /**
+     * <pre>
+     * Set when the page ended early: the range it ended in, and its first row not counted. Later
+     * ranges weren't counted either.
+     * </pre>
+     *
+     * <code>optional int32 resume_range = 4;</code>
+     * @return The resumeRange.
+     */
+    @java.lang.Override
+    public int getResumeRange() {
+      return resumeRange_;
+    }
+
+    public static final int RESUME_ROW_FIELD_NUMBER = 5;
+    private org.apache.hbase.thirdparty.com.google.protobuf.ByteString resumeRow_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+    /**
+     * <code>optional bytes resume_row = 5;</code>
+     * @return Whether the resumeRow field is set.
+     */
+    @java.lang.Override
+    public boolean hasResumeRow() {
+      return ((bitField0_ & 0x00000008) != 0);
+    }
+    /**
+     * <code>optional bytes resume_row = 5;</code>
+     * @return The resumeRow.
+     */
+    @java.lang.Override
+    public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getResumeRow() {
+      return resumeRow_;
+    }
+
+    private byte memoizedIsInitialized = -1;
+    @java.lang.Override
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized == 1) return true;
+      if (isInitialized == 0) return false;
+
+      memoizedIsInitialized = 1;
+      return true;
+    }
+
+    @java.lang.Override
+    public void writeTo(org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream output)
+                        throws java.io.IOException {
+      getSerializedSize();
+      if (getCountsList().size() > 0) {
+        output.writeUInt32NoTag(10);
+        output.writeUInt32NoTag(countsMemoizedSerializedSize);
+      }
+      for (int i = 0; i < counts_.size(); i++) {
+        output.writeInt64NoTag(counts_.getLong(i));
+      }
+      if (((bitField0_ & 0x00000001) != 0)) {
+        output.writeBytes(2, regionStart_);
+      }
+      if (((bitField0_ & 0x00000002) != 0)) {
+        output.writeBytes(3, regionEnd_);
+      }
+      if (((bitField0_ & 0x00000004) != 0)) {
+        output.writeInt32(4, resumeRange_);
+      }
+      if (((bitField0_ & 0x00000008) != 0)) {
+        output.writeBytes(5, resumeRow_);
+      }
+      getUnknownFields().writeTo(output);
+    }
+
+    @java.lang.Override
+    public int getSerializedSize() {
+      int size = memoizedSize;
+      if (size != -1) return size;
+
+      size = 0;
+      {
+        int dataSize = 0;
+        for (int i = 0; i < counts_.size(); i++) {
+          dataSize += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+            .computeInt64SizeNoTag(counts_.getLong(i));
+        }
+        size += dataSize;
+        if (!getCountsList().isEmpty()) {
+          size += 1;
+          size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+              .computeInt32SizeNoTag(dataSize);
+        }
+        countsMemoizedSerializedSize = dataSize;
+      }
+      if (((bitField0_ & 0x00000001) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeBytesSize(2, regionStart_);
+      }
+      if (((bitField0_ & 0x00000002) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeBytesSize(3, regionEnd_);
+      }
+      if (((bitField0_ & 0x00000004) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeInt32Size(4, resumeRange_);
+      }
+      if (((bitField0_ & 0x00000008) != 0)) {
+        size += org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream
+          .computeBytesSize(5, resumeRow_);
+      }
+      size += getUnknownFields().getSerializedSize();
+      memoizedSize = size;
+      return size;
+    }
+
+    @java.lang.Override
+    public boolean equals(final java.lang.Object obj) {
+      if (obj == this) {
+       return true;
+      }
+      if (!(obj instanceof org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse)) {
+        return super.equals(obj);
+      }
+      org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse other = (org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse) obj;
+
+      if (!getCountsList()
+          .equals(other.getCountsList())) return false;
+      if (hasRegionStart() != other.hasRegionStart()) return false;
+      if (hasRegionStart()) {
+        if (!getRegionStart()
+            .equals(other.getRegionStart())) return false;
+      }
+      if (hasRegionEnd() != other.hasRegionEnd()) return false;
+      if (hasRegionEnd()) {
+        if (!getRegionEnd()
+            .equals(other.getRegionEnd())) return false;
+      }
+      if (hasResumeRange() != other.hasResumeRange()) return false;
+      if (hasResumeRange()) {
+        if (getResumeRange()
+            != other.getResumeRange()) return false;
+      }
+      if (hasResumeRow() != other.hasResumeRow()) return false;
+      if (hasResumeRow()) {
+        if (!getResumeRow()
+            .equals(other.getResumeRow())) return false;
+      }
+      if (!getUnknownFields().equals(other.getUnknownFields())) return false;
+      return true;
+    }
+
+    @java.lang.Override
+    public int hashCode() {
+      if (memoizedHashCode != 0) {
+        return memoizedHashCode;
+      }
+      int hash = 41;
+      hash = (19 * hash) + getDescriptor().hashCode();
+      if (getCountsCount() > 0) {
+        hash = (37 * hash) + COUNTS_FIELD_NUMBER;
+        hash = (53 * hash) + getCountsList().hashCode();
+      }
+      if (hasRegionStart()) {
+        hash = (37 * hash) + REGION_START_FIELD_NUMBER;
+        hash = (53 * hash) + getRegionStart().hashCode();
+      }
+      if (hasRegionEnd()) {
+        hash = (37 * hash) + REGION_END_FIELD_NUMBER;
+        hash = (53 * hash) + getRegionEnd().hashCode();
+      }
+      if (hasResumeRange()) {
+        hash = (37 * hash) + RESUME_RANGE_FIELD_NUMBER;
+        hash = (53 * hash) + getResumeRange();
+      }
+      if (hasResumeRow()) {
+        hash = (37 * hash) + RESUME_ROW_FIELD_NUMBER;
+        hash = (53 * hash) + getResumeRow().hashCode();
+      }
+      hash = (29 * hash) + getUnknownFields().hashCode();
+      memoizedHashCode = hash;
+      return hash;
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseFrom(
+        java.nio.ByteBuffer data)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseFrom(
+        java.nio.ByteBuffer data,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.ByteString data)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.ByteString data,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseFrom(byte[] data)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseFrom(
+        byte[] data,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseFrom(
+        java.io.InputStream input,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseDelimitedWithIOException(PARSER, input);
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseDelimitedFrom(
+        java.io.InputStream input,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input);
+    }
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse parseFrom(
+        org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input,
+        org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    @java.lang.Override
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder() {
+      return DEFAULT_INSTANCE.toBuilder();
+    }
+    public static Builder newBuilder(org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse prototype) {
+      return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
+    }
+    @java.lang.Override
+    public Builder toBuilder() {
+      return this == DEFAULT_INSTANCE
+          ? new Builder() : new Builder().mergeFrom(this);
+    }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(
+        org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+      Builder builder = new Builder(parent);
+      return builder;
+    }
+    /**
+     * Protobuf type {@code tripatha.hbase.CountResponse}
+     */
+    public static final class Builder extends
+        org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.Builder<Builder> implements
+        // @@protoc_insertion_point(builder_implements:tripatha.hbase.CountResponse)
+        org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponseOrBuilder {
+      public static final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+          getDescriptor() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountResponse_descriptor;
+      }
+
+      @java.lang.Override
+      protected org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountResponse_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.class, org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.Builder.class);
+      }
+
+      // Construct using org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.newBuilder()
+      private Builder() {
+
+      }
+
+      private Builder(
+          org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+        super(parent);
+
+      }
+      @java.lang.Override
+      public Builder clear() {
+        super.clear();
+        bitField0_ = 0;
+        counts_ = emptyLongList();
+        regionStart_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+        regionEnd_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+        resumeRange_ = 0;
+        resumeRow_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+        return this;
+      }
+
+      @java.lang.Override
+      public org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+          getDescriptorForType() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.internal_static_tripatha_hbase_CountResponse_descriptor;
+      }
+
+      @java.lang.Override
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse getDefaultInstanceForType() {
+        return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.getDefaultInstance();
+      }
+
+      @java.lang.Override
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse build() {
+        org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+
+      @java.lang.Override
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse buildPartial() {
+        org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse result = new org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse(this);
+        if (bitField0_ != 0) { buildPartial0(result); }
+        onBuilt();
+        return result;
+      }
+
+      private void buildPartial0(org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse result) {
+        int from_bitField0_ = bitField0_;
+        if (((from_bitField0_ & 0x00000001) != 0)) {
+          counts_.makeImmutable();
+          result.counts_ = counts_;
+        }
+        int to_bitField0_ = 0;
+        if (((from_bitField0_ & 0x00000002) != 0)) {
+          result.regionStart_ = regionStart_;
+          to_bitField0_ |= 0x00000001;
+        }
+        if (((from_bitField0_ & 0x00000004) != 0)) {
+          result.regionEnd_ = regionEnd_;
+          to_bitField0_ |= 0x00000002;
+        }
+        if (((from_bitField0_ & 0x00000008) != 0)) {
+          result.resumeRange_ = resumeRange_;
+          to_bitField0_ |= 0x00000004;
+        }
+        if (((from_bitField0_ & 0x00000010) != 0)) {
+          result.resumeRow_ = resumeRow_;
+          to_bitField0_ |= 0x00000008;
+        }
+        result.bitField0_ |= to_bitField0_;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(org.apache.hbase.thirdparty.com.google.protobuf.Message other) {
+        if (other instanceof org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse) {
+          return mergeFrom((org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse)other);
+        } else {
+          super.mergeFrom(other);
+          return this;
+        }
+      }
+
+      public Builder mergeFrom(org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse other) {
+        if (other == org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.getDefaultInstance()) return this;
+        if (!other.counts_.isEmpty()) {
+          if (counts_.isEmpty()) {
+            counts_ = other.counts_;
+            counts_.makeImmutable();
+            bitField0_ |= 0x00000001;
+          } else {
+            ensureCountsIsMutable();
+            counts_.addAll(other.counts_);
+          }
+          onChanged();
+        }
+        if (other.hasRegionStart()) {
+          setRegionStart(other.getRegionStart());
+        }
+        if (other.hasRegionEnd()) {
+          setRegionEnd(other.getRegionEnd());
+        }
+        if (other.hasResumeRange()) {
+          setResumeRange(other.getResumeRange());
+        }
+        if (other.hasResumeRow()) {
+          setResumeRow(other.getResumeRow());
+        }
+        this.mergeUnknownFields(other.getUnknownFields());
+        onChanged();
+        return this;
+      }
+
+      @java.lang.Override
+      public final boolean isInitialized() {
+        return true;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(
+          org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input,
+          org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        if (extensionRegistry == null) {
+          throw new java.lang.NullPointerException();
+        }
+        try {
+          boolean done = false;
+          while (!done) {
+            int tag = input.readTag();
+            switch (tag) {
+              case 0:
+                done = true;
+                break;
+              case 8: {
+                long v = input.readInt64();
+                ensureCountsIsMutable();
+                counts_.addLong(v);
+                break;
+              } // case 8
+              case 10: {
+                int length = input.readRawVarint32();
+                int limit = input.pushLimit(length);
+                ensureCountsIsMutable();
+                while (input.getBytesUntilLimit() > 0) {
+                  counts_.addLong(input.readInt64());
+                }
+                input.popLimit(limit);
+                break;
+              } // case 10
+              case 18: {
+                regionStart_ = input.readBytes();
+                bitField0_ |= 0x00000002;
+                break;
+              } // case 18
+              case 26: {
+                regionEnd_ = input.readBytes();
+                bitField0_ |= 0x00000004;
+                break;
+              } // case 26
+              case 32: {
+                resumeRange_ = input.readInt32();
+                bitField0_ |= 0x00000008;
+                break;
+              } // case 32
+              case 42: {
+                resumeRow_ = input.readBytes();
+                bitField0_ |= 0x00000010;
+                break;
+              } // case 42
+              default: {
+                if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                  done = true; // was an endgroup tag
+                }
+                break;
+              } // default:
+            } // switch (tag)
+          } // while (!done)
+        } catch (org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException e) {
+          throw e.unwrapIOException();
+        } finally {
+          onChanged();
+        } // finally
+        return this;
+      }
+      private int bitField0_;
+
+      private org.apache.hbase.thirdparty.com.google.protobuf.Internal.LongList counts_ = emptyLongList();
+      private void ensureCountsIsMutable() {
+        if (!counts_.isModifiable()) {
+          counts_ = makeMutableCopy(counts_);
+        }
+        bitField0_ |= 0x00000001;
+      }
+      /**
+       * <pre>
+       * The cells of each range inside this region, in the request's order.
+       * </pre>
+       *
+       * <code>repeated int64 counts = 1 [packed = true];</code>
+       * @return A list containing the counts.
+       */
+      public java.util.List<java.lang.Long>
+          getCountsList() {
+        counts_.makeImmutable();
+        return counts_;
+      }
+      /**
+       * <pre>
+       * The cells of each range inside this region, in the request's order.
+       * </pre>
+       *
+       * <code>repeated int64 counts = 1 [packed = true];</code>
+       * @return The count of counts.
+       */
+      public int getCountsCount() {
+        return counts_.size();
+      }
+      /**
+       * <pre>
+       * The cells of each range inside this region, in the request's order.
+       * </pre>
+       *
+       * <code>repeated int64 counts = 1 [packed = true];</code>
+       * @param index The index of the element to return.
+       * @return The counts at the given index.
+       */
+      public long getCounts(int index) {
+        return counts_.getLong(index);
+      }
+      /**
+       * <pre>
+       * The cells of each range inside this region, in the request's order.
+       * </pre>
+       *
+       * <code>repeated int64 counts = 1 [packed = true];</code>
+       * @param index The index to set the value at.
+       * @param value The counts to set.
+       * @return This builder for chaining.
+       */
+      public Builder setCounts(
+          int index, long value) {
+
+        ensureCountsIsMutable();
+        counts_.setLong(index, value);
+        bitField0_ |= 0x00000001;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * The cells of each range inside this region, in the request's order.
+       * </pre>
+       *
+       * <code>repeated int64 counts = 1 [packed = true];</code>
+       * @param value The counts to add.
+       * @return This builder for chaining.
+       */
+      public Builder addCounts(long value) {
+
+        ensureCountsIsMutable();
+        counts_.addLong(value);
+        bitField0_ |= 0x00000001;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * The cells of each range inside this region, in the request's order.
+       * </pre>
+       *
+       * <code>repeated int64 counts = 1 [packed = true];</code>
+       * @param values The counts to add.
+       * @return This builder for chaining.
+       */
+      public Builder addAllCounts(
+          java.lang.Iterable<? extends java.lang.Long> values) {
+        ensureCountsIsMutable();
+        org.apache.hbase.thirdparty.com.google.protobuf.AbstractMessageLite.Builder.addAll(
+            values, counts_);
+        bitField0_ |= 0x00000001;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * The cells of each range inside this region, in the request's order.
+       * </pre>
+       *
+       * <code>repeated int64 counts = 1 [packed = true];</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearCounts() {
+        counts_ = emptyLongList();
+        bitField0_ = (bitField0_ & ~0x00000001);
+        onChanged();
+        return this;
+      }
+
+      private org.apache.hbase.thirdparty.com.google.protobuf.ByteString regionStart_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+      /**
+       * <pre>
+       * The region's bounds: a range's part outside them is for another region (a split, a stale location).
+       * </pre>
+       *
+       * <code>optional bytes region_start = 2;</code>
+       * @return Whether the regionStart field is set.
+       */
+      @java.lang.Override
+      public boolean hasRegionStart() {
+        return ((bitField0_ & 0x00000002) != 0);
+      }
+      /**
+       * <pre>
+       * The region's bounds: a range's part outside them is for another region (a split, a stale location).
+       * </pre>
+       *
+       * <code>optional bytes region_start = 2;</code>
+       * @return The regionStart.
+       */
+      @java.lang.Override
+      public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getRegionStart() {
+        return regionStart_;
+      }
+      /**
+       * <pre>
+       * The region's bounds: a range's part outside them is for another region (a split, a stale location).
+       * </pre>
+       *
+       * <code>optional bytes region_start = 2;</code>
+       * @param value The regionStart to set.
+       * @return This builder for chaining.
+       */
+      public Builder setRegionStart(org.apache.hbase.thirdparty.com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        regionStart_ = value;
+        bitField0_ |= 0x00000002;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * The region's bounds: a range's part outside them is for another region (a split, a stale location).
+       * </pre>
+       *
+       * <code>optional bytes region_start = 2;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearRegionStart() {
+        bitField0_ = (bitField0_ & ~0x00000002);
+        regionStart_ = getDefaultInstance().getRegionStart();
+        onChanged();
+        return this;
+      }
+
+      private org.apache.hbase.thirdparty.com.google.protobuf.ByteString regionEnd_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+      /**
+       * <code>optional bytes region_end = 3;</code>
+       * @return Whether the regionEnd field is set.
+       */
+      @java.lang.Override
+      public boolean hasRegionEnd() {
+        return ((bitField0_ & 0x00000004) != 0);
+      }
+      /**
+       * <code>optional bytes region_end = 3;</code>
+       * @return The regionEnd.
+       */
+      @java.lang.Override
+      public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getRegionEnd() {
+        return regionEnd_;
+      }
+      /**
+       * <code>optional bytes region_end = 3;</code>
+       * @param value The regionEnd to set.
+       * @return This builder for chaining.
+       */
+      public Builder setRegionEnd(org.apache.hbase.thirdparty.com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        regionEnd_ = value;
+        bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>optional bytes region_end = 3;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearRegionEnd() {
+        bitField0_ = (bitField0_ & ~0x00000004);
+        regionEnd_ = getDefaultInstance().getRegionEnd();
+        onChanged();
+        return this;
+      }
+
+      private int resumeRange_ ;
+      /**
+       * <pre>
+       * Set when the page ended early: the range it ended in, and its first row not counted. Later
+       * ranges weren't counted either.
+       * </pre>
+       *
+       * <code>optional int32 resume_range = 4;</code>
+       * @return Whether the resumeRange field is set.
+       */
+      @java.lang.Override
+      public boolean hasResumeRange() {
+        return ((bitField0_ & 0x00000008) != 0);
+      }
+      /**
+       * <pre>
+       * Set when the page ended early: the range it ended in, and its first row not counted. Later
+       * ranges weren't counted either.
+       * </pre>
+       *
+       * <code>optional int32 resume_range = 4;</code>
+       * @return The resumeRange.
+       */
+      @java.lang.Override
+      public int getResumeRange() {
+        return resumeRange_;
+      }
+      /**
+       * <pre>
+       * Set when the page ended early: the range it ended in, and its first row not counted. Later
+       * ranges weren't counted either.
+       * </pre>
+       *
+       * <code>optional int32 resume_range = 4;</code>
+       * @param value The resumeRange to set.
+       * @return This builder for chaining.
+       */
+      public Builder setResumeRange(int value) {
+
+        resumeRange_ = value;
+        bitField0_ |= 0x00000008;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * Set when the page ended early: the range it ended in, and its first row not counted. Later
+       * ranges weren't counted either.
+       * </pre>
+       *
+       * <code>optional int32 resume_range = 4;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearResumeRange() {
+        bitField0_ = (bitField0_ & ~0x00000008);
+        resumeRange_ = 0;
+        onChanged();
+        return this;
+      }
+
+      private org.apache.hbase.thirdparty.com.google.protobuf.ByteString resumeRow_ = org.apache.hbase.thirdparty.com.google.protobuf.ByteString.EMPTY;
+      /**
+       * <code>optional bytes resume_row = 5;</code>
+       * @return Whether the resumeRow field is set.
+       */
+      @java.lang.Override
+      public boolean hasResumeRow() {
+        return ((bitField0_ & 0x00000010) != 0);
+      }
+      /**
+       * <code>optional bytes resume_row = 5;</code>
+       * @return The resumeRow.
+       */
+      @java.lang.Override
+      public org.apache.hbase.thirdparty.com.google.protobuf.ByteString getResumeRow() {
+        return resumeRow_;
+      }
+      /**
+       * <code>optional bytes resume_row = 5;</code>
+       * @param value The resumeRow to set.
+       * @return This builder for chaining.
+       */
+      public Builder setResumeRow(org.apache.hbase.thirdparty.com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        resumeRow_ = value;
+        bitField0_ |= 0x00000010;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>optional bytes resume_row = 5;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearResumeRow() {
+        bitField0_ = (bitField0_ & ~0x00000010);
+        resumeRow_ = getDefaultInstance().getResumeRow();
+        onChanged();
+        return this;
+      }
+
+      // @@protoc_insertion_point(builder_scope:tripatha.hbase.CountResponse)
+    }
+
+    // @@protoc_insertion_point(class_scope:tripatha.hbase.CountResponse)
+    private static final org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse DEFAULT_INSTANCE;
+    static {
+      DEFAULT_INSTANCE = new org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse();
+    }
+
+    public static org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse getDefaultInstance() {
+      return DEFAULT_INSTANCE;
+    }
+
+    private static final org.apache.hbase.thirdparty.com.google.protobuf.Parser<CountResponse>
+        PARSER = new org.apache.hbase.thirdparty.com.google.protobuf.AbstractParser<CountResponse>() {
+      @java.lang.Override
+      public CountResponse parsePartialFrom(
+          org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream input,
+          org.apache.hbase.thirdparty.com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException {
+        Builder builder = newBuilder();
+        try {
+          builder.mergeFrom(input, extensionRegistry);
+        } catch (org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException e) {
+          throw e.setUnfinishedMessage(builder.buildPartial());
+        } catch (org.apache.hbase.thirdparty.com.google.protobuf.UninitializedMessageException e) {
+          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(builder.buildPartial());
+        } catch (java.io.IOException e) {
+          throw new org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException(e)
+              .setUnfinishedMessage(builder.buildPartial());
+        }
+        return builder.buildPartial();
+      }
+    };
+
+    public static org.apache.hbase.thirdparty.com.google.protobuf.Parser<CountResponse> parser() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public org.apache.hbase.thirdparty.com.google.protobuf.Parser<CountResponse> getParserForType() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse getDefaultInstanceForType() {
+      return DEFAULT_INSTANCE;
+    }
+
+  }
+
   /**
    * Protobuf service {@code tripatha.hbase.EntityIntersection}
    */
@@ -3471,6 +7123,238 @@ public final class IntersectionProtos extends org.apache.hbase.thirdparty.com.go
     // @@protoc_insertion_point(class_scope:tripatha.hbase.EntityIntersection)
   }
 
+  /**
+   * Protobuf service {@code tripatha.hbase.RangeCount}
+   */
+  public static abstract class RangeCount
+      implements org.apache.hbase.thirdparty.com.google.protobuf.Service {
+    protected RangeCount() {}
+
+    public interface Interface {
+      /**
+       * <code>rpc count(.tripatha.hbase.CountRequest) returns (.tripatha.hbase.CountResponse);</code>
+       */
+      public abstract void count(
+          org.apache.hbase.thirdparty.com.google.protobuf.RpcController controller,
+          org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest request,
+          org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse> done);
+
+    }
+
+    public static org.apache.hbase.thirdparty.com.google.protobuf.Service newReflectiveService(
+        final Interface impl) {
+      return new RangeCount() {
+        @java.lang.Override
+        public  void count(
+            org.apache.hbase.thirdparty.com.google.protobuf.RpcController controller,
+            org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest request,
+            org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse> done) {
+          impl.count(controller, request, done);
+        }
+
+      };
+    }
+
+    public static org.apache.hbase.thirdparty.com.google.protobuf.BlockingService
+        newReflectiveBlockingService(final BlockingInterface impl) {
+      return new org.apache.hbase.thirdparty.com.google.protobuf.BlockingService() {
+        public final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.ServiceDescriptor
+            getDescriptorForType() {
+          return getDescriptor();
+        }
+
+        public final org.apache.hbase.thirdparty.com.google.protobuf.Message callBlockingMethod(
+            org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.MethodDescriptor method,
+            org.apache.hbase.thirdparty.com.google.protobuf.RpcController controller,
+            org.apache.hbase.thirdparty.com.google.protobuf.Message request)
+            throws org.apache.hbase.thirdparty.com.google.protobuf.ServiceException {
+          if (method.getService() != getDescriptor()) {
+            throw new java.lang.IllegalArgumentException(
+              "Service.callBlockingMethod() given method descriptor for " +
+              "wrong service type.");
+          }
+          switch(method.getIndex()) {
+            case 0:
+              return impl.count(controller, (org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest)request);
+            default:
+              throw new java.lang.AssertionError("Can't get here.");
+          }
+        }
+
+        public final org.apache.hbase.thirdparty.com.google.protobuf.Message
+            getRequestPrototype(
+            org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.MethodDescriptor method) {
+          if (method.getService() != getDescriptor()) {
+            throw new java.lang.IllegalArgumentException(
+              "Service.getRequestPrototype() given method " +
+              "descriptor for wrong service type.");
+          }
+          switch(method.getIndex()) {
+            case 0:
+              return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest.getDefaultInstance();
+            default:
+              throw new java.lang.AssertionError("Can't get here.");
+          }
+        }
+
+        public final org.apache.hbase.thirdparty.com.google.protobuf.Message
+            getResponsePrototype(
+            org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.MethodDescriptor method) {
+          if (method.getService() != getDescriptor()) {
+            throw new java.lang.IllegalArgumentException(
+              "Service.getResponsePrototype() given method " +
+              "descriptor for wrong service type.");
+          }
+          switch(method.getIndex()) {
+            case 0:
+              return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.getDefaultInstance();
+            default:
+              throw new java.lang.AssertionError("Can't get here.");
+          }
+        }
+
+      };
+    }
+
+    /**
+     * <code>rpc count(.tripatha.hbase.CountRequest) returns (.tripatha.hbase.CountResponse);</code>
+     */
+    public abstract void count(
+        org.apache.hbase.thirdparty.com.google.protobuf.RpcController controller,
+        org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest request,
+        org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse> done);
+
+    public static final
+        org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.ServiceDescriptor
+        getDescriptor() {
+      return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.getDescriptor().getService(1);
+    }
+    public final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.ServiceDescriptor
+        getDescriptorForType() {
+      return getDescriptor();
+    }
+
+    public final void callMethod(
+        org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.MethodDescriptor method,
+        org.apache.hbase.thirdparty.com.google.protobuf.RpcController controller,
+        org.apache.hbase.thirdparty.com.google.protobuf.Message request,
+        org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback<
+          org.apache.hbase.thirdparty.com.google.protobuf.Message> done) {
+      if (method.getService() != getDescriptor()) {
+        throw new java.lang.IllegalArgumentException(
+          "Service.callMethod() given method descriptor for wrong " +
+          "service type.");
+      }
+      switch(method.getIndex()) {
+        case 0:
+          this.count(controller, (org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest)request,
+            org.apache.hbase.thirdparty.com.google.protobuf.RpcUtil.<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse>specializeCallback(
+              done));
+          return;
+        default:
+          throw new java.lang.AssertionError("Can't get here.");
+      }
+    }
+
+    public final org.apache.hbase.thirdparty.com.google.protobuf.Message
+        getRequestPrototype(
+        org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.MethodDescriptor method) {
+      if (method.getService() != getDescriptor()) {
+        throw new java.lang.IllegalArgumentException(
+          "Service.getRequestPrototype() given method " +
+          "descriptor for wrong service type.");
+      }
+      switch(method.getIndex()) {
+        case 0:
+          return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest.getDefaultInstance();
+        default:
+          throw new java.lang.AssertionError("Can't get here.");
+      }
+    }
+
+    public final org.apache.hbase.thirdparty.com.google.protobuf.Message
+        getResponsePrototype(
+        org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.MethodDescriptor method) {
+      if (method.getService() != getDescriptor()) {
+        throw new java.lang.IllegalArgumentException(
+          "Service.getResponsePrototype() given method " +
+          "descriptor for wrong service type.");
+      }
+      switch(method.getIndex()) {
+        case 0:
+          return org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.getDefaultInstance();
+        default:
+          throw new java.lang.AssertionError("Can't get here.");
+      }
+    }
+
+    public static Stub newStub(
+        org.apache.hbase.thirdparty.com.google.protobuf.RpcChannel channel) {
+      return new Stub(channel);
+    }
+
+    public static final class Stub extends org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.RangeCount implements Interface {
+      private Stub(org.apache.hbase.thirdparty.com.google.protobuf.RpcChannel channel) {
+        this.channel = channel;
+      }
+
+      private final org.apache.hbase.thirdparty.com.google.protobuf.RpcChannel channel;
+
+      public org.apache.hbase.thirdparty.com.google.protobuf.RpcChannel getChannel() {
+        return channel;
+      }
+
+      public  void count(
+          org.apache.hbase.thirdparty.com.google.protobuf.RpcController controller,
+          org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest request,
+          org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback<org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse> done) {
+        channel.callMethod(
+          getDescriptor().getMethod(0),
+          controller,
+          request,
+          org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.getDefaultInstance(),
+          org.apache.hbase.thirdparty.com.google.protobuf.RpcUtil.generalizeCallback(
+            done,
+            org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.class,
+            org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.getDefaultInstance()));
+      }
+    }
+
+    public static BlockingInterface newBlockingStub(
+        org.apache.hbase.thirdparty.com.google.protobuf.BlockingRpcChannel channel) {
+      return new BlockingStub(channel);
+    }
+
+    public interface BlockingInterface {
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse count(
+          org.apache.hbase.thirdparty.com.google.protobuf.RpcController controller,
+          org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest request)
+          throws org.apache.hbase.thirdparty.com.google.protobuf.ServiceException;
+    }
+
+    private static final class BlockingStub implements BlockingInterface {
+      private BlockingStub(org.apache.hbase.thirdparty.com.google.protobuf.BlockingRpcChannel channel) {
+        this.channel = channel;
+      }
+
+      private final org.apache.hbase.thirdparty.com.google.protobuf.BlockingRpcChannel channel;
+
+      public org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse count(
+          org.apache.hbase.thirdparty.com.google.protobuf.RpcController controller,
+          org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountRequest request)
+          throws org.apache.hbase.thirdparty.com.google.protobuf.ServiceException {
+        return (org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse) channel.callBlockingMethod(
+          getDescriptor().getMethod(0),
+          controller,
+          request,
+          org.tripatha.hbase.coprocessor.protobuf.IntersectionProtos.CountResponse.getDefaultInstance());
+      }
+
+    }
+
+    // @@protoc_insertion_point(class_scope:tripatha.hbase.RangeCount)
+  }
+
   private static final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
     internal_static_tripatha_hbase_IntersectRequest_descriptor;
   private static final 
@@ -3481,6 +7365,21 @@ public final class IntersectionProtos extends org.apache.hbase.thirdparty.com.go
   private static final 
     org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_tripatha_hbase_IntersectResponse_fieldAccessorTable;
+  private static final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+    internal_static_tripatha_hbase_RowRange_descriptor;
+  private static final 
+    org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_tripatha_hbase_RowRange_fieldAccessorTable;
+  private static final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+    internal_static_tripatha_hbase_CountRequest_descriptor;
+  private static final 
+    org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_tripatha_hbase_CountRequest_fieldAccessorTable;
+  private static final org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.Descriptor
+    internal_static_tripatha_hbase_CountResponse_descriptor;
+  private static final 
+    org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_tripatha_hbase_CountResponse_fieldAccessorTable;
 
   public static org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.FileDescriptor
       getDescriptor() {
@@ -3500,11 +7399,23 @@ public final class IntersectionProtos extends org.apache.hbase.thirdparty.com.go
       "tch\030\014 \001(\005\"s\n\021IntersectResponse\022\020\n\010subjec" +
       "ts\030\001 \003(\014\022\022\n\006values\030\002 \003(\003B\002\020\001\022\025\n\rsubject_" +
       "count\030\003 \001(\003\022\021\n\trow_count\030\004 \001(\003\022\016\n\006resume" +
-      "\030\005 \001(\0142f\n\022EntityIntersection\022P\n\tintersec" +
-      "t\022 .tripatha.hbase.IntersectRequest\032!.tr" +
-      "ipatha.hbase.IntersectResponseBB\n\'org.tr" +
-      "ipatha.hbase.coprocessor.protobufB\022Inter" +
-      "sectionProtosH\001\210\001\001"
+      "\030\005 \001(\014\"^\n\010RowRange\022\r\n\005start\030\001 \002(\014\022\035\n\017sta" +
+      "rt_inclusive\030\002 \001(\010:\004true\022\014\n\004stop\030\003 \001(\014\022\026" +
+      "\n\016stop_inclusive\030\004 \001(\010\"\302\001\n\014CountRequest\022" +
+      "(\n\006ranges\030\001 \003(\0132\030.tripatha.hbase.RowRang" +
+      "e\022\022\n\nlabels_set\030\002 \001(\010\022\016\n\006labels\030\003 \003(\t\022\020\n" +
+      "\010prefixes\030\004 \003(\014\022\026\n\016from_timestamp\030\005 \001(\003\022" +
+      "\024\n\014to_timestamp\030\006 \001(\003\022\020\n\010max_rows\030\007 \001(\003\022" +
+      "\022\n\nmax_millis\030\010 \001(\005\"w\n\rCountResponse\022\022\n\006" +
+      "counts\030\001 \003(\003B\002\020\001\022\024\n\014region_start\030\002 \001(\014\022\022" +
+      "\n\nregion_end\030\003 \001(\014\022\024\n\014resume_range\030\004 \001(\005" +
+      "\022\022\n\nresume_row\030\005 \001(\0142f\n\022EntityIntersecti" +
+      "on\022P\n\tintersect\022 .tripatha.hbase.Interse" +
+      "ctRequest\032!.tripatha.hbase.IntersectResp" +
+      "onse2R\n\nRangeCount\022D\n\005count\022\034.tripatha.h" +
+      "base.CountRequest\032\035.tripatha.hbase.Count" +
+      "ResponseBB\n\'org.tripatha.hbase.coprocess" +
+      "or.protobufB\022IntersectionProtosH\001\210\001\001"
     };
     descriptor = org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -3522,6 +7433,24 @@ public final class IntersectionProtos extends org.apache.hbase.thirdparty.com.go
       org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_tripatha_hbase_IntersectResponse_descriptor,
         new java.lang.String[] { "Subjects", "Values", "SubjectCount", "RowCount", "Resume", });
+    internal_static_tripatha_hbase_RowRange_descriptor =
+      getDescriptor().getMessageType(2);
+    internal_static_tripatha_hbase_RowRange_fieldAccessorTable = new
+      org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_tripatha_hbase_RowRange_descriptor,
+        new java.lang.String[] { "Start", "StartInclusive", "Stop", "StopInclusive", });
+    internal_static_tripatha_hbase_CountRequest_descriptor =
+      getDescriptor().getMessageType(3);
+    internal_static_tripatha_hbase_CountRequest_fieldAccessorTable = new
+      org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_tripatha_hbase_CountRequest_descriptor,
+        new java.lang.String[] { "Ranges", "LabelsSet", "Labels", "Prefixes", "FromTimestamp", "ToTimestamp", "MaxRows", "MaxMillis", });
+    internal_static_tripatha_hbase_CountResponse_descriptor =
+      getDescriptor().getMessageType(4);
+    internal_static_tripatha_hbase_CountResponse_fieldAccessorTable = new
+      org.apache.hbase.thirdparty.com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_tripatha_hbase_CountResponse_descriptor,
+        new java.lang.String[] { "Counts", "RegionStart", "RegionEnd", "ResumeRange", "ResumeRow", });
     descriptor.resolveAllFeaturesImmutable();
   }
 
