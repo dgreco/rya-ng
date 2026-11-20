@@ -123,6 +123,11 @@ public final class AccumuloStore implements Store {
         return new AccumuloStore(client, true);
     }
 
+    @Override
+    public java.util.Optional<org.tripatha.store.spi.BulkImport> bulk() {
+        return java.util.Optional.of(new AccumuloBulkImport(client));
+    }
+
     /** The client, for Accumulo-only code. What is done with it directly is not traced. */
     public AccumuloClient client() {
         return client;

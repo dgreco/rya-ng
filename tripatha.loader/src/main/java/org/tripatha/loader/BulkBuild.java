@@ -418,7 +418,9 @@ public final class BulkBuild {
     private BulkImport.Written mergeRange(final BulkImport bulk, final String table, final List<String> files, final byte[] from,
             final byte[] to, final int index, final boolean counters, final long importTime) {
         final String dir = spills.path("final/" + table);
-        try (Spills.Reader reader = spills.read(files, from, to, counters);
+        // Each file within one tablet: Accumulo's split point ends its tablet, HBase's starts the next region.
+        final boolean endsTablet = bulk.splitPointEndsTablet();
+        try (Spills.Reader reader = spills.read(files, from, !endsTablet, to, endsTablet, counters);
                 BulkImport.BulkFile file = bulk.newFile(table, dir, String.format(Locale.ROOT, "%s-%06d", table, index), importTime)) {
             while (reader.hasNext()) {
                 final Spills.Combined c = reader.next();

@@ -263,11 +263,23 @@ public final class JoinBench {
         final long t0 = System.nanoTime();
         final PrintStream quiet = new PrintStream(OutputStream.nullOutputStream());
         Prepare.run(store, LoaderOptions.parse(datasetArgs("prepare"), Map.of()), quiet);
-        final Loader.Result loaded = new Loader(store, dataset, out).run();
-        if (!loaded.complete()) {
-            throw new IllegalStateException("the load did not complete", loaded.failure());
+        if (settings.bulk) {
+            // The bulk build (O3) instead of load: sorted files, imported.
+            final Path work = settings.out.resolve("build-" + TestBackends.id());
+            deleteRecursively(work);
+            final List<String> args = new ArrayList<>(List.of(datasetArgs("build")));
+            args.addAll(List.of("--work-dir", work.toString()));
+            if (!new org.tripatha.loader.BulkBuild(store, LoaderOptions.parse(args.toArray(new String[0]), Map.of()), out).run()) {
+                throw new IllegalStateException("the build did not complete");
+            }
+            deleteRecursively(work);
+        } else {
+            final Loader.Result loaded = new Loader(store, dataset, out).run();
+            if (!loaded.complete()) {
+                throw new IllegalStateException("the load did not complete", loaded.failure());
+            }
         }
-        out.println("Compacting…");
+        out.printf(Locale.ROOT, "%s in %.0f s. Compacting…%n", settings.bulk ? "Built" : "Loaded", (System.nanoTime() - t0) / 1e9);
         final TableLayoutStrategy t = conf.getTableLayoutStrategy();
         for (final String table : List.of(t.getSpo(), t.getPo(), t.getOsp(), t.getEval(), t.getGraphs(), t.getNs(), t.getText(),
                 t.getGeo(), t.getEntity())) {
@@ -278,6 +290,17 @@ public final class JoinBench {
         markLoaded(store, fingerprint);
         Files.deleteIfExists(progressFile());
         out.printf(Locale.ROOT, "Loaded and compacted in %.0f s.%n", (System.nanoTime() - t0) / 1e9);
+    }
+
+    private static void deleteRecursively(final Path dir) throws IOException {
+        if (!Files.exists(dir)) {
+            return;
+        }
+        try (var paths = Files.walk(dir)) {
+            for (final Path p : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                Files.delete(p);
+            }
+        }
     }
 
     /**
@@ -823,7 +846,7 @@ public final class JoinBench {
 
     record Settings(String triples, int warmup, int runs, int timeoutSeconds, int loadThreads, boolean profile, Path out,
             Path baseline, List<String> only, Map<String, String> conf, List<Variant> variants, boolean entityIndex,
-            Path writeQueries, boolean loadOnly) {
+            Path writeQueries, boolean loadOnly, boolean bulk) {
         static final String USAGE = """
                 Usage: bench.sh [--backend rocksdb|accumulo|hbase] [options]
                   --triples 10M        dataset size (the loader's generator, both indexes on)
@@ -841,6 +864,7 @@ public final class JoinBench {
                   --load-threads 8     writer threads for the one-time load
                   --write-queries DIR  write the suite's queries to DIR/NAME.rq and stop: no store, no runs
                   --load-only          load the store (or keep a loaded one) and stop: no runs
+                  --bulk               build the store with the bulk build (sorted files, imported) instead of load
                 """;
 
         static Settings parse(final String[] args) {
@@ -852,6 +876,7 @@ public final class JoinBench {
             boolean profile = false;
             boolean entityIndex = false;
             boolean loadOnly = false;
+            boolean bulk = false;
             Path out = Path.of("target", "bench");
             Path baseline = null;
             Path writeQueries = null;
@@ -870,6 +895,10 @@ public final class JoinBench {
                 }
                 if (a.equals("--load-only")) {
                     loadOnly = true;
+                    continue;
+                }
+                if (a.equals("--bulk")) {
+                    bulk = true;
                     continue;
                 }
                 if (i + 1 >= args.length) {
@@ -901,7 +930,7 @@ public final class JoinBench {
                 variants.add(new Variant("default", Map.of()));
             }
             return new Settings(triples, warmup, runs, timeout, loadThreads, profile, out, baseline, only, conf, List.copyOf(variants),
-                    entityIndex, writeQueries, loadOnly);
+                    entityIndex, writeQueries, loadOnly, bulk);
         }
 
         private static Variant variant(final String v) {
