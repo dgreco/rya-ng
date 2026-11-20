@@ -131,6 +131,10 @@ class LoaderIT extends StoreITBase {
         final List<String> a = new ArrayList<>(List.of("--table-prefix", getTablePrefix(), "--entities",
                 Integer.toString(ENTITIES), "--seed", "7", "--labels", "A,B", "--labelled-fraction", "0.3", "--graphs", "4",
                 "--rdf12-fraction", "0.3", "--text-index", "--geo-index", "--entity-index", "--entity-shards", "4"));
+        if (onBackend("hbase")) {
+            // The test cluster's counter mode (-Dtripatha.test.hbaseCounters), which the loader takes as an option.
+            a.addAll(List.of("--hbase-counters", backend().storeSettings().getProperty("hbase.counters")));
+        }
         a.addAll(List.of(extra));
         return a;
     }
@@ -485,10 +489,15 @@ class LoaderIT extends StoreITBase {
     }
 
     /** The same store as load writes: the dataset, the indexes, verify, and the cells of a load into another prefix. */
+    /** Whether this store's backend imports files, counters included (HBase's increment mode doesn't). */
+    private boolean buildsHere() {
+        return getStore().bulk().map(b -> b.refusesCounters(getTablePrefix() + "eval").isEmpty()).orElse(false);
+    }
+
     @Test
     void aBuildWritesWhatALoadWrites() throws Exception {
-        assumeTrue(getStore().bulk().isPresent(), getStore().backend() + " can't import files yet (O10)");
         prepare();
+        assumeTrue(buildsHere(), getStore().backend() + " can't import this store's files");
         BulkBuild.fanIn = 2;
         try {
             for (final String phase : List.of("sort", "merge", "import")) {
@@ -531,8 +540,8 @@ class LoaderIT extends StoreITBase {
     /** A crash between a spill and its record: the resume deletes that spill and writes its blocks once. */
     @Test
     void aBuildResumesAfterACrashWithoutCountingTwice() throws Exception {
-        assumeTrue(getStore().bulk().isPresent(), getStore().backend() + " can't import files yet (O10)");
         prepare();
+        assumeTrue(buildsHere(), getStore().backend() + " can't import this store's files");
         final java.util.concurrent.atomic.AtomicInteger commits = new java.util.concurrent.atomic.AtomicInteger();
         BulkBuild.beforeCommit = () -> {
             if (commits.incrementAndGet() == 3) {
@@ -550,6 +559,16 @@ class LoaderIT extends StoreITBase {
         final Run resumed = run(env(), "build", build("--resume"));
         assertEquals(0, resumed.code(), resumed.all());
         assertStoreHoldsExactlyTheDataset(true);
+    }
+
+    /** Where counters can't be imported (HBase's increment mode), build stops before writing anything. */
+    @Test
+    void aBuildIsRefusedWhereCountersCantBeImported() throws Exception {
+        prepare();
+        assumeTrue(getStore().bulk().isPresent() && !buildsHere(), "counters can be imported here");
+        final Run refused = run(env(), "build", build());
+        assertEquals(2, refused.code(), refused.all());
+        assertTrue(refused.err().contains("increment mode"), refused.all());
     }
 
     /** Every cell of a table, under the dataset's labels, as text; with or without its timestamp. */
