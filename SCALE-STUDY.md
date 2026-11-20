@@ -114,7 +114,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | D5 | What sorts the bulk build | (a) the loader itself: partitioned sorted runs, then one merge per tablet; (b) Spark | (a), unless M6 shows Spark runs Tripatha's JDK 25 code. That is unproven, and (a) reuses the loader's parts, progress and resume | 2026-11-19: **(a)**, unless M6 shows Spark runs Tripatha's JDK 25 code |
 | D6 | Counters with a total of 1 | (a) don't write them: the per-subject families in the loader (O1), every family but `p` in a bulk build (O3); (b) write every counter | (a): the same estimates for a load into an empty store (section 6.3) | 2026-11-19: **(a)** |
 | D7 | The hashed row layout (`tbl.hashprefix`) | keep, deprecate | deprecate: it doesn't do what it is kept for (section 5.3) | 2026-11-19: **deprecate** (O9, phase 6) |
-| D8 | Dropping a graph at 1T | (a) a graph-first table (`gspo`), optional like the indexes, so a drop costs the graph's size; (b) graph tombstones hidden by scan and compaction filters on every backend; (c) accept a full-table scan per drop | (a) if graphs are the unit you load and replace, (c) otherwise. (b) puts a filter on every read path of every backend | |
+| D8 | Dropping a graph at 1T | (a) a graph-first table (`gspo`), optional like the indexes, so a drop costs the graph's size; (b) graph tombstones hidden by scan and compaction filters on every backend; (c) accept a full-table scan per drop | (a) if graphs are the unit you load and replace, (c) otherwise. (b) puts a filter on every read path of every backend || 2026-11-20: **(c), keep a full scan per drop**: no `gspo` table and no tombstones on the read paths (O4 closed) |
 | D9 | Dictionary encoding | (a) decide after M5, on the criteria of section 6.5; (b) start now | (a) | |
 | D10 | Disks | NVMe SSD, HDD | NVMe for interactive use: at 1T most lookups miss the cache, and each miss is one read | 2026-11-19: **NVMe** |
 | D11 | IRI prefix codes in the stored keys | (a) decide after M9, on the criteria of section 6.9; (b) start now; (c) never | (a), and M9 says **not now**: −4 to −5 % on disk is far below the bar. The cache gain (−25 to −35 %) is worth revisiting if a cluster shows lookups bound by cache misses (M3) | |
@@ -146,8 +146,8 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O1 | **Loader: don't write per-subject counters of 1** (`s`, `sp`, `so`), summed per block. Includes reading a missing counter as 1 in the inference sum, in `verify` and in `LoaderIT` (section 6.1) | R5 | measured (`dry-run` at 1T, both indexes): cells sent per triple 11.6 → 8.2 (−29 %), bytes 1,065 → 871 (−18 %), `eval` 348 → 154 B. *est.* −20 % on disk (about 100 TB less at 1T with 3 replicas) | — | 0 | Done (PR #15) |
 | O2 | **Loader at 1T:**<br>• `--triples 1T`<br>• `prepare --tablet-size`, planning splits by size instead of 4 per server<br>• `dry-run` reports stored counter cells and their share of 1s | R8, R9 | tablets near the target size from the start, instead of about 50 GB tablets splitting online | — | 3 | Done (2026-11-20, section 4.16): `--triples 1T`; `prepare` plans each table's splits by its estimated size on disk over `--tablet-size` (10G), at least 4 per server, and makes that size the backend's split threshold (`TableAdmin.setTargetSize`); HBase splits in rounds; the progress file is a watermark plus the blocks above it; `dry-run` reports the stored counters per family |
 | O3 | **Bulk build on Accumulo and RocksDB:**<br>• sorted files per tablet, then an import<br>• every counter of 1 left out except `p`<br>• the DAO's guards in the writer<br>• input from the generator or from N-Triples/N-Quads files<br>(section 6.2) | R4, R5, R11 | no write-ahead log, memory tables or compactions. *est.* counters about 5.4 → 0.5 stored cells per triple, 160 → about 115 B per triple on disk | O1, M6 | 3 | Done for Accumulo and RocksDB (2026-11-20, sections 4.18 and 4.19): `build`, the same cells as `load` (checked cell by cell), at 10M 1.5 times faster on RocksDB and 13 times on the Accumulo test cluster, `eval` 90 % smaller. The 10B milestone needs a cluster |
-| O4 | **Graph drops in time proportional to the graph** (D8) | R6 | a drop reads the graph, not the 5 cells per triple of every table (about 5T cells at 1T) | D8 | 5 | Not started |
-| O5 | **Index rebuilds through the bulk build; purge by recreating tables** when the caller sees everything | R6 | a rebuild becomes a batch job; such a purge becomes constant time | O3 | 5 | Not started |
+| O4 | **Graph drops in time proportional to the graph** (D8) | R6 | a drop reads the graph, not the 5 cells per triple of every table (about 5T cells at 1T) | D8 | 5 | Won't do: D8 (c), 2026-11-20 |
+| O5 | **Index rebuilds through the bulk build; purge by recreating tables** when the caller sees everything | R6 | a rebuild becomes a batch job; such a purge becomes constant time | O3 | 5 | Next (2026-11-20). Scoped to the rebuilds: `purge` has no production caller, the loader's `drop` already deletes the tables, and `CLEAR ALL` is a graph drop (D8 (c)) |
 | O6 | **Text planning from per-term posting counts** | R7 | an AND is driven by its rarest word | — | 5 | Not started |
 | O7a | **Parallel reads of one large range, constant object:** a star pattern on its own (`?x a :C`: alone, counted, or driving lookups) read as a merge of one list, its subjects in slices at `spo`'s split points (section 6.6) | R2 | every server holding the list reads at once, and the client decodes no statements | O24 | 1 | Done: `query.join.mergesingle` (10,000). A whole class returned is 2.8 times faster on RocksDB and 2.3 on Accumulo at 10M, 4.9 times on RocksDB at 100M; counted without the entity index, 2.1 to 4.3 times; with a lookup per member, 13 to 16 % on RocksDB and nothing on Accumulo, where the lookups are the time (section 4.12) |
 | O7b | **Parallel reads of one large range, variable object:** `?s :p ?o` (a whole predicate, such as a filter no index covers), cut at the table's own split points, statements decoded on the slice threads (section 6.6) | R2 | every server holding the range reads at once | — | 1 | Not started: later, when a workload needs it (decided 2026-11-19) |
@@ -1196,7 +1196,7 @@ On the join benchmark, HBase at 3M (built with `--bulk`), counts off and on, bot
 
 The rows were the same in every variant. `chain-unused` sends as many cells as before (one rating per review), but its region server counts them instead of the client decoding them.
 
-**Next:** phase 5, starting with O4 (graph drops in time proportional to the graph), after decision D8.
+**Next:** phase 5. D8 was decided (c) the same day, which closes O4, so the phase starts with O5's index rebuilds.
 
 ---
 
@@ -1491,7 +1491,7 @@ The other readers of the counters are `RyaStoreEvalStatsDAO.getCardinality`, `Gr
 - **(b) Graph tombstones.** An `ns` record says that graph G is dropped for labels L up to time T. A scan filter hides such cells, and a compaction filter removes them.
   - This is constant-time, but it is code on every read path of every backend (an Accumulo iterator, an HBase coprocessor, a RocksDB compaction filter plus `RocksScan`).
   - It also has to match `dropGraph`'s rule that a drop removes only cells visible to the caller.
-- **(c) Accept a full scan per drop.**
+- **(c) Accept a full scan per drop.** **Decided on 2026-11-20,** which closes O4.
 
 **`purge` and index rebuilds:**
 - **`purge`** keeps reading everything visible. Where the caller can see everything, dropping and recreating the tables is equivalent and constant-time.
@@ -1811,14 +1811,14 @@ Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, no
 
 ### Phase 5: whole-table operations and planning at scale
 
-7. **O4**, graph drops per D8 (to be decided then);
-8. **O5**, index rebuilds through the bulk build, and purge by recreating tables;
+7. ~~**O4**, graph drops per D8~~: closed, D8 (c) (2026-11-20): a drop keeps scanning the tables;
+8. **O5**, index rebuilds through the bulk build: a resumable loader job that reads `spo` by split range and imports the index's sorted files, while writes go on (decided 2026-11-20: rebuilds only, purge stays as it is);
 9. **O8**, approximate counts;
 10. **O6**, text planning from posting counts.
 
 **Exit:**
 - an AND of a common and a rare word is driven by the rare one;
-- a graph drop costs the graph's size (with D8 (a)).
+- an index rebuild at 10^12 is a resumable batch job, not a start-up scan.
 
 ### Phase 6: smaller wins
 
