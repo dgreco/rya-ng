@@ -92,6 +92,7 @@ public final class LoaderMain {
                         yield 0;
                     }
                     case LOAD -> load(store, o, out);
+                    case BUILD -> new BulkBuild(store, o, out).run() ? 0 : 1;
                     case VERIFY -> Verify.run(store, o, out) ? 0 : 1;
                     case DROP -> {
                         drop(store, o, out);

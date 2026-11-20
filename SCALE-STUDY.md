@@ -144,7 +144,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 |---|---|---|---|---|---|---|
 | O1 | **Loader: don't write per-subject counters of 1** (`s`, `sp`, `so`), summed per block. Includes reading a missing counter as 1 in the inference sum, in `verify` and in `LoaderIT` (section 6.1) | R5 | measured (`dry-run` at 1T, both indexes): cells sent per triple 11.6 → 8.2 (−29 %), bytes 1,065 → 871 (−18 %), `eval` 348 → 154 B. *est.* −20 % on disk (about 100 TB less at 1T with 3 replicas) | — | 0 | Done (PR #15) |
 | O2 | **Loader at 1T:**<br>• `--triples 1T`<br>• `prepare --tablet-size`, planning splits by size instead of 4 per server<br>• `dry-run` reports stored counter cells and their share of 1s | R8, R9 | tablets near the target size from the start, instead of about 50 GB tablets splitting online | — | 3 | Done (2026-11-20, section 4.16): `--triples 1T`; `prepare` plans each table's splits by its estimated size on disk over `--tablet-size` (10G), at least 4 per server, and makes that size the backend's split threshold (`TableAdmin.setTargetSize`); HBase splits in rounds; the progress file is a watermark plus the blocks above it; `dry-run` reports the stored counters per family |
-| O3 | **Bulk build on Accumulo and RocksDB:**<br>• sorted files per tablet, then an import<br>• every counter of 1 left out except `p`<br>• the DAO's guards in the writer<br>• input from the generator or from N-Triples/N-Quads files<br>(section 6.2) | R4, R5, R11 | no write-ahead log, memory tables or compactions. *est.* counters about 5.4 → 0.5 stored cells per triple, 160 → about 115 B per triple on disk | O1, M6 | 3 | Planned: phase 3, after M6 |
+| O3 | **Bulk build on Accumulo and RocksDB:**<br>• sorted files per tablet, then an import<br>• every counter of 1 left out except `p`<br>• the DAO's guards in the writer<br>• input from the generator or from N-Triples/N-Quads files<br>(section 6.2) | R4, R5, R11 | no write-ahead log, memory tables or compactions. *est.* counters about 5.4 → 0.5 stored cells per triple, 160 → about 115 B per triple on disk | O1, M6 | 3 | RocksDB done (2026-11-20, section 4.18): `build`, the same cells as `load` (checked cell by cell), 1.5 times faster at 10M, imported compacted. Accumulo next |
 | O4 | **Graph drops in time proportional to the graph** (D8) | R6 | a drop reads the graph, not the 5 cells per triple of every table (about 5T cells at 1T) | D8 | 5 | Not started |
 | O5 | **Index rebuilds through the bulk build; purge by recreating tables** when the caller sees everything | R6 | a rebuild becomes a batch job; such a purge becomes constant time | O3 | 5 | Not started |
 | O6 | **Text planning from per-term posting counts** | R7 | an AND is driven by its rarest word | — | 5 | Not started |
@@ -952,6 +952,41 @@ Before building the bulk build (O3, O10), each backend's import was tried on its
 
 **Spark** (D5) wasn't tried: D5 (a) was taken with the plan, so the loader sorts. The spike is for if D5 is reopened.
 
+## 4.18 The bulk build, part 1: the pipeline and RocksDB (O3)
+
+**How it works.** `build` writes the dataset as sorted files in the store's own format and imports them, bypassing the write path. It runs in three phases, each resumable, and the pipeline above the storage SPI is written once for every backend.
+- **Sort:** each worker writes its blocks with a DAO of its own over a store that captures the bulk tables' writes. So the cells are, by construction, the ones `load` writes: statements, the three indexes, counters and datatype markers.
+  - The graph markers and metadata go to the store as `load` writes them.
+  - Captured cells are combined in memory: deltas added up, a put's newest version kept. They are spilled as sorted runs per table, in RFiles used here only as a sorted, indexed, compressed format.
+  - A run is recorded with the blocks it holds in one write, so a resume repeats no block and loses none. A worker merges its runs of a table once it has 64, which bounds the files the next phase reads.
+- **Merge:** for each table and each row range of its split points, fixed when the merge first starts, the runs of every part are merged into one file in the backend's format (the SPI's `BulkImport`).
+  - Counter totals of 1 are left out except in family `p` (D6, 6.3). The datatype markers always stay: section 6.2's rule predates them, and a missing marker makes a value range skip that datatype.
+- **Import:** each file once, recorded. RocksDB and Accumulo move what they import, so a file that is gone after a failure was imported.
+
+**RocksDB:** SST files from `SstFileWriter` with the store's codec, counters as `merge` entries, ingested with `ingestExternalFile` (M6).
+
+**Measured at 10M triples, with the text, geo and entity indexes,** on this machine's NVMe, with 8 threads:
+
+| | `load` | `build` |
+|---|---|---|
+| Time | 96 s (105,184 triples/s) | 64 s: sort 41.3 s (242,000 triples/s), merge 20.6 s, import 0.2 s |
+| The store afterwards | 8.0 GB, before compaction (about 3.2 GB after) | 2.7 GB, compacted: the files are imported as written |
+| The work directory | | 1.6 GB of sorted runs (about 160 B per triple), deletable after the import |
+
+- **At 1T,** the work directory needs about 160 TB, one copy, until the import. That is about the size of the store itself.
+- **The sort phase** is the rate that matters: parts on many machines each sort their share, and a tablet's merge reads only its range of every run.
+- **The 10B milestone** (phase 3's exit) needs Accumulo's import (next) and a cluster.
+- **100M** didn't fit on this machine's disk next to the other stores, so it wasn't run.
+
+**Tests** (`LoaderIT`, on every backend with `bulk()`, now RocksDB):
+- **A build against `load`:**
+  - the dataset regenerated and compared, the counters with the build's rule;
+  - the index verifier, the text and geo queries, and `verify`;
+  - every table but `eval` compared cell by cell with a `load` of the same dataset under another prefix.
+  - The phases run one at a time, with runs merged by a fan-in of 2, and a rerun imports nothing.
+- **A crash between a spill and its record:** the resume deletes that spill and writes its blocks once.
+- **Unit tests:** `RocksBulkImportTest`, and `SpillsTest` for combining across runs.
+
 ---
 
 ## 5. Requirements at 1T, and where Tripatha stands
@@ -1551,7 +1586,7 @@ Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, no
 
 1. **O2**, the loader at 1T: `--triples 1T`, split points by target tablet or region size, a progress file that isn't rewritten whole at every commit, and `dry-run` reporting stored counter cells. Done (section 4.16).
 2. **M6**, the bulk spikes, all local: labelled Accumulo RFiles with counters into a live table, RocksDB SST files with merge entries, HBase HFiles with visibility tags and a counter file imported twice, and Spark on JDK 25 (D5). Done (section 4.17), without Spark.
-3. **O3**, the bulk build on Accumulo and RocksDB: sorted files per tablet, every counter of 1 but `p` left out, the DAO's guards in the writer, checked cell by cell against the online path.
+3. **O3**, the bulk build on Accumulo and RocksDB: sorted files per tablet, every counter of 1 but `p` left out, the DAO's guards in the writer, checked cell by cell against the online path. RocksDB done (section 4.18); Accumulo next.
 4. **O10**, the bulk build on HBase: label ordinals in the files, unique counter timestamps per import.
 
 **Exit:** the 10B bulk build on Accumulo measured, with a time model to 1T; the bulk builds of all three backends equal cell by cell to the online path.
