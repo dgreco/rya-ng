@@ -152,7 +152,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O7b | **Parallel reads of one large range, variable object:** `?s :p ?o` (a whole predicate, such as a filter no index covers), cut at the table's own split points, statements decoded on the slice threads (section 6.6) | R2 | every server holding the range reads at once | — | 1 | Not started: later, when a workload needs it (decided 2026-11-19) |
 | O8 | **Approximate counts from the counters** (class sizes, like `stats:approxSize`) | R12 | a count in a few reads instead of a scan | — | 5 | Not started |
 | O9 | **Deprecate `tbl.hashprefix`** | R3 | removes a layout that costs 33 B per row and spreads nothing | D7 | 6 | Not started |
-| O10 | **HBase bulk build:** label ordinals in the files, counter timestamps per import | R4, R10 | as O3, on HBase | O3, M6 | 3 | Planned: phase 3, after O3 |
+| O10 | **HBase bulk build:** label ordinals in the files, counter timestamps per import | R4, R10 | as O3, on HBase | O3, M6 | 3 | Done (2026-11-20, section 4.20): `tripatha.hbase.bulk`, HFiles with tags of label ordinals (recorded in the canaries by `labels`), loaded as the store's user; coprocessor mode only, increment mode refused (decided 2026-11-20) |
 | O11 | **Dictionary encoding**, only if M5 says go (section 6.5) | R1 | to be measured | M5, D9 | later | Not started |
 | O12 | **An analytics engine and pushdown**, only if D1 (b) (section 6.6) | R2 | whole-store analytics | D1 | later | Not started |
 | O13 | **`STRSTARTS` as a prefix range:** a filter `STRSTARTS(?o, "abc")` on a pattern's object narrows its scan to the objects whose data starts with `abc`, with no type check; the filter stays. Not `STRSTARTS(STR(?o), …)`: numbers, dates and booleans aren't stored as their text (section 6.7, ARCH.md 12.8) | R2 | measured (M8): `prefix` 92 → 0.7 ms on RocksDB and 72 → 2.2 ms on Accumulo, 133,579 → 522 cells. `query.prefixranges` turns it off | M8 | 1 | Done (PR #15) |
@@ -1013,6 +1013,34 @@ Before building the bulk build (O3, O10), each backend's import was tried on its
 
 **Tests:** `LoaderIT`'s `aBuild*` tests now also run on Accumulo, against `prepare --splits 7`. Each table then has 8 tablets, so each gets a file per tablet through the load plan.
 
+## 4.20 The bulk build on HBase (O10)
+
+**What it writes:** HFiles in Tripatha's cell layout (`HBaseCodec`), with the column family's compression, block size and encoding. Each cell's visibility is a tag of label ordinals. The files are loaded with `BulkLoadHFiles`, as the store's user, who also writes them, so the user owns them on HDFS.
+
+**Three findings shaped it:**
+- **HBase hides label ordinals.** `hbase:labels` is filtered for everyone but superusers: the normal test account read 1 of its rows, on a cluster with `VisibilityController` and no `AccessController`, so no grant helps. And the loader refuses superuser accounts, because they see every cell. So the `labels` command, which already runs as a superuser, now stores each label's ordinal in that label's canary. The build reads the ordinals of the labels its account holds, so a label's ordinal is shown only to its holders. A label without one stops the build: it isn't held, or it was registered before canaries held ordinals.
+- **Counters need a timestamp of their own** (M6). The build stamps its counter cells with its start time. A work directory left by another build is refused, so a second build can't reuse the timestamp and collapse its counters into the first one's.
+- **Increment mode can't take imported counters.** A counter there is one value, and an imported cell replaces or hides it. `prepare` always writes the reference data's counters first, so even a new store's counter table isn't empty. Decided 2026-11-20: the build refuses in increment mode, and `load` serves those clusters. A cluster at 10^12 would run the coprocessor anyway.
+
+**Dependencies:** the module needs `hbase-server`, for the HFile writer and the bulk load. Unrestricted, that brings the full Hadoop stack next to the shaded client the project uses everywhere, plus Jetty, Tomcat's JSP engine and servlets: 276 entries in the dependency tree. With those excluded there are 120: HBase's own modules on the shaded Hadoop client. Writing and reading an HFile with tags, and creating the bulk-load tool, work on that classpath alone. `tripatha.hbase` stays on `hbase-client` and finds the module with `ServiceLoader`, so the endpoint never loads it.
+
+**Guards** (R11): rows and columns go through `HBaseCodec`, as the write path stores them: the empty row as `00`, rows over 32,767 bytes refused, and column names without `00`. Accumulo's writer now refuses keys over the 1 MB of its default key-size constraint, which imports skip.
+
+**Measured at 3M triples, with every index,** on the HBase test cluster, in coprocessor mode. It ran at 3M, not 10M, because 10M on HBase wouldn't fit in this machine's 23 GB of free disk. JoinBench ran once with `load` and once with `--bulk`, a fresh cluster each time:
+
+| | `load` | `build` |
+|---|---|---|
+| Writing | 45 s (66,291 triples/s) | 31 s: sort 20.0 s (150,215 triples/s), merge 5.2 s, import 6.1 s (38 files) |
+| With `prepare` and a full compaction | 130 s | 104 s |
+| Eight queries of the suite | | the same rows, p50s 0 to 41 % lower (`class-large` 21.1 → 12.4 ms) |
+
+- **Why the gap is small here:** this cluster's write path runs in-process, with no network and no compaction backlog at 3M, so the build gains least on it. On a cluster the write path also pays the network, the write-ahead log and the compactions, which the build skips. Its counter table is a tenth of the size there too, as measured on Accumulo.
+
+**Tests:**
+- **`HBaseBulkImportIT`,** as the normal test account, in both counter modes: labelled files read back under each label, counters added up in coprocessor mode and refused in increment mode, and an unregistered label stopping the file.
+- **`LoaderIT`'s build tests on HBase in coprocessor mode:** the same checks as on Accumulo and RocksDB, a cell-by-cell match with `load` included.
+- **In increment mode,** `aBuildIsRefusedWhereCountersCantBeImported`. `LoaderIT` now passes the test cluster's counter mode to the loader, which had been creating coprocessor tables in both modes.
+
 ---
 
 ## 5. Requirements at 1T, and where Tripatha stands
@@ -1022,14 +1050,14 @@ Before building the bulk build (O3, O10), each backend's import was tried on its
 | R1 | Terms stored compactly (a dictionary of fixed-size IDs, or an equivalent) | Missing, and not needed first | M9, O18 (prefix codes); M5, O11 (dictionary) |
 | R2 | Joins and scans that don't funnel through one process, and read no more than they need | Partial | O13 to O17, O7, O12 |
 | R3 | No hot keys | Present (pre-splitting); the hashed layout doesn't help | O9 |
-| R4 | Bulk ingest | Present on Accumulo and RocksDB (O3); HBase with O10 | O3, O10 |
+| R4 | Bulk ingest | Present (O3, O10); HBase in coprocessor mode | O3, O10 |
 | R5 | Statistics for join ordering, at a size that scales | Present, oversized | O1, O3 |
 | R6 | Maintenance in time proportional to what it changes | Missing | O4, O5 |
 | R7 | Search planning that tells common terms from rare ones | Partial | O6 |
 | R8 | Tablets and regions sized for 1T | Present (O2) | O2 |
 | R9 | A loader that runs at 1T | Present (O2); its rate is R4's | O2 |
-| R10 | Labels in HBase bulk files | Missing | O10 |
-| R11 | Bulk writes checked like online writes | Missing | O3 |
+| R10 | Labels in HBase bulk files | Present (O10): tags of label ordinals, read from the canaries | O10 |
+| R11 | Bulk writes checked like online writes | Present: the DAO's checks run in the capture, HBase's codec and row limit and Accumulo's key size in the file writers | O3 |
 | R12 | Counts without reading the data | Partial (graph sizes only) | O8 |
 
 ### 5.1 R1: terms stored compactly
@@ -1613,7 +1641,7 @@ Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, no
 1. **O2**, the loader at 1T: `--triples 1T`, split points by target tablet or region size, a progress file that isn't rewritten whole at every commit, and `dry-run` reporting stored counter cells. Done (section 4.16).
 2. **M6**, the bulk spikes, all local: labelled Accumulo RFiles with counters into a live table, RocksDB SST files with merge entries, HBase HFiles with visibility tags and a counter file imported twice, and Spark on JDK 25 (D5). Done (section 4.17), without Spark.
 3. **O3**, the bulk build on Accumulo and RocksDB: sorted files per tablet, every counter of 1 but `p` left out, the DAO's guards in the writer, checked cell by cell against the online path. Done for both (sections 4.18 and 4.19).
-4. **O10**, the bulk build on HBase: label ordinals in the files, unique counter timestamps per import.
+4. **O10**, the bulk build on HBase: label ordinals in the files, unique counter timestamps per import. Done (section 4.20).
 
 **Exit:** the 10B bulk build on Accumulo measured, with a time model to 1T; the bulk builds of all three backends equal cell by cell to the online path.
 
