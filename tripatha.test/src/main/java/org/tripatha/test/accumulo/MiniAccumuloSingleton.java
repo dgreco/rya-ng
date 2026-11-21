@@ -71,7 +71,14 @@ public final class MiniAccumuloSingleton {
                 config.setZooKeeperStartupTime(ZOOKEEPER_STARTUP.toMillis());
                 final MiniAccumuloCluster started = new MiniAccumuloCluster(config);
                 log.info("Starting MiniAccumuloCluster in {}", dir);
-                started.start();
+                try {
+                    started.start();
+                } catch (final Exception | Error e) {
+                    // A start that fails (ZooKeeper too slow, a port taken) leaves the processes it
+                    // started running, and the next test starts more: stop them now.
+                    abandon();
+                    throw e;
+                }
                 cluster = started;
                 Runtime.getRuntime().addShutdownHook(new Thread(MiniAccumuloSingleton::stop, "mac-shutdown"));
             } catch (final InterruptedException e) {
@@ -115,6 +122,13 @@ public final class MiniAccumuloSingleton {
         }
         // MiniAccumuloCluster.stop() does not always stop its ZooKeeper process; make sure no
         // cluster process outlives the test JVM.
+        ProcessHandle.current().descendants().forEach(ProcessHandle::destroyForcibly);
+        deleteRecursively(clusterDir);
+        clusterDir = null;
+    }
+
+    /** After a failed start: no process of it outlives the attempt, and its directory goes. */
+    private static void abandon() {
         ProcessHandle.current().descendants().forEach(ProcessHandle::destroyForcibly);
         deleteRecursively(clusterDir);
         clusterDir = null;
