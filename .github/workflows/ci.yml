@@ -1,7 +1,7 @@
 # Build, unit tests, integration tests and coverage on every push and pull request: the full build on Accumulo
 # (build), and the integration tests again on an in-process HBase cluster (hbase).
 # Pushes to main also publish the coverage report to GitHub Pages:
-#   https://tripatha.org/coverage/   (badge data: /badge.json for coverage, /tests.json for tests; the front page leads to the repository)
+#   https://tripatha.org/coverage/   (badge data: /badge.json for coverage, /tests.json for tests; the front page is website/index.html)
 name: CI
 
 on:
@@ -108,21 +108,9 @@ jobs:
         run: |
           mkdir -p site
           cp -R "$REPORT" site/coverage
-          # tripatha.org's front page: the project is its repository. The custom domain is a setting
-          # of the repository's Pages, not a CNAME file, which a workflow's deploy ignores.
-          cat > site/index.html <<'EOF'
-          <!doctype html>
-          <html lang="en">
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>Tripatha</title>
-          <meta http-equiv="refresh" content="0; url=https://github.com/dgreco/tripatha">
-          <link rel="canonical" href="https://github.com/dgreco/tripatha">
-          <p>Tripatha, an RDF triple store on Accumulo, HBase or RocksDB:
-            <a href="https://github.com/dgreco/tripatha">github.com/dgreco/tripatha</a>.
-            <a href="coverage/">Coverage report</a>.</p>
-          </html>
-          EOF
+          # tripatha.org's front page: the landing page in website/ (a self-contained page). The custom domain is a
+          # setting of the repository's Pages, not a CNAME file, which a workflow's deploy ignores.
+          cp -R website/. site/
 
       - name: Upload the Pages site
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
