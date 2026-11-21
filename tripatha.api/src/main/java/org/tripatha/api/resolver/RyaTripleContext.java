@@ -54,6 +54,7 @@ public class RyaTripleContext {
     private TripleRowResolver tripleResolver;
     private final List<TriplePatternStrategy> triplePatternStrategyList = new ArrayList<TriplePatternStrategy>();
 
+    @SuppressWarnings("deprecation") // the hashed layout is deprecated, and still served for the stores on it
     public RyaTripleContext(final boolean addPrefixHash) {
         addDefaultTriplePatternStrategies(addPrefixHash);
         if (addPrefixHash){
