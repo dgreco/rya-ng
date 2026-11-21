@@ -63,17 +63,31 @@ final class AccumuloBulkImport implements BulkImport {
 
     @Override
     public BulkFile newFile(final String table, final String dir, final String name, final long counterTimestamp) {
+        try {
+            return open(client.tableOperations().getConfiguration(table), new Configuration(), dir, name, counterTimestamp);
+        } catch (final AccumuloException | TableNotFoundException e) {
+            throw new RyaDAOException("Could not read the configuration of " + table, e);
+        }
+    }
+
+    /**
+     * An RFile for a table, written with the table's configuration as given: no connection to
+     * Accumulo, so a Spark executor can write one (tripatha.spark).
+     *
+     * @param conf the Hadoop configuration of the file system ({@code s3a://}, {@code hdfs://}, {@code file://})
+     */
+    static BulkFile open(final Map<String, String> tableProperties, final Configuration conf, final String dir, final String name,
+            final long counterTimestamp) {
         final Path path = new Path(dir, name + ".rf");
         try {
-            final FileSystem fs = path.getFileSystem(new Configuration());
+            final FileSystem fs = path.getFileSystem(conf);
             fs.mkdirs(path.getParent());
             fs.delete(path, false);
-            final Map<String, String> properties = client.tableOperations().getConfiguration(table);
-            final RFileWriter writer = RFile.newWriter().to(path.toString()).withFileSystem(fs).withTableProperties(properties)
+            final RFileWriter writer = RFile.newWriter().to(path.toString()).withFileSystem(fs).withTableProperties(tableProperties)
                     .build();
             return new File(fs, path, writer, counterTimestamp);
-        } catch (final IOException | AccumuloException | TableNotFoundException e) {
-            throw new RyaDAOException("Could not open a bulk file for " + table + " at " + path, e);
+        } catch (final IOException e) {
+            throw new RyaDAOException("Could not open a bulk file at " + path, e);
         }
     }
 

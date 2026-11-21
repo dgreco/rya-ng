@@ -201,7 +201,7 @@ public final class SplitPlanner {
     }
 
     /** Up to {@code n} distinct split points at the quantiles of the rows. */
-    static SortedSet<Text> quantiles(final List<byte[]> rows, final int n) {
+    public static SortedSet<Text> quantiles(final List<byte[]> rows, final int n) {
         final SortedSet<Text> points = new TreeSet<>();
         if (n <= 0 || rows.size() < 2) {
             return points;

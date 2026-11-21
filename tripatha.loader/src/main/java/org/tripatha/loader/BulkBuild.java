@@ -381,10 +381,19 @@ public final class BulkBuild {
      * (family {@code t}) always stay: a missing marker makes a value range skip that datatype.
      */
     boolean leftOut(final byte[] family, final long total) {
+        return leftOut(family, total, o.statsOnes());
+    }
+
+    /**
+     * The rule of {@link #leftOut(byte[], long)} for a counter's final total, shared with the
+     * Spark build (tripatha.spark): with {@code SKIP_SUBJECT_ONES}, totals of 1 are left out in
+     * the six counter families but {@code p}, which is exact only when the total is the store's.
+     */
+    public static boolean leftOut(final byte[] family, final long total, final EvalStatsMutations.CounterPolicy ones) {
         if (total == 0) {
             return true;
         }
-        if (total != 1 || o.statsOnes() != EvalStatsMutations.CounterPolicy.SKIP_SUBJECT_ONES) {
+        if (total != 1 || ones != EvalStatsMutations.CounterPolicy.SKIP_SUBJECT_ONES) {
             return false;
         }
         final String f = new String(family, StandardCharsets.UTF_8);

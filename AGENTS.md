@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Tripatha is an RDF triple store on Accumulo, HBase or an embedded RocksDB database. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with thirteen modules (plus `tripatha.coverage` under `-Pcoverage`), groupId `org.tripatha`, version `1.0.0-SNAPSHOT`, Java packages under `org.tripatha`. `BACKENDS-STUDY.md` is the design of the storage layer and of the HBase mapping. `SCALE-STUDY.md` drives the work toward 10^12 triples: its tracker (section 2) lists the optimizations (`O…`), measurements (`M…`) and decisions (`D…`). A change that lands one of them updates its row.
+Tripatha is an RDF triple store on Accumulo, HBase or an embedded RocksDB database. It's an independent project derived from Apache Rya (see `NOTICE`): a lean Maven build with fourteen modules (plus `tripatha.coverage` under `-Pcoverage`), groupId `org.tripatha`, version `1.0.0-SNAPSHOT`, Java packages under `org.tripatha`. `BACKENDS-STUDY.md` is the design of the storage layer and of the HBase mapping. `SCALE-STUDY.md` drives the work toward 10^12 triples: its tracker (section 2) lists the optimizations (`O…`), measurements (`M…`) and decisions (`D…`). A change that lands one of them updates its row.
 
 | Component | Version | Notes |
 |---|---|---|
@@ -37,6 +37,10 @@ mvn verify -pl tripatha.rocksdb,tripatha.test,tripatha.sail,tripatha.loader,trip
 # single test: install upstream first, then run one module without -am
 mvn -pl tripatha.api test -Dtest=TypeEncodingDelimiterTest
 mvn -pl tripatha.sail verify -Dit.test=InferenceIT -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false
+
+# the Spark build's ITs (Accumulo only), and its job jar for spark-submit
+mvn -pl tripatha.spark verify -Dit.test=SparkBuildIT
+mvn -pl tripatha.spark -am package -DskipTests -DskipITs    # tripatha.spark/target/tripatha.spark-<version>-job.jar
 ```
 
 - **Naming:** `*Test` = pure unit test, `*IT` = needs a cluster. There is no IT profile; `verify` always runs ITs.
@@ -187,6 +191,32 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `build
 - **`configure.sh`** asks for the backend first, then writes `accumulo-client.properties` or `hbase.properties` (for `--hbase-properties`), with mode 600. For RocksDB it writes nothing: it asks for the directory and prints the `--rocksdb-path` option. Test it as `/bin/bash tripatha.loader/configure.sh` with piped answers and `--defaults` for both backends. Values are escaped the way Java reads `.properties` (ISO-8859-1): anything outside printable ASCII becomes `\uXXXX` via `iconv` and `od`, which must stay bash-3.2 compatible.
 - **`verify`** regenerates a sample of entities and compares them with spo and the subject counters, under the reader's labels.
 - `LoaderIT` checks spo and eval cell by cell against the regenerated data, after parallel parts, a stop and resume, and a write failure followed by a resume.
+
+### Spark build (`tripatha.spark`)
+
+The bulk build as a Spark job, for Accumulo (SCALE-STUDY.md O28, D5 (b), section 4.28; how to run it in `tripatha.spark/README.md`). `SparkBuild` (commands `generate`, `files`, `smoke`) runs under `spark-submit` with the module's shaded jar (classifier `job`), on Spark 4.2 and Java 25. Its own options are parsed first; the rest are the loader's, parsed by `LoaderOptions` as for `build`.
+- **Dependencies:** it depends on the loader's classes through `tripatha.loader`'s `lib` jar (the main one is Boot's executable), without HBase, RocksDB or `slf4j-simple`.
+  - Spark, Scala, Hadoop, ZooKeeper, Netty, Jackson 2 and the logging are provided, and left out of the job jar: they are the cluster's.
+  - Thrift, Guava, Gson, Protobuf and Caffeine are relocated under `org.tripatha.shaded`. Spark 4.2.1's jars carry Thrift 0.16 against Accumulo's 0.24, and other Guava and Gson versions.
+- **Cells:** `CellMaker` runs a `RyaStoreDAO` over a `CapturingStore` of an `EmptyStore`, so every cell is the one `load` writes.
+  - The `EmptyStore` must have the real store's tables (`JobSpec.existing`): a DAO refuses an index table its settings don't enable.
+  - Every task parses the loader's arguments again (`JobSpec.options()`), with a size in triples given as entities.
+- **Layout** (`Shuffle.Layout`): one Spark partition per file.
+  - **Points:** each table's tablet split rows, plus sample quantiles within each tablet, for files of about `--file-size` (at most 50 per tablet). A point ends its range, as on Accumulo.
+  - **The entity index's shard rows** are spread over `buckets` files by column hash; files of one tablet may overlap.
+- **Shuffle:** a task adds up its counters across write calls (`Tasks.COUNTERS` keys), and `repartitionAndSortWithinPartitions` sorts each partition in Accumulo's key order. `Tasks.write` adds up equal keys and keeps the newest put, as `Shuffle.Value.combine` decides (deterministic, so a task run twice writes the same file). Spark's own combining (`ShuffledRDD` with an aggregator) hashed every cell and was 1.6 times slower: don't bring it back.
+- **Counters left out:** `BulkBuild.leftOut`, shared with the loader, with `SKIP_SUBJECT_ONES` only when the totals are the store's: a generated dataset, or files into a new store (`job.properties` `fresh`). With `--append` only zeros.
+- **Work directory** (`WorkDir`, any Hadoop file system): it must be on one of Accumulo's volumes, or the import is refused.
+  - `job.properties`: the input's fingerprint, the timestamp, and the state `writing`, `written`, `importing` or `done`.
+  - `files/<table>/NNNNNN.rf`, and `manifest.properties` (each file's rows, for the load plan).
+  - **Rules:** a write deletes `files` and starts over, and is refused once an import started. The import skips files that are gone (imported), and refuses a table directory still holding `loadmap.json`, because Accumulo 2.1.6 doesn't check it.
+- **Files** (`RdfLines`, `Tasks.LineBatches`): `TextInputFormat` splits, parsed `CHUNK` lines per RDF4J call, line by line only for a chunk that fails.
+  - **Blank nodes:** kept (`PRESERVE_BNODE_IDS`) and prefixed with the file's id (`RdfLines.fileId`: path, length, modification time).
+  - **Statements** get the job's timestamp and `--visibility`.
+  - **Bad lines:** a statement the DAO refuses is retried alone, and the `CellMaker` reopened after a failure. Both kinds count toward `--max-bad-lines`.
+  - **`--distinct`:** `distinct()` over the spo cells (`Tasks.Bytes`), then `deserializeTriple`.
+- **Kryo:** everything that crosses a shuffle or a task result is a plain class with a no-argument constructor (`Shuffle.Key`, `Shuffle.Value`, `Tasks.FileWritten`, `Smoke.Result`), never a record or an immutable `List.of`.
+- **Tests:** `SparkBuildIT` (local Spark and the Accumulo test cluster; skipped on the other backends) compares `generate` with the loader's `build`, and `files` with a DAO load of the same statements, cell by cell. `SparkJava25SpikeTest` runs Tripatha's encoding in Spark tasks. The surefire and failsafe `argLine`s add the JVM options Spark's launcher adds (`spark.test.jvm` in the module's pom). `LocalCluster` (test sources) runs a throwaway Accumulo for trying `spark-submit` on one machine.
 
 ### Row encoding (`tripatha.api` `resolver`)
 

@@ -97,6 +97,7 @@ The endpoint is packaged as `tripatha.sparql/target/tripatha.sparql-<version>.ja
 | `tripatha.sail` | RDF4J Sail (`RdfCloudTripleStore`), query planning, inference, and `RyaSailFactory` |
 | `tripatha.sparql` | Spring Boot SPARQL endpoint |
 | `tripatha.loader` | Synthetic data generator and parallel loader, for stress tests |
+| `tripatha.spark` | The bulk build as a Spark job, for Accumulo: the generated dataset or N-Triples and N-Quads files, sorted by Spark into RFiles and imported |
 | `tripatha.standalone` | The endpoint with the RocksDB backend only: an executable jar, and with `-Pnative` a native executable |
 | `tripatha.test` | Test-only harness: one shared cluster per backend per JVM, and the store-level integration tests |
 
@@ -667,6 +668,7 @@ $R drop    $C --table-prefix big_ --confirm big_
   - **Space:** the work directory needs about 160 bytes per triple, compressed, until the import. `--spill-memory-mb` (1024, all threads together) is the memory for cells waiting to be sorted.
   - The progress file holds a watermark and the few blocks done above it, so it stays a few bytes at any size; 1T in one process is about 134 million blocks.
   - A file written by an earlier loader is read and rewritten in this form, which earlier loaders refuse rather than starting over (that would add the done blocks' counters twice).
+- **On a Spark cluster:** `tripatha.spark` runs the bulk build as a Spark job, for Accumulo. Executors write the cells into RFiles on Accumulo's own volume (S3 or HDFS), and the driver imports them. It reads this dataset, or N-Triples and N-Quads files. Spark 4.2 on Java 25; see [tripatha.spark/README.md](tripatha.spark/README.md). At 10M triples on one machine it takes 63.5 s against `build`'s 50.8 s, and loads WatDiv's 10.95M triples from N-Triples in 52.3 s; on a cluster every executor sorts and writes.
 - **Statistics:** a load doesn't write a subject's counters whose total is 1. The planner reads a missing counter as 1, so join orders are unchanged. `dry-run` reports the counter cells a load leaves once they are summed, per family, over the first `--counter-sample` entities (20K).
   - This leaves out about half of the counter cells: 8.2 cells per triple are sent instead of 11.6.
   - It is exact because a block holds whole entities, and no subject appears in two entities.

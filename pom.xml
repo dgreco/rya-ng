@@ -51,6 +51,7 @@ under the License.
         <module>tripatha.test</module>
         <module>tripatha.sail</module>
         <module>tripatha.loader</module>
+        <module>tripatha.spark</module>
         <module>tripatha.sparql</module>
         <module>tripatha.standalone</module>
     </modules>
