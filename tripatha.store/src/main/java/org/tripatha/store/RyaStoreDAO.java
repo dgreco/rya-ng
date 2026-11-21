@@ -208,6 +208,11 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
             indexes = new IndexManager(store, conf, writer, storeCreated);
             raiseVersionForEntityIndex();
             raiseVersionForRebuildJob();
+            if (conf.isPrefixRowsWithHash()) {
+                logger.warn("{} uses the hashed row layout (tbl.hashprefix), which is deprecated: it doesn't spread hot keys, costs 33 "
+                        + "bytes per spo and po row, and graph sizes and merge joins refuse it (SCALE-STUDY.md 5.3, O9). "
+                        + "It keeps working; leave it off for a new store.", tables.getSpo());
+            }
             isInitialized.set(true);
         } catch (final Exception e) {
             if (writer != null) {

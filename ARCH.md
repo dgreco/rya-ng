@@ -517,6 +517,13 @@ For the same reason, Accumulo's own lexicoders must not replace mango's encoders
 
 `RyaTripleContext` can also use `WholeRowHashedTripleResolver`, which prefixes the `spo` and `po` rows with a hash. This option (`tbl.hashprefix`) comes from Apache Rya and is off by default. The rest of this document describes the default layout.
 
+**It is deprecated** (SCALE-STUDY.md D7, O9):
+- **It doesn't do what it is kept for:** every row of one predicate gets the same prefix, so a hot predicate stays one range, while sorted IRIs and `prepare`'s quantile splits already spread different subjects and predicates.
+- **It costs:** 33 bytes more per `spo` and `po` row.
+- **Features refuse it:** graph sizes and merge joins.
+
+Stores on it keep working, and a DAO opening one logs a warning. Its setter and resolver are marked `@Deprecated`; leave it off for a new store.
+
 ---
 
 ## 8. From a triple pattern to a range scan
@@ -2051,7 +2058,7 @@ At 10^12 what must not happen is a client reading billions of cells to keep a fe
 ### 20.7 Still open
 
 - **Graph drops** still scan every table (D8 (c): O4 closed); index rebuilds are a batch job (O5, 20.5), and `purge` stays as it is.
-- **Layout:** deprecating the hashed row prefix (O9); a dictionary encoding (O11), conditional on M5.
+- **Layout:** a dictionary encoding (O11), conditional on M5. The hashed row prefix is deprecated (O9, [7.6](#76-alternative-hashed-layout)).
 - **Analytics** over the whole store, which need an engine of their own (O12).
 - **Cluster defaults:** Accumulo and HBase read a batch on one thread and don't fetch ahead until both are measured on a cluster (M3, M4).
 - **The 10^10 and 10^12 milestones** need a cluster.

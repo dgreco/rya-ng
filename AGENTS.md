@@ -194,6 +194,7 @@ A command-line stress loader (`LoaderMain`: `dry-run`, `prepare`, `load`, `build
 - Values are encoded by mango `LexiTypeEncoders`, one resolver per datatype (marker bytes in the `*RyaTypeResolver` classes; `xsd:int`=13 and `xsd:integer`=5 are separate).
 - **RDF 1.2:** a triple term is a `RyaTripleTerm` (reserved datatype `RyaSchema.TRIPLE_TERM`, marker 14, `TripleTermResolver`): `02 esc(s) 02 esc(p) 02 esc(o with its own marker)`, objects only, nested by applying the layout again. A literal with a base direction is an `rdf:dirLangString` whose language field is `ar--rtl`, stored by `CustomDatatypeResolver`.
 - `EncodingCompatibilityTest` pins the bytes of every resolver and row layout. A change that makes it fail changes what existing stores hold.
+- **The hashed row layout (`tbl.hashprefix`, `WholeRowHashedTripleResolver`) is deprecated** (O9, SCALE-STUDY.md 5.3): it spreads no hot key and costs 33 B per row. Keep it working for the stores on it; don't build new features for it (graph sizes and merge joins refuse it).
 - **Encoded values must never contain `0x00`/`0x01`.** `RyaTypeResolverImpl.checkNoReservedBytes` enforces this, and `TypeEncodingDelimiterTest` guards it. Do not switch to Accumulo lexicoders: they emit raw bytes.
 
 ### Query path (`tripatha.sail`)

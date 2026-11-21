@@ -172,6 +172,13 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
     public static final String CONF_TBL_OSP = "tbl.osp";
     public static final String CONF_TBL_NS = "tbl.ns";
     public static final String CONF_TBL_EVAL = "tbl.eval";
+    /**
+     * The hashed row layout (prefix {@code spo} rows with a hash of the subject, {@code po} rows
+     * with one of the predicate).
+     *
+     * @deprecated it doesn't spread hot keys (every row of a predicate gets the same prefix), costs 33 bytes per {@code spo} and {@code po} row, and graph sizes and merge joins refuse it (SCALE-STUDY.md 5.3, D7, O9). Stores on it keep working.
+     */
+    @Deprecated
     public static final String CONF_PREFIX_ROW_WITH_HASH = "tbl.hashprefix";
     public static final String STATS_PUSH_EMPTY_RDFTYPE_DOWN = "conf.stats.rdftype.down";
     public static final String INFER_INCLUDE_ALL_VALUES_FROM = "infer.include.allvaluesfrom";
@@ -405,6 +412,8 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
         return getBoolean(CONF_PREFIX_ROW_WITH_HASH, false);
     }
 
+    /** @deprecated it doesn't spread hot keys (every row of a predicate gets the same prefix), costs 33 bytes per {@code spo} and {@code po} row, and graph sizes and merge joins refuse it (SCALE-STUDY.md 5.3, D7, O9). Stores on it keep working; a new store should leave it off. */
+    @Deprecated
     public void setPrefixRowsWithHash(final Boolean val) {
         Preconditions.checkNotNull(val);
         setBoolean(CONF_PREFIX_ROW_WITH_HASH, val);

@@ -152,7 +152,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O7a | **Parallel reads of one large range, constant object:** a star pattern on its own (`?x a :C`: alone, counted, or driving lookups) read as a merge of one list, its subjects in slices at `spo`'s split points (section 6.6) | R2 | every server holding the list reads at once, and the client decodes no statements | O24 | 1 | Done: `query.join.mergesingle` (10,000). A whole class returned is 2.8 times faster on RocksDB and 2.3 on Accumulo at 10M, 4.9 times on RocksDB at 100M; counted without the entity index, 2.1 to 4.3 times; with a lookup per member, 13 to 16 % on RocksDB and nothing on Accumulo, where the lookups are the time (section 4.12) |
 | O7b | **Parallel reads of one large range, variable object:** `?s :p ?o` (a whole predicate, such as a filter no index covers), cut at the table's own split points, statements decoded on the slice threads (section 6.6) | R2 | every server holding the range reads at once | — | 1 | Not started: later, when a workload needs it (decided 2026-11-19) |
 | O8 | **Approximate counts from the counters** (class sizes, like `stats:approxSize`) | R12 | a count in a few reads instead of a scan | — | 5 | Done (2026-11-20, section 4.24): `stats:approxInstances` (a class's `rdf:type` statements) and `stats:approxTriples` (a predicate's statements) answered from the counters, with `stats:approxSize`, by `ApproxCountOptimizer`. A class's size: 0.4 ms and 1 cell against 12.4 ms and 53,432 cells counted (RocksDB 10M); 1.2 against 12.7 ms on Accumulo, 0.9 against 14.1 on HBase (3M) |
-| O9 | **Deprecate `tbl.hashprefix`** | R3 | removes a layout that costs 33 B per row and spreads nothing | D7 | 6 | Not started |
+| O9 | **Deprecate `tbl.hashprefix`** | R3 | removes a layout that costs 33 B per row and spreads nothing | D7 | 6 | Done (2026-11-21, section 5.3): the setting and `WholeRowHashedTripleResolver` are `@Deprecated`, a DAO opening a store on the layout warns, and existing stores keep working |
 | O10 | **HBase bulk build:** label ordinals in the files, counter timestamps per import | R4, R10 | as O3, on HBase | O3, M6 | 3 | Done (2026-11-20, section 4.20): `tripatha.hbase.bulk`, HFiles with tags of label ordinals (recorded in the canaries by `labels`), loaded as the store's user; coprocessor mode only, increment mode refused (decided 2026-11-20) |
 | O11 | **Dictionary encoding**, only if M5 says go (section 6.5) | R1 | to be measured | M5, D9 | later | Not started |
 | O12 | **An analytics engine and pushdown**, only if D1 (b) (section 6.6) | R2 | whole-store analytics | D1 | later | Not started |
@@ -1384,7 +1384,7 @@ RocksDB is unchanged, and a query with one counter reads it as before. A batch s
 - the rows and the optimized plan are the same with the batch on and off, and the plan's text holds every estimate;
 - with it on, one batch and no single read wherever two counters or more are read: 5 of the 8 at least.
 
-**Next:** O9, deprecating `tbl.hashprefix` (D7).
+**Next:** O9, deprecating `tbl.hashprefix` (D7), done the same day: its setter and resolver are `@Deprecated`, a DAO opening a store on it logs a warning, and the stores on it keep working (section 5.3). The plan's remaining items need a cluster.
 
 ---
 
@@ -1475,7 +1475,10 @@ These cut bytes for filtered scans. They don't remove the funnel, and RocksDB ha
 - 33 bytes more per `spo` and `po` row;
 - graph sizes: `GraphSizes` throws `UnsupportedOperationException` on that layout.
 
-Apart from the configuration class that defines it, `RyaTripleContext` and `GraphSizes` are the only code that tests the flag. Hence O9.
+Apart from the configuration class that defines it, `RyaTripleContext` and `GraphSizes` are the only code that tests the flag. Hence O9, **done on 2026-11-21:**
+- the setting's constant and setter, and `WholeRowHashedTripleResolver`, are `@Deprecated` with these reasons;
+- a DAO opening a store on the layout logs a warning;
+- the stores on it keep working: their bytes are `EncodingCompatibilityTest`'s.
 
 **Where the hot spots really are:**
 - **Large ranges** such as `rdf:type` (about 13 % of `po` in this dataset) are split into many tablets by `prepare`'s quantile split points, so their storage and their writes spread. Read through a single Scanner it was sequential, which is R2: a class on its own is now read in slices (O7a), a whole predicate still isn't (O7b).
@@ -2011,7 +2014,7 @@ Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, no
 ### Phase 6: smaller wins
 
 11. **M14**, the fixed cost per query, on the JVM endpoint and the native executable; then what it shows. **Done** (2026-11-21, section 4.26): small apart from planning's counter reads on Accumulo and HBase, now read together (O27).
-12. **O9**, deprecating `tbl.hashprefix` (D7).
+12. **O9**, deprecating `tbl.hashprefix` (D7). **Done** (2026-11-21): deprecated in the code and the docs, with a warning on open; stores on it keep working.
 
 ### On a cluster, and conditional
 
