@@ -121,8 +121,8 @@ Tripatha is built to run on distributed stores, Accumulo and HBase clusters, wit
 - **Every statement three times** (`spo`, `po`, `osp`), plus cardinality counters and an entity index, all kept up to date on every write: it takes updates online.
 - **RDF4J's evaluation,** binding set by binding set.
 
-**The results,** measured on 2026-11-20 with `compare.sh`:
-- **The setup:** commit `70ca405`, on one machine (12 cores, 24 GB, macOS, NVMe).
+**The results,** measured on 2026-11-21 with `compare.sh`:
+- **The setup:** commit `c1e1968`, on one machine (12 cores, 24 GB, macOS, NVMe).
 - **The benchmark:** WatDiv at scale factor 100, 10,867,277 statements, 5 queries from each of its 20 templates.
 - **The checks:** all three engines held the same statements, and every query returned the same rows on all three.
 - **The times:** the median of 10 timed runs, to the last byte of a TSV result over HTTP, with a warm cache.
@@ -131,50 +131,51 @@ Geometric means, in ms:
 
 | Queries | Count | Tripatha | QLever | Oxigraph |
 |---|---|---|---|---|
-| **All** | 100 | **2.6** | 10.1 | 4.0 |
-| Linear (L) | 25 | **1.5** | 4.0 | **1.5** |
-| Star (S) | 35 | **1.3** | 6.4 | 2.2 |
-| Snowflake (F) | 25 | 1.8 | 15.6 | **1.5** |
-| Complex (C) | 15 | **56.1** | 67.3 | 417.3 |
-| Fastest on (templates of 20) | | **10** (2 tied with Oxigraph) | 3 | 7 |
+| **All** | 100 | **2.3** | 9.5 | 3.8 |
+| Linear (L) | 25 | **1.3** | 3.7 | 1.5 |
+| Star (S) | 35 | **1.1** | 6.0 | 2.0 |
+| Snowflake (F) | 25 | 1.5 | 14.9 | **1.4** |
+| Complex (C) | 15 | **54.7** | 65.0 | 398.7 |
+| Fastest on (templates of 20) | | **13** (5 tied with Oxigraph) | 3 | 9 |
 
 <details>
 <summary>Per template: the median of its 5 queries, in ms</summary>
 
 | Template | Rows | Tripatha | QLever | Oxigraph |
 |---|---|---|---|---|
-| L1 | 0–3 | **0.5** | 4.5 | **0.5** |
-| L2 | 12–212 | 10.6 | **4.9** | 12.2 |
-| L3 | 9–26 | 0.5 | 2.3 | **0.4** |
-| L4 | 46–66 | **1.7** | 3.1 | 1.8 |
-| L5 | 49–275 | **4.4** | 6.5 | 6.6 |
-| S1 | 0–9 | **1.3** | 73.1 | 1.4 |
-| S2 | 16–128 | **1.1** | 3.9 | 2.2 |
-| S3 | 0 | 6.2 | 5.9 | **5.6** |
-| S4 | 0–5 | 4.7 | **3.3** | 44.5 |
-| S5 | 0 | **0.5** | 5.5 | 3.1 |
-| S6 | 0–16 | 2.7 | 2.9 | **1.4** |
-| S7 | 0 | **0.2** | 5.0 | **0.2** |
-| F1 | 0–10 | **2.9** | 9.5 | 8.2 |
-| F2 | 1–7 | 1.5 | 21.4 | **1.3** |
-| F3 | 1–2 | 0.9 | 10.4 | **0.5** |
-| F4 | 0–60 | 4.7 | 38.9 | **2.0** |
-| F5 | 13–51 | 1.3 | 10.7 | **1.2** |
-| C1 | 26 | **13.2** | 22.9 | 14.1 |
-| C2 | 6 | 50.5 | **38.6** | 305.1 |
-| C3 | 444,070 | **268.2** | 350.3 | 16,976.6 |
+| L1 | 0–3 | **0.5** | 4.1 | **0.5** |
+| L2 | 12–212 | 9.9 | **4.4** | 12.5 |
+| L3 | 9–26 | **0.4** | 2.2 | **0.4** |
+| L4 | 46–66 | **1.4** | 2.8 | 1.7 |
+| L5 | 49–275 | **4.1** | 5.9 | 6.2 |
+| S1 | 0–9 | **1.4** | 66.2 | 1.5 |
+| S2 | 16–128 | **1.0** | 3.4 | 1.5 |
+| S3 | 0 | 5.4 | 5.6 | **4.7** |
+| S4 | 0–5 | 3.6 | **3.1** | 43.8 |
+| S5 | 0 | **0.4** | 5.2 | 3.2 |
+| S6 | 0–16 | 2.0 | 2.9 | **1.3** |
+| S7 | 0 | **0.2** | 4.6 | **0.2** |
+| F1 | 0–10 | **2.5** | 9.0 | 8.3 |
+| F2 | 1–7 | **1.1** | 20.9 | **1.1** |
+| F3 | 1–2 | 0.6 | 10.2 | **0.4** |
+| F4 | 0–60 | 4.0 | 39.2 | **2.0** |
+| F5 | 13–51 | **1.2** | 10.0 | **1.2** |
+| C1 | 26 | **11.7** | 21.8 | 12.9 |
+| C2 | 6 | 47.8 | **35.7** | 291.0 |
+| C3 | 444,070 | **289.8** | 354.7 | 16,693.3 |
 
 </details>
 
 **What it shows:**
-- **On par or ahead, despite the extra work.** Over all 100 queries, Oxigraph takes 1.5 times Tripatha's time and QLever 3.9 times.
-- **The 85 small queries** (linear, star, snowflake): 1.5 ms on Tripatha, 1.7 on Oxigraph, 7.3 on QLever.
-  - Tripatha leads on the stars and is level on the linear queries.
-  - It trails Oxigraph on the snowflakes, by 0.1 to 2.7 ms.
-  - QLever spends a few milliseconds even on the smallest: 4.5 ms on L1, which returns 0 to 3 rows.
-- **The complex queries:** Tripatha is 17 % faster than QLever and 7 times faster than Oxigraph.
-  - QLever stays ahead on C2 (38.6 against 50.5 ms), and on L2 and S4.
-  - C3, the largest answer (444,070 rows), went from 533 to 268 ms with the last optimization (O26). Its patterns whose values the query never returns are counted, not read.
+- **Ahead overall, despite the extra work.** Over all 100 queries, Oxigraph takes 1.7 times Tripatha's time and QLever 4.2 times.
+- **The 85 small queries** (linear, star, snowflake): 1.28 ms on Tripatha, 1.66 on Oxigraph, 6.79 on QLever.
+  - Tripatha leads on the stars and the linear queries.
+  - It trails Oxigraph on four templates (S3, S6, F3, F4), by 0.2 to 2 ms. There its time goes into building and hashing the keys of thousands of lookups, where Oxigraph joins integer IDs (SCALE-STUDY.md 4.26).
+  - QLever spends a few milliseconds even on the smallest: 4.1 ms on L1, which returns 0 to 3 rows.
+- **The complex queries:** Tripatha is 16 % faster than QLever and 7 times faster than Oxigraph.
+  - QLever stays ahead on C2 (35.7 against 47.8 ms), and on L2 and S4.
+  - C3, the largest answer (444,070 rows), takes 290 ms against QLever's 355. Its patterns whose values the query never returns are counted, not read (O26).
+- **Since the comparison of 2026-11-20** (commit `70ca405`), the geometric mean of all 100 went from 2.6 to 2.3 ms. QLever and Oxigraph also measured 5 to 6 % faster on this run, so part of it is the machine. The changes in between are O5, O6, O8, O9 and O27, which reads planning's counters together and matters most on Accumulo and HBase.
 - **The cost is on the write side.**
   - Loading took 99 s, against 11 s for each of the others. Tripatha loads through the write path of online updates: labelled cells, three orders, statistics and its entity index.
   - Its store is 0.99 GB, against 0.28 GB for QLever's index and 1.22 GB for Oxigraph.
