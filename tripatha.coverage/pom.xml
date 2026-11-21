@@ -81,6 +81,11 @@
             <artifactId>tripatha.loader</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.tripatha</groupId>
+            <artifactId>tripatha.spark</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

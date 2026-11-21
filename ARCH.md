@@ -1935,6 +1935,24 @@ sequenceDiagram
 
 On RocksDB only one process opens the store, so nothing else writes during the job.
 
+### 18.6 The Spark build
+
+`tripatha.spark` is the bulk build as a Spark job, for Accumulo (SCALE-STUDY.md O28, 4.28). It reads the generator's entities (into a store `prepare` made) or N-Triples and N-Quads files (into a new store, or one that holds statements with `--append`). It runs as `spark-submit --class org.tripatha.spark.SparkBuild` with the module's job jar, in two recorded phases, `write` and `import`:
+
+```mermaid
+flowchart LR
+    plan["driver: sample, split points,<br/>file boundaries"] --> cells["tasks: statements → the DAO's cells<br/>(empty store, nothing connects)"]
+    cells --> shuffle["shuffle: one partition per file,<br/>sorted in Accumulo's key order"]
+    shuffle --> rfiles["tasks: one RFile each,<br/>on Accumulo's volume (S3, HDFS)"]
+    rfiles --> import["driver: import per table<br/>with load plans"]
+```
+
+- **The same cells as `load`:** each task writes through a `RyaStoreDAO` over a `CapturingStore` of an `EmptyStore` holding the real store's tables. Counters are added up in the tasks and, after the sort, by each file's writer. Totals of 1 are left out by `BulkBuild.leftOut`, and only where the totals are the store's.
+- **Files:** each table's tablets, cut further at sampled rows into files of about `--file-size` (at most 50 per tablet). The entity index's shard rows are spread by column hash. The RFiles must be on one of Accumulo's volumes, since Accumulo imports only from those.
+- **Once each:** one timestamp per job, files named after their table and range, no speculation. Once an import starts, the files are never written again; a file that is gone was imported, and a directory that still holds Accumulo's `loadmap.json` is not imported again.
+- **Files as input:** read by line in parallel; each blank node label is prefixed with its file's id, so every split of a file agrees on it; bad lines are counted and left out up to a limit; `--distinct` drops repeats; `--visibility` labels the job's statements.
+- **`smoke`** checks a cluster before a build: executors write an RFile each under the work directory, and the driver imports and reads them back.
+
 ## 19. Test infrastructure
 
 - **Naming:** `*Test` classes are pure unit tests (surefire, `mvn test`). `*IT` classes need a cluster (failsafe, `mvn verify`).
@@ -2043,6 +2061,7 @@ A nested-loop join asks the store once per row; on a cluster each ask is a netwo
 | Splits sized for 1T (O2) | `prepare` plans each table's splits from its estimated size on disk (10 GB per tablet or region), and makes that the backend's split size; HBase splits in rounds; the progress file stays a few bytes | about 2,100 tablets per statement table at 1T | SCALE-STUDY.md 4.16 |
 | Index rebuilds as a batch job (O5) | The loader's `rebuild`: `spo` sorted by range into the indexes' files, imported; deletes made meanwhile recorded and replayed, graph drops held | Accumulo test cluster 3M: 16.6 → 5.8 s; RocksDB 10M: 18.5 → 9.3 s; the start-up rebuild's single thread (64 days at 10^12 at its 3M rate) becomes a job that scales with its machines | [18.5](#185-rebuild), SCALE-STUDY.md 4.23 |
 | The bulk build (O3, O10) | Sorted files per table and range, merged, then imported: RFiles on Accumulo, SST files on RocksDB, HFiles with label ordinals on HBase. Counter totals of 1 left out (89.5 % of them) | 0.56 counter cells stored per triple; at 10M 13 times faster than `load` on the Accumulo test cluster, with an `eval` 90 % smaller; 1.5 times on RocksDB; on HBase 31 against 45 s at 3M | [18](#18-the-synthetic-data-loader), SCALE-STUDY.md 4.18–4.20 |
+| The bulk build as a Spark job (O28) | Accumulo: the DAO's cells made in Spark's tasks, sorted by its shuffle into one RFile per tablet range, written to Accumulo's own volume (S3 or HDFS) and imported; from the generator or from N-Triples and N-Quads files | 10M on one machine: 63.5 s against `build`'s 50.8 s; WatDiv's 10.95M triples from N-Triples in 52.3 s; on a cluster, every executor sorts and writes | [18.6](#186-the-spark-build), SCALE-STUDY.md 4.28 |
 
 ### 20.6 10^12 triples: reading in the servers
 

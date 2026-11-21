@@ -41,7 +41,7 @@ public final class StoreCheck {
     public static final class Mismatch extends IllegalStateException {
         private static final long serialVersionUID = 1L;
 
-        Mismatch(final String message) {
+        public Mismatch(final String message) {
             super(message);
         }
     }
@@ -80,6 +80,23 @@ public final class StoreCheck {
         if (!store.tables().exists(tables.getSpo())) {
             throw new Mismatch("store " + o.tablePrefix() + " does not exist: run prepare first");
         }
+        indexes(store, o);
+        final String stored = storedFingerprint(store, conf, o.genConfig());
+        if (stored == null) {
+            throw new Mismatch("store " + o.tablePrefix() + " was not prepared by the loader: run prepare first");
+        }
+        if (!stored.equals(o.genConfig().fingerprint())) {
+            throw new Mismatch("store " + o.tablePrefix() + " holds a different dataset: use exactly the dataset options "
+                    + "prepare printed (seed, size, graphs, labels, …)");
+        }
+    }
+
+    /**
+     * A store's indexes are the ones asked for, READY, with the same definitions: writing to it
+     * with other index settings would leave an index short of postings, or redefine it.
+     */
+    public static void indexes(final Store store, final LoaderOptions o) throws Exception {
+        final TableLayoutStrategy tables = o.rdfConf().getTableLayoutStrategy();
         for (final IndexType type : IndexType.values()) {
             final boolean wanted = wanted(type, o);
             final boolean present = store.tables().exists(type.table(tables));
@@ -105,14 +122,6 @@ public final class StoreCheck {
                 throw new Mismatch("the " + type.id() + " index of " + o.tablePrefix() + " was built with other settings ("
                         + state.definition() + "); use the same --text-predicates and --entity-shards as prepare");
             }
-        }
-        final String stored = storedFingerprint(store, conf, o.genConfig());
-        if (stored == null) {
-            throw new Mismatch("store " + o.tablePrefix() + " was not prepared by the loader: run prepare first");
-        }
-        if (!stored.equals(o.genConfig().fingerprint())) {
-            throw new Mismatch("store " + o.tablePrefix() + " holds a different dataset: use exactly the dataset options "
-                    + "prepare printed (seed, size, graphs, labels, …)");
         }
     }
 

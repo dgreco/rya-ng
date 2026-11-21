@@ -82,6 +82,27 @@
                 </configuration>
             </plugin>
             <plugin>
+                <!--
+                  The loader's own classes as a second jar (classifier "lib"): the main jar is
+                  repackaged below into an executable one, which another module (tripatha.spark)
+                  can't depend on.
+                -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>lib-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <classifier>lib</classifier>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>

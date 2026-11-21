@@ -101,6 +101,7 @@ jobs:
           path: |
             tripatha.sparql/target/tripatha.sparql-*.jar
             tripatha.loader/target/tripatha.loader-*.jar
+            tripatha.spark/target/tripatha.spark-*-job.jar
           retention-days: 7
 
       - name: Assemble the Pages site
