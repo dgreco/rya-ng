@@ -122,6 +122,48 @@ public class TextPlanningIT extends IndexITBase {
         assertTrue(streamed.stream().anyMatch(r -> r.contains("the word 'common'")), streamed.toString());
     }
 
+    /**
+     * Accumulo grants each table on its own: an endpoint account given every table but the counts
+     * (as before them) still searches, and plans as without them.
+     */
+    @Test
+    public void anAccountThatMayNotReadTheCountsPlansWithoutThem() throws Exception {
+        assumeBackend("accumulo");
+        final String user = "reader" + getTablePrefix().replace("_", "");
+        final String password = "text-planning-it";
+        try (org.apache.accumulo.core.client.AccumuloClient root = org.tripatha.test.accumulo.AccumuloTestBackend.newClient()) {
+            root.securityOperations().createLocalUser(user, new org.apache.accumulo.core.client.security.tokens.PasswordToken(password));
+            try {
+                final StoreRdfConfiguration conf = indexedConf();
+                for (final String table : root.tableOperations().list()) {
+                    if (table.startsWith(getTablePrefix()) && !table.equals(conf.getTableLayoutStrategy().getTextCount())) {
+                        root.securityOperations().grantTablePermission(user, table,
+                                org.apache.accumulo.core.security.TablePermission.READ);
+                    }
+                }
+                final java.util.Properties settings = new java.util.Properties();
+                final var cluster = org.tripatha.test.accumulo.MiniAccumuloSingleton.getCluster();
+                settings.setProperty(org.tripatha.accumulo.AccumuloStoreProvider.INSTANCE, cluster.getInstanceName());
+                settings.setProperty(org.tripatha.accumulo.AccumuloStoreProvider.ZOOKEEPERS, cluster.getZooKeepers());
+                settings.setProperty(org.tripatha.accumulo.AccumuloStoreProvider.USER, user);
+                settings.setProperty(org.tripatha.accumulo.AccumuloStoreProvider.PASSWORD, password);
+                try (org.tripatha.store.spi.Store restricted = org.tripatha.store.spi.Stores.open("accumulo", settings)) {
+                    final SailRepository repo = org.tripatha.rdftriplestore.RyaSailFactory.createRepository(restricted, conf);
+                    repo.init();
+                    try {
+                        final List<String> streamed = new ArrayList<>();
+                        assertEquals(RARE, traced(repo, streamed).size());
+                        assertTrue(streamed.stream().anyMatch(r -> r.contains("the word 'common'")), streamed.toString());
+                    } finally {
+                        repo.shutDown();
+                    }
+                }
+            } finally {
+                root.securityOperations().dropLocalUser(user);
+            }
+        }
+    }
+
     /** The rows of the query, and the reasons of the scans that streamed a word. */
     private static Map<Map<String, Value>, Integer> traced(final SailRepository repo, final List<String> streamed) {
         final List<String> reasons = Collections.synchronizedList(new ArrayList<>());

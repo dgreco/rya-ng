@@ -34,6 +34,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.common.iteration.LookAheadIteration;
 
+import org.slf4j.LoggerFactory;
+
 import org.tripatha.store.trace.StoreTrace;
 import org.tripatha.store.StoreRdfConfiguration;
 import org.tripatha.store.RyaStoreDAO;
@@ -372,6 +374,11 @@ public final class IndexSearcher {
                         try (StoreTrace.Reason why = StoreTrace.reason(() -> "text index: count " + label + " (its counter)")) {
                             // At least past the probe: counts drift, and a stale low one must not beat a small operand.
                             counted = Math.max(PROBE_LIMIT + 1, TextCounts.count(store, counts, word, predicate, auths));
+                        } catch (final RuntimeException e) {
+                            // A planning hint must not fail the query: an account that may not read the counts
+                            // (an Accumulo grant per table) plans as without them.
+                            LoggerFactory.getLogger(IndexSearcher.class).debug("Could not read the counts of {}", label, e);
+                            counted = Double.POSITIVE_INFINITY;
                         }
                     }
                 }

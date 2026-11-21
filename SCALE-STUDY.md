@@ -1275,13 +1275,15 @@ The exact count grows with the class, the counter read doesn't: at 10^12 the gap
 - **Keys:** one counter per word, predicate and label (row = word `00` predicate, family `n`), +1 for every posting written and −1 for every one deleted.
 - **Writes:** writers sum them per write call (`IndexManager.flushCounts`), and the bulk build and the rebuild job (O5) sum them in their files.
 - **Kept apart from the postings:** O5's replay re-applies postings, and counts with them would count twice.
-- **Drift,** as every counter's: a statement added twice counts twice, and a graph drop doesn't adjust them (dropping everything clears them). The planner tolerates it.
+- **Drift,** as every counter's: a statement added twice counts twice, and a graph drop doesn't adjust them (dropping everything clears them). A delete made while a rebuild's sort runs, before the sort reaches its range, leaves its word one low: the job cleared the counts, and its sort never counts the deleted statement. The planner tolerates both.
+- **No storage-version bump** (AGENTS.md's VERSION rule, decided 2026-11-21): older code writing to a store with counts leaves them low, but they only steer plans, and the floor at the probe's limit bounds the harm.
+- **Accounts:** readers and writers need the new table like the others; Accumulo grants each table. A reader that may not read it still searches, and plans as without the counts.
 - **Where counters can't be imported** (HBase's increment mode), the rebuild job builds the text index without them.
 
 **Complete or not.** The counts are read only when the `ns` record (`tripatha`, `index`, `text.counts`) holds the text index's current definition:
 - **Written** with a store created with the index, or by a rebuild that counted.
 - **Dropped** when the index is redefined or a rebuild starts.
-- **A store from before the counts**, or one rebuilt where counters can't be imported, plans as before.
+- **A store from before the counts**, or one rebuilt where counters can't be imported, plans as before. It gets them by rebuilding the text index: delete `<prefix>text`, start the writers with the index on, and run the loader's `rebuild --text-index`.
 
 **The planner** (`IndexSearcher`) still probes first:
 - **At most 1,000 entries:** the word is small and kept in memory, as before.

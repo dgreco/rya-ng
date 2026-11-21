@@ -429,6 +429,7 @@ All tables are named `<prefix><suffix>`. The default prefix is `tripatha_`.
 | `graphs` | graph IRI | `g` | empty | statement's label | empty | named-graph markers |
 | `ns` | a prefix, or `tripatha` | `namespace`, `version`, `datatypes` or `index` | empty, or the index id | none | namespace IRI, `1.1.0`, `1`, or index state | namespaces, storage version, whether the datatype markers are complete, index state |
 | `text` | word `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | full-text index (optional, [section 15](#15-text-and-geo-search)) |
+| `textcount` | word `00` predicate | `n` | empty | statement's label | a count, summed server side | the text index's posting counts, which plan an `AND` ([section 15.4](#154-text-queries-and-their-candidates)) |
 | `geo` | geohash cell `00` predicate `00` subject `00` object hash | graph IRI | qualifier | statement's label | empty | geospatial index (optional) |
 | `entity` | shard: `murmur3(subject) mod shards`, zero-padded decimal | the term: predicate `01` object (as `po` encodes it) | subject `01` graph `01` qualifier | statement's label | empty | entity index (optional, [section 13.7](#137-the-entity-index-stars-shard-by-shard)) |
 
@@ -1567,7 +1568,8 @@ alice AND (bob OR caro*) AND NOT "old draft"
 - **A word past the probe** is sized by its posting count (SCALE-STUDY.md O6), when the store's counts are complete; otherwise every large operand looks alike.
   - **The counts:** `<prefix>textcount` holds one counter per word, predicate and label, +1 per posting written and −1 per posting deleted, by every write path (writes, the bulk build, a rebuild).
   - **Complete:** they are, when the `ns` record `text.counts` holds the index's definition. A store created with the index has it; a redefinition drops it until a rebuild counts again.
-  - **Drift:** a re-inserted statement counts twice, and a graph drop doesn't adjust them, so they only order operands, never below the probe's limit. `query.textcounts=false` turns them off.
+  - **Drift:** a re-inserted statement counts twice, a graph drop doesn't adjust them, and a delete made while a rebuild's sort runs may leave one low. So they only order operands, never below the probe's limit. `query.textcounts=false` turns them off.
+  - **Read rights:** an account that may not read `textcount` (Accumulo grants each table) still searches, and plans as without the counts.
 - **AND:** the operand with the smallest estimate *drives*: its entries are streamed in chunks of 1000 (`VERIFY_CHUNK`), and each chunk is checked against the other operands. A check is an in-memory lookup if the operand is small, or one exact-key lookup per candidate in the index if not. A large prefix lets everything through, since the filter checks it anyway.
 - **OR:** the union of its operands, without repeats.
 - **Resolve:** candidates are resolved in chunks of 1000 (`RESOLVE_CHUNK`). One `batchQuery` on `spo` fetches each candidate's (subject, predicate) cells, and only the cells whose graph, qualifier and object hash match a candidate are kept.
