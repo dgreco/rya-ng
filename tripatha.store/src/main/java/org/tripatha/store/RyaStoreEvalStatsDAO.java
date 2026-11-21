@@ -29,6 +29,11 @@ import static org.tripatha.api.RdfCloudTripleStoreConstants.SUBJECTPRED_CF;
 import static org.tripatha.api.RdfCloudTripleStoreConstants.SUBJECT_CF;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,6 +46,7 @@ import org.eclipse.rdf4j.model.Value;
 import org.tripatha.api.resolver.RdfToRyaConversions;
 import org.tripatha.api.persist.RdfDAOException;
 import org.tripatha.api.persist.RdfEvalStatsDAO;
+import org.tripatha.store.spi.Cell;
 import org.tripatha.store.spi.CellScanner;
 import org.tripatha.store.spi.KeyRange;
 import org.tripatha.store.spi.ScanSpec;
@@ -159,13 +165,8 @@ public class RyaStoreEvalStatsDAO implements RdfEvalStatsDAO<StoreRdfConfigurati
         return getCardinality(conf, card, val, null);
     }
 
-    @Override
-    public double getCardinality(StoreRdfConfiguration conf, final CARDINALITY_OF card, final List<Value> val,
-            final Resource context) {
-        if (conf == null) {
-            conf = this.conf;
-        }
-        final String cf = switch (card) {
+    private static String family(final CARDINALITY_OF card) {
+        return switch (card) {
             case SUBJECT -> SUBJECT_CF;
             case PREDICATE -> PRED_CF;
             case OBJECT -> OBJ_CF;
@@ -173,16 +174,84 @@ public class RyaStoreEvalStatsDAO implements RdfEvalStatsDAO<StoreRdfConfigurati
             case PREDICATEOBJECT -> PREDOBJECT_CF;
             case SUBJECTOBJECT -> SUBJECTOBJECT_CF;
         };
-        final byte[] cq = context == null ? EMPTY : context.stringValue().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static String row(final List<Value> values) {
         final StringJoiner row = new StringJoiner(DELIM);
-        for (final Value v : val) {
+        for (final Value v : values) {
             // A triple term is counted under its encoded form, which is what the writer has.
             row.add(v.isTripleTerm() ? RdfToRyaConversions.convertValue(v).getData() : v.stringValue());
         }
+        return row.toString();
+    }
+
+    /**
+     * Every counter in one batch scan, where reading them one by one would be a round trip each
+     * (SCALE-STUDY.md M14: 0.4 to 0.65 ms a read on the Accumulo test cluster): one row per read,
+     * the reads' columns, and each cell added to the reads it is the counter of.
+     */
+    @Override
+    public Map<CounterRead, Double> getCardinalities(StoreRdfConfiguration conf, final Collection<CounterRead> reads) {
+        if (conf == null) {
+            conf = this.conf;
+        }
+        final Map<CounterRead, Double> out = new LinkedHashMap<>();
+        if (reads.isEmpty()) {
+            return out;
+        }
+        final Map<String, List<CounterRead>> byCell = new HashMap<>();
+        final Set<String> rows = new java.util.TreeSet<>();
+        final ScanSpec.Builder spec = ScanSpec.builder(conf.getStoreAuths()).threads(4);
+        final Set<String> columns = new HashSet<>();
+        for (final CounterRead r : reads) {
+            final String row = row(r.values());
+            final String cf = family(r.card());
+            final String cq = r.context() == null ? "" : r.context().stringValue();
+            rows.add(row);
+            byCell.computeIfAbsent(row + DELIM + cf + DELIM + cq, k -> new ArrayList<>()).add(r);
+            if (columns.add(cf + DELIM + cq)) {
+                spec.column(cf.getBytes(StandardCharsets.UTF_8), cq.getBytes(StandardCharsets.UTF_8));
+            }
+        }
+        final List<KeyRange> ranges = new ArrayList<>(rows.size());
+        for (final String row : rows) {
+            ranges.add(KeyRange.row(row.getBytes(StandardCharsets.UTF_8)));
+        }
+        final Map<String, long[]> totals = new HashMap<>();
+        final StoreTrace.Reason why = StoreTrace.reason(() -> "statistics: " + reads.size() + " counters read together for planning");
+        try (why; CellScanner scanner = store.batchScan(evalTable, ranges, spec.build())) {
+            while (scanner.hasNext()) {
+                final Cell c = scanner.next();
+                final String key = new String(c.row(), StandardCharsets.UTF_8) + DELIM + new String(c.family(), StandardCharsets.UTF_8)
+                        + DELIM + new String(c.qualifier(), StandardCharsets.UTF_8);
+                // One cell per visibility label; add up the ones this reader can see.
+                totals.computeIfAbsent(key, k -> new long[1])[0] += store.counterValue(c.value());
+            }
+        } catch (final Exception e) {
+            throw new RdfDAOException(e);
+        }
+        for (final Map.Entry<String, List<CounterRead>> e : byCell.entrySet()) {
+            final long[] total = totals.get(e.getKey());
+            for (final CounterRead r : e.getValue()) {
+                out.put(r, total == null ? -1 : (double) Math.max(total[0], 0));
+            }
+        }
+        return out;
+    }
+
+    @Override
+    public double getCardinality(StoreRdfConfiguration conf, final CARDINALITY_OF card, final List<Value> val,
+            final Resource context) {
+        if (conf == null) {
+            conf = this.conf;
+        }
+        final String cf = family(card);
+        final byte[] cq = context == null ? EMPTY : context.stringValue().getBytes(StandardCharsets.UTF_8);
+        final String row = row(val);
         final ScanSpec spec = ScanSpec.builder(conf.getStoreAuths()).column(cf.getBytes(StandardCharsets.UTF_8), cq).build();
-        final StoreTrace.Reason why = StoreTrace.reason(() -> "statistics: " + card + " count of " + row.toString().replace(DELIM, " · ")
+        final StoreTrace.Reason why = StoreTrace.reason(() -> "statistics: " + card + " count of " + row.replace(DELIM, " · ")
                 + (context == null ? "" : " in <" + context.stringValue() + ">"));
-        try (why; CellScanner scanner = store.scan(evalTable, KeyRange.row(row.toString().getBytes(StandardCharsets.UTF_8)), spec)) {
+        try (why; CellScanner scanner = store.scan(evalTable, KeyRange.row(row.getBytes(StandardCharsets.UTF_8)), spec)) {
             // One cell per visibility label; add up the ones this reader can see.
             long total = 0;
             boolean found = false;

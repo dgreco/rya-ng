@@ -143,6 +143,26 @@ public final class JoinBench {
             if (settings.loadOnly) {
                 return;
             }
+            if (settings.fixedCost) {
+                // M14: where each query's time goes before and around its scans, on this backend.
+                final StoreRdfConfiguration conf = dataset.rdfConf();
+                conf.setInfer(false);
+                settings.conf.forEach(conf::set);
+                final SailRepository repo = RyaSailFactory.createRepository(store, conf);
+                repo.init();
+                try {
+                    final Map<String, String> queries = new LinkedHashMap<>();
+                    for (final Query q : suite(new EntityGenerator(gen))) {
+                        if (settings.only.isEmpty() || settings.only.contains(q.name)) {
+                            queries.put(q.name, q.sparql);
+                        }
+                    }
+                    FixedCost.report(repo, queries, settings.warmup, settings.runs);
+                } finally {
+                    repo.shutDown();
+                }
+                return;
+            }
             final List<Query> suite = suite(new EntityGenerator(gen));
             final Map<Variant, SailRepository> repos = new LinkedHashMap<>();
             try {
@@ -887,7 +907,7 @@ public final class JoinBench {
 
     record Settings(String triples, int warmup, int runs, int timeoutSeconds, int loadThreads, boolean profile, Path out,
             Path baseline, List<String> only, Map<String, String> conf, List<Variant> variants, boolean entityIndex,
-            Path writeQueries, boolean loadOnly, boolean bulk) {
+            Path writeQueries, boolean loadOnly, boolean bulk, boolean fixedCost) {
         static final String USAGE = """
                 Usage: bench.sh [--backend rocksdb|accumulo|hbase] [options]
                   --triples 10M        dataset size (the loader's generator, both indexes on)
@@ -906,6 +926,8 @@ public final class JoinBench {
                   --write-queries DIR  write the suite's queries to DIR/NAME.rq and stop: no store, no runs
                   --load-only          load the store (or keep a loaded one) and stop: no runs
                   --bulk               build the store with the bulk build (sorted files, imported) instead of load
+                  --fixed-cost         instead of the suite's timings, where each query's time goes: open, parse, plan
+                                       (and its scans), run (M14; FixedCost), with --warmup and --runs
                 """;
 
         static Settings parse(final String[] args) {
@@ -918,6 +940,7 @@ public final class JoinBench {
             boolean entityIndex = false;
             boolean loadOnly = false;
             boolean bulk = false;
+            boolean fixedCost = false;
             Path out = Path.of("target", "bench");
             Path baseline = null;
             Path writeQueries = null;
@@ -940,6 +963,10 @@ public final class JoinBench {
                 }
                 if (a.equals("--bulk")) {
                     bulk = true;
+                    continue;
+                }
+                if (a.equals("--fixed-cost")) {
+                    fixedCost = true;
                     continue;
                 }
                 if (i + 1 >= args.length) {
@@ -971,7 +998,7 @@ public final class JoinBench {
                 variants.add(new Variant("default", Map.of()));
             }
             return new Settings(triples, warmup, runs, timeout, loadThreads, profile, out, baseline, only, conf, List.copyOf(variants),
-                    entityIndex, writeQueries, loadOnly, bulk);
+                    entityIndex, writeQueries, loadOnly, bulk, fixedCost);
         }
 
         private static Variant variant(final String v) {

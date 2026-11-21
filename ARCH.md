@@ -800,6 +800,8 @@ RDF4J's `QueryJoinOptimizer` uses these estimates to order joins, running the ch
 
 So the `knows` pattern runs first, and the `age` lookup runs once, with `?friend` bound.
 
+**Read together** (SCALE-STUDY.md O27, M14). Each estimate reads one counter, and on Accumulo or HBase a read is a round trip (0.4 to 0.65 ms on the Accumulo test cluster). So before the optimizers that estimate, `RdfCloudTripleStoreEvaluationStatistics.prefetch` works out every pattern's counter, through the method the estimates use, and reads them in one batch scan (`RyaStoreEvalStatsDAO.getCardinalities`). The estimates read that per-query map first. `query.stats.prefetch=false` reads them one by one.
+
 ### 11.3 Approximate by design
 
 The counters only influence join order, never results, so some drift is accepted:
@@ -1987,6 +1989,7 @@ A nested-loop join asks the store once per row; on a cluster each ask is a netwo
 | Entity prefetch | A chain of joins and OPTIONALs over one driver (an entity's attributes) fetched together, per window | one batch for the whole chain | [13.5](#135-entity-prefetch-a-chain-of-joins-at-once) |
 | More lookups in flight (O16) | A batch of disjoint lookups read on several threads (4 by default on RocksDB); the next window fetched while the current one is joined | WatDiv C3 −50 %, the complex queries 112.2 → 97.7 ms | SCALE-STUDY.md 4.14 |
 | Less work per looked-up row (O17) | A batch whose ranges can't overlap skips the cell check and the objects' re-encoding; rows decoded in one pass | WatDiv C3 −41 %, complex −24 %, all 100 −11 % | SCALE-STUDY.md 4.14 |
+| Planning's reads together (O27) | The counters every pattern's estimate needs, read in one batch scan before join ordering | the median plan −27 % on the Accumulo test cluster (1.69 → 1.23 ms), −26 % on HBase; on Accumulo, planning had been half a small query's time | [11.2](#112-how-a-patterns-cardinality-is-estimated), SCALE-STUDY.md 4.26 |
 | Counted patterns (O26) | A joined pattern whose object nothing else uses asks for a count per lookup, and repeats its row that many times: counted by the store without reading: RocksDB in its process, Accumulo in its tablet servers, HBase in its region servers | WatDiv C3-01 in-process −37 to −49 %; `star-unused` 23 % fewer cells to the client on Accumulo, 12 % on HBase | [13.8](#138-counted-patterns-a-matchs-number-not-its-statements) |
 | One range per subject (O21) | A subject's links read as one range | built, off by default: no gain on a warm cache | [13.4](#134-keeping-the-answers-identical) |
 

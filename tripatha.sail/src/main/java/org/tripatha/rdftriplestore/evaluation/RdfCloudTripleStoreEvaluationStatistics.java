@@ -24,12 +24,15 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.tripatha.api.RdfCloudTripleStoreConfiguration;
 import org.tripatha.api.persist.RdfEvalStatsDAO;
 import org.tripatha.api.persist.RdfEvalStatsDAO.CARDINALITY_OF;
+import org.tripatha.api.persist.RdfEvalStatsDAO.CounterRead;
 import org.tripatha.rdftriplestore.inference.DoNotExpandSP;
 import org.tripatha.rdftriplestore.evaluation.index.IndexedStatementPattern;
 import org.tripatha.rdftriplestore.utils.FixedStatementPattern;
@@ -49,6 +52,7 @@ import org.eclipse.rdf4j.query.algebra.TupleExpr;
 import org.eclipse.rdf4j.query.algebra.UnaryTupleOperator;
 import org.eclipse.rdf4j.query.algebra.Var;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.EvaluationStatistics;
+import org.eclipse.rdf4j.query.algebra.helpers.AbstractSimpleQueryModelVisitor;
 
 /**
  * Class RdfCloudTripleStoreEvaluationStatistics
@@ -62,6 +66,8 @@ public class RdfCloudTripleStoreEvaluationStatistics<C extends RdfCloudTripleSto
     protected boolean pushEmptyRdfTypeDown = true;
     protected boolean useCompositeCardinalities = true;
     private static final double TRIPLE_REF_CARDINALITY = 1_000_000_000d;
+    /** The counters this query has read, by read: filled by {@link #prefetch}, and read first by every estimate. */
+    private final Map<CounterRead, Double> counters = new HashMap<>();
 
     public RdfCloudTripleStoreEvaluationStatistics(final C conf, final RdfEvalStatsDAO<C> rdfEvalStatsDAO) {
         checkNotNull(conf);
@@ -89,6 +95,97 @@ public class RdfCloudTripleStoreEvaluationStatistics<C extends RdfCloudTripleSto
     @Override
     protected CardinalityCalculator createCardinalityCalculator() {
         return new RdfCloudTripleStoreCardinalityCalculator(this);
+    }
+
+    /**
+     * Reads, together, the counter every statement pattern of the query will be estimated by
+     * (SCALE-STUDY.md M14): one round trip, where the estimates would make one each (a counter
+     * read cost 0.4 to 0.65 ms on the Accumulo test cluster, and planning half of a small query's
+     * time). Run before the optimizers that estimate. A read it doesn't foresee is made when it
+     * is asked for; {@code query.stats.prefetch=false} turns this off.
+     */
+    public void prefetch(final TupleExpr expr) {
+        if (!conf.isStatsPrefetch()) {
+            return;
+        }
+        final Set<CounterRead> reads = new LinkedHashSet<>();
+        expr.visit(new AbstractSimpleQueryModelVisitor<RuntimeException>() {
+            @Override
+            public void meet(final StatementPattern sp) {
+                final CounterRead read = counterRead(sp);
+                if (read != null && !counters.containsKey(read)) {
+                    reads.add(read);
+                }
+            }
+        });
+        if (reads.size() >= 2) {
+            counters.putAll(rdfEvalStatsDAO.getCardinalities(conf, reads));
+        }
+    }
+
+    /** The counter a pattern's estimate reads, or null when it reads none (as {@code plainCardinality} decides). */
+    CounterRead counterRead(final StatementPattern sp) {
+        if (sp instanceof FixedStatementPattern) {
+            return null;
+        }
+        final Value s = value(sp.getSubjectVar());
+        final Value p = value(sp.getPredicateVar());
+        final Value c = value(sp.getContextVar());
+        if ((s != null && !(s instanceof Resource)) || (p != null && !(p instanceof IRI)) || (c != null && !(c instanceof Resource))) {
+            return null;
+        }
+        final Value o = value(sp.getObjectVar());
+        if (pushEmptyRdfTypeDown && RDF.TYPE.equals(p) && s == null && o == null) {
+            return null;
+        }
+        return counterRead((Resource) s, (IRI) p, o, (Resource) c);
+    }
+
+    private static Value value(final Var var) {
+        return var == null ? null : var.getValue();
+    }
+
+    /** The counter of a pattern with these constants: its subject's, else its predicate's, else its object's. */
+    CounterRead counterRead(final Resource subj, final IRI pred, final Value obj, final Resource context) {
+        final List<Value> values = new ArrayList<>(2);
+        final CARDINALITY_OF card;
+        if (subj != null) {
+            values.add(subj);
+            if (useCompositeCardinalities && pred != null) {
+                values.add(pred);
+                card = CARDINALITY_OF.SUBJECTPREDICATE;
+            } else if (useCompositeCardinalities && obj != null) {
+                values.add(obj);
+                card = CARDINALITY_OF.SUBJECTOBJECT;
+            } else {
+                card = CARDINALITY_OF.SUBJECT;
+            }
+        } else if (pred != null) {
+            values.add(pred);
+            if (useCompositeCardinalities && obj != null) {
+                values.add(obj);
+                card = CARDINALITY_OF.PREDICATEOBJECT;
+            } else {
+                card = CARDINALITY_OF.PREDICATE;
+            }
+        } else if (obj != null) {
+            values.add(obj);
+            card = CARDINALITY_OF.OBJECT;
+        } else {
+            return null;
+        }
+        return new CounterRead(card, List.copyOf(values), context);
+    }
+
+    /** A counter's value, -1 when it has none: read once per query. */
+    double cardinality(final CounterRead read) {
+        final Double known = counters.get(read);
+        if (known != null) {
+            return known;
+        }
+        final double value = rdfEvalStatsDAO.getCardinality(conf, read.card(), read.values(), read.context());
+        counters.put(read, value);
+        return value;
     }
 
     public RdfEvalStatsDAO<C> getRdfEvalStatsDAO() {
@@ -186,10 +283,8 @@ public class RdfCloudTripleStoreEvaluationStatistics<C extends RdfCloudTripleSto
                 if (statements != null) {
                     double fspCard = 0;
                     for (final Statement statement : statements) {
-                        final List<Value> values = new ArrayList<Value>();
-                        values.add(statement.getSubject());
                         // A missing counter (-1) counts as 1, as in the single-pattern estimates below.
-                        final double card = rdfEvalStatsDAO.getCardinality(conf, cardinality_of, values, context);
+                        final double card = statistics.cardinality(new CounterRead(cardinality_of, List.of(statement.getSubject()), context));
                         fspCard += card >= 0 ? card : 1;
                     }
                     return fspCard;
@@ -201,62 +296,13 @@ public class RdfCloudTripleStoreEvaluationStatistics<C extends RdfCloudTripleSto
              * the triple scan is being joined with something else that is better than
              * asking the full rdf:type of everything.
              */
-            double cardinality = Double.MAX_VALUE - 1;
-            try {
-                if (subj != null) {
-                    final List<Value> values = new ArrayList<Value>();
-                    CARDINALITY_OF card = RdfEvalStatsDAO.CARDINALITY_OF.SUBJECT;
-                    values.add(subj);
-                    if (useCompositeCardinalities){
-                           if (pred != null){
-                            values.add(pred);
-                            card = RdfEvalStatsDAO.CARDINALITY_OF.SUBJECTPREDICATE;
-                        }
-                           else if (obj != null){
-                            values.add(obj);
-                            card = RdfEvalStatsDAO.CARDINALITY_OF.SUBJECTOBJECT;
-                           }
-                    }
-                    double evalCard = evalCard = rdfEvalStatsDAO.getCardinality(conf, card, values, context);
-                    // the cardinality will be -1 if there was no value found (if the index does not exist)
-                    if (evalCard >= 0) {
-                        cardinality = Math.min(cardinality, evalCard);
-                    } else {
-                        cardinality = 1;
-                    }
-                }
-                else if (pred != null) {
-                    final List<Value> values = new ArrayList<Value>();
-                    CARDINALITY_OF card = RdfEvalStatsDAO.CARDINALITY_OF.PREDICATE;
-                    values.add(pred);
-                    if (useCompositeCardinalities){
-                           if (obj != null){
-                            values.add(obj);
-                            card = RdfEvalStatsDAO.CARDINALITY_OF.PREDICATEOBJECT;
-                           }
-                    }
-                    double evalCard = evalCard = rdfEvalStatsDAO.getCardinality(conf, card, values, context);
-                    if (evalCard >= 0) {
-                        cardinality = Math.min(cardinality, evalCard);
-                    } else {
-                        cardinality = 1;
-                    }
-                }
-                else if (obj != null) {
-                    final List<Value> values = new ArrayList<Value>();
-                    values.add(obj);
-                    final double evalCard = rdfEvalStatsDAO.getCardinality(conf, RdfEvalStatsDAO.CARDINALITY_OF.OBJECT, values, context);
-                    if (evalCard >= 0) {
-                        cardinality = Math.min(cardinality, evalCard);
-                    } else {
-                        cardinality = 1;
-                    }
-                }
-            } catch (final Exception e) {
-                throw new RuntimeException(e);
+            final CounterRead read = statistics.counterRead(subj, pred, obj, context);
+            if (read == null) {
+                return Double.MAX_VALUE - 1;
             }
-
-            return cardinality;
+            // -1: no counter (a counter of 1 may be left out), so 1.
+            final double evalCard = statistics.cardinality(read);
+            return evalCard >= 0 ? Math.min(Double.MAX_VALUE - 1, evalCard) : 1;
         }
 
         @Override

@@ -154,6 +154,11 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
      * complete (SCALE-STUDY.md O6; default true). Off, every large word looks alike, as before.
      */
     public static final String CONF_QUERY_TEXT_COUNTS = "query.textcounts";
+    /**
+     * Read the counters a query's join ordering needs together, before it starts (SCALE-STUDY.md
+     * M14; default true): one round trip instead of one per pattern.
+     */
+    public static final String CONF_QUERY_STATS_PREFETCH = "query.stats.prefetch";
     /** Let queries use the secondary indexes (they are still maintained when this is false). */
     public static final String CONF_USE_INDEX = "query.useindex";
     public static final String CONF_OFFSET = "query.offset";
@@ -370,6 +375,14 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setIndexStateRefresh(final long millis) {
         setLong(CONF_INDEX_STATE_REFRESH, millis);
+    }
+
+    public boolean isStatsPrefetch() {
+        return getBoolean(CONF_QUERY_STATS_PREFETCH, true);
+    }
+
+    public void setStatsPrefetch(final boolean prefetch) {
+        setBoolean(CONF_QUERY_STATS_PREFETCH, prefetch);
     }
 
     public boolean isTextCounts() {

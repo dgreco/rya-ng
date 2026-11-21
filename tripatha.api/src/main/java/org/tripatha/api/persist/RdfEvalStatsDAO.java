@@ -19,7 +19,10 @@ package org.tripatha.api.persist;
  * under the License.
  */
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.tripatha.api.RdfCloudTripleStoreConfiguration;
 import org.eclipse.rdf4j.model.Resource;
@@ -44,6 +47,23 @@ public interface RdfEvalStatsDAO<C extends RdfCloudTripleStoreConfiguration> {
     // XXX returns -1 if no cardinality could be found.
     public double getCardinality(C conf, CARDINALITY_OF card, List<Value> val) throws RdfDAOException;
     public double getCardinality(C conf, CARDINALITY_OF card, List<Value> val, Resource context) throws RdfDAOException;
+
+    /** One counter the planner reads: which one, its values, and its graph (null: all graphs). */
+    record CounterRead(CARDINALITY_OF card, List<Value> values, Resource context) {
+    }
+
+    /**
+     * Several counters at once (SCALE-STUDY.md M14): each read's {@link #getCardinality} value,
+     * -1 when it has none. This default reads them one by one; a store with a round trip per
+     * read reads them together.
+     */
+    default Map<CounterRead, Double> getCardinalities(final C conf, final Collection<CounterRead> reads) throws RdfDAOException {
+        final Map<CounterRead, Double> out = new LinkedHashMap<>();
+        for (final CounterRead r : reads) {
+            out.put(r, getCardinality(conf, r.card(), r.values(), r.context()));
+        }
+        return out;
+    }
 
     public void setConf(C conf);
 
