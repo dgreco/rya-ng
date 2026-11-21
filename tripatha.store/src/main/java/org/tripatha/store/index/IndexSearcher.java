@@ -59,6 +59,8 @@ import org.tripatha.store.spi.Store;
  * <p>
  * Text queries: an {@code AND} is driven by its smallest operand and the others are checked with
  * exact-key lookups; operand sizes are estimated by reading up to {@value #PROBE_LIMIT} entries.
+ * A word with more is sized by its posting count when the store's counts are complete
+ * ({@link TextCounts}, SCALE-STUDY.md O6), so the rarer of two common words drives.
  * Results are produced lazily, so {@code LIMIT} and {@code ASK} stop early.
  */
 public final class IndexSearcher {
@@ -329,18 +331,23 @@ public final class IndexSearcher {
             private final KeyRange range;
             private final boolean prefix;
             private final String label;
+            /** The word, or null for a prefix. */
+            private final String word;
             private Set<DocKey> entries;
             private boolean probed;
+            private double counted = Double.NaN;
 
             Leaf(final TextCandidates node) {
                 if (node instanceof TextCandidates.Word w) {
                     this.range = IndexKeys.termRange(w.word(), predicate);
                     this.label = "the word '" + w.word() + "'";
                     this.prefix = false;
+                    this.word = w.word();
                 } else {
                     this.range = IndexKeys.prefixRange(((TextCandidates.Start) node).prefix());
                     this.label = "words starting with '" + ((TextCandidates.Start) node).prefix() + "'";
                     this.prefix = true;
+                    this.word = null;
                 }
             }
 
@@ -349,8 +356,26 @@ public final class IndexSearcher {
                 return entries != null;
             }
 
+            /**
+             * The entries a probe found; past the probe's limit the word's posting count when the
+             * counts are complete, or else infinity (every large operand alike).
+             */
             double estimate() {
-                return isSmall() ? entries.size() : Double.POSITIVE_INFINITY;
+                if (isSmall()) {
+                    return entries.size();
+                }
+                if (Double.isNaN(counted)) {
+                    final String counts = word == null || !conf.isTextCounts() ? null : dao.getIndexCatalog().textCounts();
+                    if (counts == null) {
+                        counted = Double.POSITIVE_INFINITY;
+                    } else {
+                        try (StoreTrace.Reason why = StoreTrace.reason(() -> "text index: count " + label + " (its counter)")) {
+                            // At least past the probe: counts drift, and a stale low one must not beat a small operand.
+                            counted = Math.max(PROBE_LIMIT + 1, TextCounts.count(store, counts, word, predicate, auths));
+                        }
+                    }
+                }
+                return counted;
             }
 
             Iterator<DocKey> stream() {

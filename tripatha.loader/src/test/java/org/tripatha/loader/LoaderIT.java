@@ -543,6 +543,7 @@ class LoaderIT extends StoreITBase {
             assertSame(table, cells(loaded + table, true), cells(getTablePrefix() + table, true));
         }
         assertSame("graphs", cells(loaded + "graphs", false), cells(getTablePrefix() + "graphs", false));
+        assertEquals(counters(loaded + "textcount"), counters(getTablePrefix() + "textcount"), "the text index's counts");
     }
 
     /** A crash between a spill and its record: the resume deletes that spill and writes its blocks once. */
@@ -625,6 +626,12 @@ class LoaderIT extends StoreITBase {
             assertTrue(report.isClean(), type + ": " + report);
         }
         assertEquals(null, IndexManager.readJob(getStore(), conf.getTableLayoutStrategy()), "the job's record is gone");
+        final IndexVerifier.Report counts = IndexVerifier.verifyTextCounts(getStore(), conf);
+        if (countsImportable()) {
+            assertTrue(counts != null && counts.missing().isEmpty(), "the text counts, complete and never below the postings: " + counts);
+        } else {
+            assertEquals(null, counts, "rebuilt without counts where counters can't be imported");
+        }
         assertTrue(RebuildLog.read(getStore(), conf.getTableLayoutStrategy(), Auths.ALL_HELD).isEmpty(), "the recorded deletes are gone");
     }
 
@@ -663,6 +670,28 @@ class LoaderIT extends StoreITBase {
         for (final String table : List.of("text", "geo", "entity")) {
             assertSame(table, cells(loaded + table, true), cells(getTablePrefix() + table, true));
         }
+        if (countsImportable()) {
+            assertEquals(counters(loaded + "textcount"), counters(getTablePrefix() + "textcount"), "the text index's counts");
+            assertTrue(IndexVerifier.verifyTextCounts(getStore(), options().rdfConf()).isClean(), "counts equal to the postings");
+        }
+    }
+
+    /** Whether this store imports counter files into the text counts (HBase's increment mode doesn't). */
+    private boolean countsImportable() {
+        return getStore().bulk().map(b -> b.refusesCounters(getTablePrefix() + "textcount").isEmpty()).orElse(false);
+    }
+
+    /** A counter table's totals, cell by cell, under the dataset's labels. */
+    private Map<String, Long> counters(final String table) {
+        final Map<String, Long> out = new java.util.TreeMap<>();
+        try (CellScanner cells = getStore().scan(table, KeyRange.all(), ScanSpec.of(Auths.of(AUTHS)))) {
+            while (cells.hasNext()) {
+                final Cell c = cells.next();
+                out.merge(cell(c.row(), c.family(), c.qualifier(), c.visibility()), getStore().counterValue(c.value()), Long::sum);
+            }
+        }
+        out.values().removeIf(n -> n == 0);
+        return out;
     }
 
     /**

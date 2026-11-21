@@ -41,5 +41,10 @@ public interface TableLayoutStrategy {
     public String getGeo();
     /** The entity index table (SCALE-STUDY.md O23). */
     public String getEntity();
-    
+
+    /** The text index's posting counts, a counter table (SCALE-STUDY.md O6). */
+    public default String getTextCount() {
+        return getText() + "count";
+    }
+
 }

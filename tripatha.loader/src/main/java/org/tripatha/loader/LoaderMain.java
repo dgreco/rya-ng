@@ -35,7 +35,7 @@ import org.tripatha.store.spi.Store;
  */
 public final class LoaderMain {
     /** Every table suffix a store uses (see TablePrefixLayoutStrategy). */
-    static final List<String> SUFFIXES = List.of("spo", "po", "osp", "ns", "eval", "graphs", "text", "geo", "entity");
+    static final List<String> SUFFIXES = List.of("spo", "po", "osp", "ns", "eval", "graphs", "text", "geo", "entity", "textcount");
 
     private LoaderMain() {
     }

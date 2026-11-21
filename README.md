@@ -577,7 +577,7 @@ SELECT ?place WHERE {
 
 Without an index, these filters still work: they check every candidate, so they are slow on large data.
 
-`tripatha.text-index` and `tripatha.geo-index` add an index table each (`<prefix>text`, `<prefix>geo`).
+`tripatha.text-index` and `tripatha.geo-index` add an index table each (`<prefix>text`, `<prefix>geo`). The text index also keeps each word's number of postings (`<prefix>textcount`, a few MB), so a search for a common word and a rare one is driven by the rare one.
 
 **What the index can speed up:**
 - **Text:** queries with at least one word that every match must contain. `NOT x`, or prefixes under 3 characters, fall back to scanning.

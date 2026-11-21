@@ -1564,6 +1564,10 @@ alice AND (bob OR caro*) AND NOT "old draft"
 
 `IndexSearcher` evaluates the candidate expression lazily:
 - **Word or prefix:** a range over its rows, restricted to the predicate and graphs when known. Reading at most 1000 entries (`PROBE_LIMIT`) tells whether it is *small*. Small ones are kept in memory.
+- **A word past the probe** is sized by its posting count (SCALE-STUDY.md O6), when the store's counts are complete; otherwise every large operand looks alike.
+  - **The counts:** `<prefix>textcount` holds one counter per word, predicate and label, +1 per posting written and −1 per posting deleted, by every write path (writes, the bulk build, a rebuild).
+  - **Complete:** they are, when the `ns` record `text.counts` holds the index's definition. A store created with the index has it; a redefinition drops it until a rebuild counts again.
+  - **Drift:** a re-inserted statement counts twice, and a graph drop doesn't adjust them, so they only order operands, never below the probe's limit. `query.textcounts=false` turns them off.
 - **AND:** the operand with the smallest estimate *drives*: its entries are streamed in chunks of 1000 (`VERIFY_CHUNK`), and each chunk is checked against the other operands. A check is an in-memory lookup if the operand is small, or one exact-key lookup per candidate in the index if not. A large prefix lets everything through, since the filter checks it anyway.
 - **OR:** the union of its operands, without repeats.
 - **Resolve:** candidates are resolved in chunks of 1000 (`RESOLVE_CHUNK`). One `batchQuery` on `spo` fetches each candidate's (subject, predicate) cells, and only the cells whose graph, qualifier and object hash match a candidate are kept.
@@ -1994,6 +1998,7 @@ A nested-loop join asks the store once per row; on a cluster each ask is a netwo
 | `STRSTARTS` as a prefix range (O13) | The objects starting with the prefix are read, the filter kept | | [12.8](#128-strstarts-as-a-prefix-range) |
 | Comparisons as value ranges (O14, O25) | `?o > 60` reads only the matching values, one range per stored type, with a real estimate for the join order | range queries 5 to 36 times faster on Accumulo, `class-value` 26 times | [12.9](#129-comparisons-as-value-ranges) |
 | Text and geo indexes | Search filters read candidates from an index; the filter stays exact | | [15](#15-text-and-geo-search) |
+| Text planning from posting counts (O6) | A word past the 1,000-entry probe is sized by its counter, so an `AND`'s rarer word drives | the join benchmark's `text-and` 291.5 → 112.3 ms on RocksDB 10M, 270.6 → 212.5 ms on Accumulo 3M; the load +8 %, the counts 0.4 % of the store | [15.4](#154-text-queries-and-their-candidates), SCALE-STUDY.md 4.25 |
 | Approximate counts (O8) | `stats:approxSize`, `stats:approxInstances` and `stats:approxTriples`: graph, class and predicate sizes from the counters, one counter row each | a class's size: 0.4 ms and 1 cell against 12.4 ms and 53,432 cells counted (RocksDB 10M); constant at any size | [11.4](#114-graph-sizes-from-the-counters), [11.5](#115-class-and-predicate-sizes), SCALE-STUDY.md 4.24 |
 
 ### 20.3 Stars: merged, then intersected in the servers
@@ -2041,7 +2046,6 @@ At 10^12 what must not happen is a client reading billions of cells to keep a fe
 ### 20.7 Still open
 
 - **Graph drops** still scan every table (D8 (c): O4 closed); index rebuilds are a batch job (O5, 20.5), and `purge` stays as it is.
-- **Planning at scale:** text planning from per-term counts (O6).
 - **Layout:** deprecating the hashed row prefix (O9); a dictionary encoding (O11), conditional on M5.
 - **Analytics** over the whole store, which need an engine of their own (O12).
 - **Cluster defaults:** Accumulo and HBase read a batch on one thread and don't fetch ahead until both are measured on a cluster (M3, M4).

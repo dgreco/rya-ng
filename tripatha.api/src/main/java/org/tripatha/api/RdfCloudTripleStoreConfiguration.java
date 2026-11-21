@@ -149,6 +149,11 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
      * never), so readers use an index a rebuild job made ready without a restart.
      */
     public static final String CONF_INDEX_STATE_REFRESH = "index.state.refresh";
+    /**
+     * Let text search size a word past its probe by the text index's posting counts, when they are
+     * complete (SCALE-STUDY.md O6; default true). Off, every large word looks alike, as before.
+     */
+    public static final String CONF_QUERY_TEXT_COUNTS = "query.textcounts";
     /** Let queries use the secondary indexes (they are still maintained when this is false). */
     public static final String CONF_USE_INDEX = "query.useindex";
     public static final String CONF_OFFSET = "query.offset";
@@ -365,6 +370,14 @@ public abstract class RdfCloudTripleStoreConfiguration extends Configuration {
 
     public void setIndexStateRefresh(final long millis) {
         setLong(CONF_INDEX_STATE_REFRESH, millis);
+    }
+
+    public boolean isTextCounts() {
+        return getBoolean(CONF_QUERY_TEXT_COUNTS, true);
+    }
+
+    public void setTextCounts(final boolean use) {
+        setBoolean(CONF_QUERY_TEXT_COUNTS, use);
     }
 
     public boolean isUseIndex() {
