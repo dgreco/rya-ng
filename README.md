@@ -577,7 +577,7 @@ SELECT ?place WHERE {
 
 Without an index, these filters still work: they check every candidate, so they are slow on large data.
 
-`tripatha.text-index` and `tripatha.geo-index` add an index table each (`<prefix>text`, `<prefix>geo`).
+`tripatha.text-index` and `tripatha.geo-index` add an index table each (`<prefix>text`, `<prefix>geo`). The text index also keeps each word's number of postings (`<prefix>textcount`, a few MB), so a search for a common word and a rare one is driven by the rare one. On Accumulo, give the endpoint's and the writers' accounts that table like the others. A store whose text index is older than the counts plans as before until the index is rebuilt.
 
 **What the index can speed up:**
 - **Text:** queries with at least one word that every match must contain. `NOT x`, or prefixes under 3 characters, fall back to scanning.
@@ -598,7 +598,7 @@ Without an index, these filters still work: they check every candidate, so they 
   - **For a large store,** run the loader's `rebuild` with the endpoint's index options (`tripatha.loader/run.sh rebuild --table-prefix P --entity-index …`). It reads `spo` on parallel threads and processes, imports the index as sorted files, and resumes after a failure. The endpoint may keep writing meanwhile with the index on: deletes are recorded and replayed, graph drops are refused until the job is done, and queries start using the index on their own within a minute of it.
   - **For a small one,** start once with `tripatha.rebuild-indexes=true`.
   - **Either way** the build reads every statement with the account's labels, so it must hold every visibility label in the store.
-- **Turning an index off:** delete its table, or the store refuses to start. An index that stopped receiving writes would silently miss data.
+- **Turning an index off:** delete its table (for the text index, `<prefix>textcount` too), or the store refuses to start. An index that stopped receiving writes would silently miss data.
 - **Changing the indexed predicates:** this also needs a rebuild.
 
 ## Loading synthetic data

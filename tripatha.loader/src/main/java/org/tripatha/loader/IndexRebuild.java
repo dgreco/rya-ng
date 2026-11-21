@@ -56,6 +56,8 @@ import org.tripatha.store.index.IndexManager;
 import org.tripatha.store.index.IndexType;
 import org.tripatha.store.index.RebuildLog;
 import org.tripatha.store.index.SecondaryIndex;
+import org.tripatha.store.index.TextCounts;
+import org.tripatha.store.index.TextIndex;
 import org.tripatha.store.spi.Auths;
 import org.tripatha.store.spi.BulkImport;
 import org.tripatha.store.spi.Cell;
@@ -158,7 +160,7 @@ public final class IndexRebuild {
             if (building.isEmpty()) {
                 if (id.equals(IndexManager.readJob(store, tables))) {
                     // A finish that stopped after making the indexes READY: end it.
-                    indexes.finishRebuild(id, Set.of());
+                    indexes.finishRebuild(id, Set.of(), false);
                     out.println("Rebuild job " + id + " is done.");
                 } else {
                     out.println("Nothing to rebuild: every enabled index of " + o.tablePrefix() + " is READY.");
@@ -178,15 +180,26 @@ public final class IndexRebuild {
             out.println("Until it finishes, writers must run with these index settings; they record their deletes, "
                     + "and graph drops are refused.");
             final long time = Long.parseLong(job.getProperty("time"));
-            if (phases.contains(Phase.SORT) && !sort(conf, building, time)) {
+            // The text index's posting counts (O6), unless the store can't import counters (HBase's increment mode):
+            // then the planner keeps probing, as for a store from before the counts.
+            final String counts = tables.getTextCount();
+            final boolean counting = building.containsKey(IndexType.TEXT) && bulk.refusesCounters(counts).isEmpty();
+            if (building.containsKey(IndexType.TEXT) && !counting) {
+                out.println("The text index's counts can't be imported here (" + bulk.refusesCounters(counts).get()
+                        + "): it is rebuilt without them, and text search sizes its words by probing.");
+            }
+            if (phases.contains(Phase.SORT) && !sort(conf, building, counting ? (TextIndex) building.get(IndexType.TEXT) : null, time)) {
                 return false;
             }
-            final List<String> indexTables = building.keySet().stream().map(t -> t.table(tables)).toList();
+            final List<String> indexTables = new ArrayList<>(building.keySet().stream().map(t -> t.table(tables)).toList());
+            if (counting) {
+                indexTables.add(counts);
+            }
             final BulkFiles files = new BulkFiles(store, spills, work, o.part(), o.parts(), o.threads(), out);
             if (phases.contains(Phase.MERGE)) {
                 final Map<String, List<String>> runs = sortedRuns();
                 split(building, job, jobFile);
-                files.merge(bulk, runs, indexTables, t -> false, (family, total) -> false, time);
+                files.merge(bulk, runs, indexTables, counts::equals, (family, total) -> total == 0, time);
             }
             if (phases.contains(Phase.IMPORT)) {
                 files.importFiles(bulk, indexTables);
@@ -196,7 +209,7 @@ public final class IndexRebuild {
                     out.println("Run --phase finish once, when every part has imported.");
                     return true;
                 }
-                finish(conf, indexes, building, id);
+                finish(conf, indexes, building, id, counting);
                 out.println("The work directory " + work.toAbsolutePath() + " can be deleted.");
             }
             return true;
@@ -241,8 +254,9 @@ public final class IndexRebuild {
     private final Map<Integer, Map<String, List<String>>> runs = new TreeMap<>();
     private final AtomicLong sortedStatements = new AtomicLong();
 
-    private boolean sort(final StoreRdfConfiguration conf, final Map<IndexType, SecondaryIndex> building, final long time)
-            throws Exception {
+    /** @param counted the text index, when the job counts its postings; null otherwise */
+    private boolean sort(final StoreRdfConfiguration conf, final Map<IndexType, SecondaryIndex> building, final TextIndex counted,
+            final long time) throws Exception {
         final List<byte[]> splits = plan();
         final List<Integer> mine = new ArrayList<>();
         for (int i = 0; i <= splits.size(); i++) {
@@ -250,7 +264,8 @@ public final class IndexRebuild {
                 mine.add(i);
             }
         }
-        final String fingerprint = "rebuild|" + o.tablePrefix() + "|" + splits.size() + "|" + describe(building);
+        final String fingerprint = "rebuild|" + o.tablePrefix() + "|" + splits.size() + "|" + describe(building)
+                + (counted != null ? "|counts" : "");
         final Path progressFile = work.resolve("sort-" + partTag() + ".progress");
         final Progress progress = Progress.open(progressFile, fingerprint, mine.size(),
                 o.resume() || Files.exists(progressFile) && complete(progressFile, fingerprint, mine.size()));
@@ -283,7 +298,7 @@ public final class IndexRebuild {
             final int worker = i;
             final Thread th = new Thread(() -> {
                 try {
-                    sortWorker(worker, conf, building, splits, mine, cursor, progress, memory, time, failure);
+                    sortWorker(worker, conf, building, counted, splits, mine, cursor, progress, memory, time, failure);
                 } catch (final Throwable t) {
                     failure.compareAndSet(null, t);
                 }
@@ -312,7 +327,7 @@ public final class IndexRebuild {
     }
 
     private void sortWorker(final int worker, final StoreRdfConfiguration conf, final Map<IndexType, SecondaryIndex> building,
-            final List<byte[]> splits, final List<Integer> mine, final AtomicLong cursor, final Progress progress, final long memory,
+            final TextIndex counted, final List<byte[]> splits, final List<Integer> mine, final AtomicLong cursor, final Progress progress, final long memory,
             final long time, final AtomicReference<Throwable> failure) throws Exception {
         final RyaTripleContext context = RyaTripleContext.getInstance(conf);
         final SpillBuffer buffer = new SpillBuffer(time);
@@ -342,6 +357,12 @@ public final class IndexRebuild {
                         for (final RowMutation m : e.getValue().puts(st)) {
                             buffer.accept(table, m);
                             sample.add(table, m);
+                        }
+                    }
+                    if (counted != null) {
+                        // Summed in the buffer, then by the merge: one cell per word, predicate and label.
+                        for (final RowMutation m : TextCounts.deltas(counted, st, 1)) {
+                            buffer.accept(tables.getTextCount(), m);
                         }
                     }
                     statements++;
@@ -383,7 +404,8 @@ public final class IndexRebuild {
             if (e.getValue().size() >= fanIn) {
                 final List<String> inputs = List.copyOf(e.getValue());
                 final String merged;
-                try (Spills.Reader cells = spills.read(inputs, null, null, false)) {
+                // The text counts are counters: their runs add up.
+                try (Spills.Reader cells = spills.read(inputs, null, null, e.getKey().equals(tables.getTextCount()))) {
                     merged = spills.write(e.getKey(), partTag() + "-t" + worker + "-m" + k + "-" + System.nanoTime(), cells);
                 }
                 replaced.addAll(inputs);
@@ -610,7 +632,7 @@ public final class IndexRebuild {
      * </ol>
      */
     private void finish(final StoreRdfConfiguration conf, final IndexManager indexes, final Map<IndexType, SecondaryIndex> building,
-            final String id) throws Exception {
+            final String id, final boolean counted) throws Exception {
         final long t0 = System.currentTimeMillis();
         final RyaTripleContext context = RyaTripleContext.getInstance(conf);
         final List<RebuildLog.Entry> first = RebuildLog.read(store, tables, Auths.ALL_HELD);
@@ -626,7 +648,7 @@ public final class IndexRebuild {
             }
         }
         final long[] secondPass = replay(later, building, context, false);
-        final List<IndexType> ready = indexes.finishRebuild(id, building.keySet());
+        final List<IndexType> ready = indexes.finishRebuild(id, building.keySet(), counted);
         out.printf(Locale.ROOT, "Finish: %,d deletes recorded during the job, %,d replayed, %,d written again (%,d more in a second "
                 + "pass), in %s; %s READY.%n", first.size(), firstPass[0] + secondPass[0], firstPass[1], later.size(),
                 BulkFiles.duration(Math.max(1, System.currentTimeMillis() - t0)), ready);

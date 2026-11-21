@@ -413,6 +413,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                 }
                 indexes.add(stmt);
             }
+            indexes.flushCounts();
         } catch (final Exception e) {
             failure = e;
         }
@@ -521,6 +522,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                 }
                 indexes.delete(match);
             }
+            indexes.flushCounts();
         } catch (final RyaDAOException e) {
             throw e;
         } catch (final Exception e) {
@@ -591,6 +593,10 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
                         counters.family(utf8(family));
                     }
                     store.deleteVisible(tables.getEval(), List.of(KeyRange.all()), counters.build(), writerOptions);
+                    // So are the text index's posting counts (O6). A drop of some graphs leaves them, as the counters above.
+                    if (store.tables().exists(tables.getTextCount())) {
+                        store.deleteVisible(tables.getTextCount(), List.of(KeyRange.all()), plain, writerOptions);
+                    }
                 }
             }
         } catch (final RyaDAOException e) {
@@ -829,7 +835,7 @@ public class RyaStoreDAO implements RyaDAO<StoreRdfConfiguration>, RyaNamespaceM
     public List<String> getTables() {
         final TableLayoutStrategy t = tables != null ? tables : conf.getTableLayoutStrategy();
         return List.of(t.getSpo(), t.getPo(), t.getOsp(), t.getNs(), t.getEval(), t.getGraphs(), t.getText(), t.getGeo(),
-                t.getEntity());
+                t.getEntity(), t.getTextCount());
     }
 
     /** The secondary indexes, for queries. */

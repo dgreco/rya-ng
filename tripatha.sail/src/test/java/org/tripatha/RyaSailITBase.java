@@ -102,6 +102,11 @@ public abstract class RyaSailITBase extends StoreITBase {
                 assertTrue(report.isClean(), type + " index out of step: " + report);
             }
         }
+        // The text index's counts may be above its postings (a statement added twice), never below (O6).
+        final IndexVerifier.Report counts = IndexVerifier.verifyTextCounts(getStore(), conf);
+        if (counts != null) {
+            assertTrue(counts.missing().isEmpty(), "text counts below their postings: " + counts.missing());
+        }
     }
 
     /** @return an initialized DAO on this test's tables. */

@@ -56,4 +56,9 @@ public interface IndexCatalog {
     default EntityIndex entityIndex() {
         return null;
     }
+
+    /** The table of the text index's posting counts when they are complete (O6), so the planner may read them; null otherwise. */
+    default String textCounts() {
+        return null;
+    }
 }

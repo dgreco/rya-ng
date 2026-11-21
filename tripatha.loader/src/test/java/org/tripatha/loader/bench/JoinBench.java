@@ -191,7 +191,8 @@ public final class JoinBench {
         final TableLayoutStrategy t = conf.getTableLayoutStrategy();
         final List<String> parts = new ArrayList<>();
         long total = 0;
-        for (final String table : List.of(t.getSpo(), t.getPo(), t.getOsp(), t.getEval(), t.getText(), t.getGeo(), t.getEntity())) {
+        for (final String table : List.of(t.getSpo(), t.getPo(), t.getOsp(), t.getEval(), t.getText(), t.getGeo(), t.getEntity(),
+                t.getTextCount())) {
             final long bytes = store.tables().exists(table) ? store.tables().diskUsage(table) : -1;
             if (bytes >= 0) {
                 parts.add(String.format(Locale.ROOT, "%s %.0f MB", table.substring(PREFIX.length()), bytes / 1e6));
@@ -282,7 +283,7 @@ public final class JoinBench {
         out.printf(Locale.ROOT, "%s in %.0f s. Compacting…%n", settings.bulk ? "Built" : "Loaded", (System.nanoTime() - t0) / 1e9);
         final TableLayoutStrategy t = conf.getTableLayoutStrategy();
         for (final String table : List.of(t.getSpo(), t.getPo(), t.getOsp(), t.getEval(), t.getGraphs(), t.getNs(), t.getText(),
-                t.getGeo(), t.getEntity())) {
+                t.getGeo(), t.getEntity(), t.getTextCount())) {
             if (store.tables().exists(table)) {
                 backend.compact(table);
             }
@@ -365,6 +366,9 @@ public final class JoinBench {
                 "SELECT ?p ?s WHERE { ?p o:sku ?s FILTER(STRSTARTS(?s, \"" + c.skuPrefix + "\")) }"));
         q.add(new Query("text", "a text search (text index)",
                 "SELECT ?d ?l WHERE { ?d rdfs:label ?l FILTER(text:matches(?l, \"" + c.word + "\")) }"));
+        // O6: two words with more postings than a probe reads, the common one first; the counts let the rare one drive.
+        q.add(new Query("text-and", "an AND of a common and a rarer word, the common one first",
+                "SELECT ?d WHERE { ?d rdfs:comment ?c FILTER(text:matches(?c, \"" + c.commonWord + " " + c.rareWord + "\")) }"));
         q.add(new Query("geo", "points within a box (geo index)",
                 "SELECT ?g ?w WHERE { ?g geo:asWKT ?w FILTER(geof:sfWithin(?w, \"" + c.box + "\"^^geo:wktLiteral)) }"));
         q.add(new Query("count-class", "the size of a class, counted",
@@ -420,7 +424,8 @@ public final class JoinBench {
 
     /** Constants for the suite, from the first entities of the dataset. */
     private record Constants(String popularPerson, String popularEmployer, String popularManufacturer,
-            long populationThreshold, String windowStart, String windowEnd, String skuPrefix, String word, String box,
+            long populationThreshold, String windowStart, String windowEnd, String skuPrefix, String word, String commonWord,
+            String rareWord, String box,
             String topCountry, String topCategory, String topProperty, String topIndustry) {
 
         static Constants pick(final EntityGenerator generator, final long sample) {
@@ -437,6 +442,7 @@ public final class JoinBench {
             Instant time = null;
             String word = null;
             String point = null;
+            final Map<String, Integer> commentWords = new HashMap<>();
             for (long e = 0; e < Math.min(sample, c.entities()); e++) {
                 for (final RyaStatement st : generator.generate(e)) {
                     final String p = st.getPredicate().getData();
@@ -467,6 +473,11 @@ public final class JoinBench {
                     if (point == null && v.startsWith("POINT")) {
                         point = v;
                     }
+                    if (p.equals(org.eclipse.rdf4j.model.vocabulary.RDFS.COMMENT.stringValue())) {
+                        for (final String w : new java.util.HashSet<>(org.tripatha.store.index.text.TextAnalyzer.terms(v))) {
+                            commentWords.merge(w, 1, Integer::sum);
+                        }
+                    }
                 }
             }
             if (time == null || word == null || point == null || populations.isEmpty() || skus.isEmpty()) {
@@ -479,9 +490,31 @@ public final class JoinBench {
             final double lat = Double.parseDouble(lonLat[1]);
             final String box = String.format(Locale.ROOT, "POLYGON((%f %f, %f %f, %f %f, %f %f, %f %f))", lon - 1, lat - 1, lon + 1,
                     lat - 1, lon + 1, lat + 1, lon - 1, lat + 1, lon - 1, lat - 1);
+            // The most common comment word, and one about 20 times rarer that still has more postings than a probe reads
+            // and shares comments with it (a comment is in one language: words of two languages never meet).
+            final double scale = (double) c.entities() / Math.min(sample, c.entities());
+            final String commonWord = top(commentWords);
+            final int common = commentWords.get(commonWord);
+            final Map<String, Integer> together = new HashMap<>();
+            for (long e = 0; e < Math.min(sample, c.entities()); e++) {
+                for (final RyaStatement st : generator.generate(e)) {
+                    if (st.getPredicate().getData().equals(org.eclipse.rdf4j.model.vocabulary.RDFS.COMMENT.stringValue())) {
+                        final java.util.Set<String> words = new java.util.HashSet<>(
+                                org.tripatha.store.index.text.TextAnalyzer.terms(st.getObject().getData()));
+                        if (words.contains(commonWord)) {
+                            words.forEach(w -> together.merge(w, 1, Integer::sum));
+                        }
+                    }
+                }
+            }
+            final String rareWord = commentWords.entrySet().stream()
+                    .filter(e -> e.getKey().length() >= 4 && e.getValue() * scale > 2_000 && e.getValue() <= common / 20
+                            && together.getOrDefault(e.getKey(), 0) >= 20)
+                    .max(Map.Entry.<String, Integer>comparingByValue().thenComparing(Map.Entry.comparingByKey()))
+                    .map(Map.Entry::getKey).orElse(commonWord);
             return new Constants(top(knows), top(employers), top(manufacturers),
                     populations.get((int) (populations.size() * 0.99)), start.toString(), start.plus(Duration.ofHours(1)).toString(),
-                    skuPrefix(skus), word, box, top(countries), top(categories), top(properties), top(industries));
+                    skuPrefix(skus), word, commonWord, rareWord, box, top(countries), top(categories), top(properties), top(industries));
         }
 
         private static String top(final Map<String, Integer> counts) {

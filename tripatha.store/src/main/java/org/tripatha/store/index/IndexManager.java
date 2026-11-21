@@ -96,6 +96,16 @@ public final class IndexManager implements IndexCatalog {
     private final long refreshMillis;
     private final AtomicLong nextRefresh = new AtomicLong(Long.MAX_VALUE);
     private volatile boolean closed;
+    /** The text index, when it is enabled. */
+    private final TextIndex text;
+    /** The posting counts' table, when it exists: writes then keep the counts (O6). */
+    private volatile String countsTable;
+    /** Whether the counts are complete for the text index's definition, so the planner may read them. */
+    private volatile boolean countsComplete;
+    /** Count deltas of the current write call, summed per counter. */
+    private final Map<TextCounts.CounterCell, long[]> pendingCounts = new java.util.HashMap<>();
+    /** Pending counters past this are written before the call ends. */
+    private static final int MAX_PENDING_COUNTS = 50_000;
 
     /**
      * Opens the enabled indexes, creating their tables when needed.
@@ -110,6 +120,7 @@ public final class IndexManager implements IndexCatalog {
         this.writer = writer;
         this.bwNs = writer.table(tables.getNs());
         final TextIndex text = new TextIndex(conf.getTextIndexPredicates());
+        this.text = conf.isTextIndex() ? text : null;
         this.textPredicates = text.predicates();
         this.job = conf.getIndexRebuildJob();
         this.refreshMillis = conf.getIndexStateRefresh();
@@ -131,12 +142,23 @@ public final class IndexManager implements IndexCatalog {
                     throw new RyaDAOException("The " + type.id() + " index table " + table + " exists but "
                             + type.setting() + " is off. Turn the index back on, or delete the table to drop the index.");
                 }
+                if (type == IndexType.TEXT && ops.exists(tables.getTextCount())) {
+                    throw new RyaDAOException("The text index's counts " + tables.getTextCount() + " exist but " + type.setting()
+                            + " is off. Turn the index back on, or delete that table too.");
+                }
                 continue;
             }
             final IndexState stored = readState(store, tables, type);
             final IndexState state;
             if (!exists) {
                 ops.create(table, TableKind.INDEX);
+                if (type == IndexType.TEXT) {
+                    // The counts start with the index: complete when the index is created with the store.
+                    ops.create(tables.getTextCount(), TableKind.COUNTERS);
+                    if (storeCreated) {
+                        writeCountsFlag(index.definition());
+                    }
+                }
                 state = new IndexState(storeCreated ? IndexState.Status.READY : IndexState.Status.BUILDING, index.definition());
             } else if (stored == null) {
                 state = new IndexState(IndexState.Status.BUILDING, index.definition());
@@ -171,6 +193,9 @@ public final class IndexManager implements IndexCatalog {
         for (final SecondaryIndex index : toClear) {
             log.info("Clearing the {} index: its definition changed", index.type().id());
             ops.deleteRows(index.type().table(tables));
+            if (index.type() == IndexType.TEXT) {
+                clearCounts();
+            }
         }
         final List<SecondaryIndex> building = new ArrayList<>();
         for (final SecondaryIndex index : active.values()) {
@@ -179,8 +204,16 @@ public final class IndexManager implements IndexCatalog {
             }
         }
         if (job != null && !building.isEmpty() && running == null) {
+            if (active.containsKey(IndexType.TEXT) && states.get(IndexType.TEXT).status() == IndexState.Status.BUILDING) {
+                // The job counts every statement it reads: start from none.
+                clearCounts();
+            }
             bwNs.write(new RowMutation(RECORD_ROW).put(RECORD_CF, JOB_CQ, EMPTY, job.getBytes(StandardCharsets.UTF_8)));
             writer.flush();
+        }
+        if (active.containsKey(IndexType.TEXT)) {
+            countsTable = ops.exists(tables.getTextCount()) ? tables.getTextCount() : null;
+            countsComplete = countsTable != null && text.definition().equals(readRecord(store, tables).get(TextCounts.FLAG));
         }
         if (!building.isEmpty()) {
             if (job != null) {
@@ -234,6 +267,12 @@ public final class IndexManager implements IndexCatalog {
     /** Reads every index's state again; one that another process redefined stops being written. */
     void reread() throws Exception {
         final Map<String, String> record = readRecord(store, tables);
+        if (text != null) {
+            if (countsTable == null && store.tables().exists(tables.getTextCount())) {
+                countsTable = tables.getTextCount(); // a rebuild job created it
+            }
+            countsComplete = countsTable != null && text.definition().equals(record.get(TextCounts.FLAG));
+        }
         for (final Map.Entry<IndexType, SecondaryIndex> e : active.entrySet()) {
             final String raw = record.get(e.getKey().id());
             if (raw == null) {
@@ -305,6 +344,11 @@ public final class IndexManager implements IndexCatalog {
         return job == null || job.isEmpty() ? null : job;
     }
 
+    /** A record of the index row by its qualifier (the job, the text counts' completeness), or null. */
+    public static String readFlag(final Store store, final TableLayoutStrategy tables, final String qualifier) {
+        return readRecord(store, tables).get(qualifier);
+    }
+
     /** The record row's cells: each index's state by its id, and the job. */
     private static Map<String, String> readRecord(final Store store, final TableLayoutStrategy tables) {
         final Map<String, String> out = new java.util.HashMap<>();
@@ -327,9 +371,10 @@ public final class IndexManager implements IndexCatalog {
      * redefined since.
      *
      * @param built the indexes the job built
+     * @param counted whether the job counted the text index's postings (not where counters can't be imported)
      * @return the indexes made READY
      */
-    public List<IndexType> finishRebuild(final String id, final Set<IndexType> built) throws Exception {
+    public List<IndexType> finishRebuild(final String id, final Set<IndexType> built, final boolean counted) throws Exception {
         final String running = readJob(store, tables);
         if (!id.equals(running)) {
             throw new RyaDAOException("Rebuild job " + id + " isn't the running one (" + running + ")");
@@ -338,6 +383,10 @@ public final class IndexManager implements IndexCatalog {
         if (!redefined.isEmpty()) {
             throw new RyaDAOException("The " + redefined.stream().map(IndexType::id).toList()
                     + " index(es) were redefined during rebuild job " + id + ": run it again with the new settings");
+        }
+        if (counted && text != null && built.contains(IndexType.TEXT)) {
+            writeCountsFlag(text.definition());
+            countsComplete = true;
         }
         final List<IndexType> ready = new ArrayList<>();
         for (final Map.Entry<IndexType, SecondaryIndex> e : active.entrySet()) {
@@ -398,7 +447,7 @@ public final class IndexManager implements IndexCatalog {
         return active.get(IndexType.ENTITY) instanceof EntityIndex entity ? entity : null;
     }
 
-    /** Index entries for a statement being added. */
+    /** Index entries for a statement being added, and its words' counts (written by {@link #flushCounts}). */
     public void add(final RyaStatement statement) throws Exception {
         for (final SecondaryIndex index : active.values()) {
             final List<RowMutation> puts = index.puts(statement);
@@ -406,9 +455,10 @@ public final class IndexManager implements IndexCatalog {
                 writers.get(index.type()).write(puts);
             }
         }
+        count(statement, 1);
     }
 
-    /** Removes the index entries of a stored statement (as read back from spo). */
+    /** Removes the index entries of a stored statement (as read back from spo), and counts its words down. */
     public void delete(final RyaStatement stored) throws Exception {
         for (final SecondaryIndex index : active.values()) {
             final List<RowMutation> deletes = index.deletes(stored);
@@ -416,6 +466,56 @@ public final class IndexManager implements IndexCatalog {
                 writers.get(index.type()).write(deletes);
             }
         }
+        count(stored, -1);
+    }
+
+    private void count(final RyaStatement statement, final long delta) throws Exception {
+        if (text != null && countsTable != null) {
+            TextCounts.add(pendingCounts, text, statement, delta);
+            if (pendingCounts.size() >= MAX_PENDING_COUNTS) {
+                flushCounts();
+            }
+        }
+    }
+
+    /** Hands the counts of the current write call to the writer: one cell per word, predicate and label. */
+    public void flushCounts() throws Exception {
+        if (pendingCounts.isEmpty()) {
+            return;
+        }
+        final TableWriter counts = writer.table(countsTable);
+        for (final Map.Entry<TextCounts.CounterCell, long[]> e : pendingCounts.entrySet()) {
+            if (e.getValue()[0] != 0) {
+                counts.write(e.getKey().mutation(e.getValue()[0]));
+            }
+        }
+        pendingCounts.clear();
+    }
+
+    /** Empties the counts and drops their completeness record: a rebuild counts again. */
+    private void clearCounts() throws Exception {
+        final TableAdmin ops = store.tables();
+        if (ops.exists(tables.getTextCount())) {
+            ops.deleteRows(tables.getTextCount());
+        } else {
+            ops.create(tables.getTextCount(), TableKind.COUNTERS);
+        }
+        bwNs.write(new RowMutation(RECORD_ROW).delete(RECORD_CF, TextCounts.FLAG.getBytes(StandardCharsets.UTF_8), EMPTY));
+        writer.flush();
+        countsTable = tables.getTextCount();
+        countsComplete = false;
+    }
+
+    private void writeCountsFlag(final String definition) throws Exception {
+        bwNs.write(new RowMutation(RECORD_ROW).put(RECORD_CF, TextCounts.FLAG.getBytes(StandardCharsets.UTF_8), EMPTY,
+                definition.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    /** The table of the text index's posting counts, when they are complete; null otherwise. */
+    @Override
+    public String textCounts() {
+        refreshIfDue();
+        return countsComplete ? countsTable : null;
     }
 
     /** The tables of the enabled indexes. */
@@ -427,10 +527,13 @@ public final class IndexManager implements IndexCatalog {
         return names;
     }
 
-    /** Rewrites the state records, after {@code purge} deleted them with everything else. */
+    /** Rewrites the state records, after {@code purge} deleted them with everything else (the counts with them). */
     public void rewriteRecords() throws Exception {
         for (final Map.Entry<IndexType, IndexState> e : states.entrySet()) {
             writeRecord(e.getKey(), e.getValue());
+        }
+        if (countsComplete && text != null) {
+            writeCountsFlag(text.definition());
         }
         writer.flush();
     }
@@ -450,6 +553,10 @@ public final class IndexManager implements IndexCatalog {
             setState(index.type(), new IndexState(IndexState.Status.BUILDING, index.definition()));
         }
         writer.flush();
+        final boolean counting = text != null && indexes.stream().anyMatch(i -> i.type() == IndexType.TEXT);
+        if (counting) {
+            clearCounts();
+        }
         final RyaTripleContext context = RyaTripleContext.getInstance(conf);
         long count = 0;
         try (CellScanner scanner = store.batchScan(tables.getSpo(), List.of(KeyRange.all()), ScanSpec.of(Auths.ALL_HELD))) {
@@ -463,10 +570,18 @@ public final class IndexManager implements IndexCatalog {
                         writers.get(index.type()).write(puts);
                     }
                 }
+                if (counting) {
+                    count(st, 1);
+                }
                 count++;
             }
         }
+        flushCounts();
         writer.flush();
+        if (counting) {
+            writeCountsFlag(text.definition());
+            countsComplete = true;
+        }
         for (final SecondaryIndex index : indexes) {
             setState(index.type(), new IndexState(IndexState.Status.READY, index.definition()));
         }

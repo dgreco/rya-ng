@@ -98,8 +98,16 @@ public final class BulkBuild {
         final StoreRdfConfiguration conf = o.rdfConf();
         final List<String> tables = bulkTables(conf);
         final String eval = conf.getTableLayoutStrategy().getEval();
+        // Counters: the statistics, and the text index's posting counts (O6).
+        final List<String> counterTables = new java.util.ArrayList<>();
         if (conf.isMaintainStats()) {
-            final var refused = bulk.refusesCounters(eval);
+            counterTables.add(eval);
+        }
+        if (tables.contains(conf.getTableLayoutStrategy().getTextCount())) {
+            counterTables.add(conf.getTableLayoutStrategy().getTextCount());
+        }
+        for (final String counters : counterTables) {
+            final var refused = bulk.refusesCounters(counters);
             if (refused.isPresent()) {
                 throw new StoreCheck.Mismatch(refused.get());
             }
@@ -123,7 +131,8 @@ public final class BulkBuild {
     private List<String> bulkTables(final StoreRdfConfiguration conf) {
         final TableLayoutStrategy t = conf.getTableLayoutStrategy();
         final List<String> tables = new ArrayList<>();
-        for (final String name : List.of(t.getSpo(), t.getPo(), t.getOsp(), t.getEval(), t.getText(), t.getGeo(), t.getEntity())) {
+        for (final String name : List.of(t.getSpo(), t.getPo(), t.getOsp(), t.getEval(), t.getText(), t.getGeo(), t.getEntity(),
+                t.getTextCount())) {
             if (store.tables().exists(name)) {
                 tables.add(name);
             }
@@ -336,8 +345,9 @@ public final class BulkBuild {
         return parts[1];
     }
 
+    /** The counter tables: the statistics, and the text index's posting counts (O6). */
     private boolean isCounters(final String table) {
-        return table.equals(o.tablePrefix() + "eval");
+        return table.equals(o.tablePrefix() + "eval") || table.equals(o.rdfConf().getTableLayoutStrategy().getTextCount());
     }
 
     // ------------------------------------------------------------------ merge

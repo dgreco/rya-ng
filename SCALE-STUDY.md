@@ -148,7 +148,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O3 | **Bulk build on Accumulo and RocksDB:**<br>• sorted files per tablet, then an import<br>• every counter of 1 left out except `p`<br>• the DAO's guards in the writer<br>• input from the generator or from N-Triples/N-Quads files<br>(section 6.2) | R4, R5, R11 | no write-ahead log, memory tables or compactions. *est.* counters about 5.4 → 0.5 stored cells per triple, 160 → about 115 B per triple on disk | O1, M6 | 3 | Done for Accumulo and RocksDB (2026-11-20, sections 4.18 and 4.19): `build`, the same cells as `load` (checked cell by cell), at 10M 1.5 times faster on RocksDB and 13 times on the Accumulo test cluster, `eval` 90 % smaller. The 10B milestone needs a cluster |
 | O4 | **Graph drops in time proportional to the graph** (D8) | R6 | a drop reads the graph, not the 5 cells per triple of every table (about 5T cells at 1T) | D8 | 5 | Won't do: D8 (c), 2026-11-20 |
 | O5 | **Index rebuilds through the bulk build; purge by recreating tables** when the caller sees everything | R6 | a rebuild becomes a batch job; such a purge becomes constant time | O3 | 5 | Done (2026-11-20, section 4.23): the loader's `rebuild` sorts `spo` by split range into the indexes' files and imports them, while writers record their deletes for the job to replay; graph drops wait for it. Accumulo test cluster 3M: 16.6 → 5.8 s; RocksDB 10M: 18.5 → 9.3 s. `purge` left as it is (no production caller) |
-| O6 | **Text planning from per-term posting counts** | R7 | an AND is driven by its rarest word | — | 5 | Not started |
+| O6 | **Text planning from per-term posting counts** | R7 | an AND is driven by its rarest word | — | 5 | Done (2026-11-21, section 4.25): `<prefix>textcount`, one counter per word, predicate and label, kept by every write path; a word past the probe is sized by it when the counts are complete. `text-and` 291.5 → 112.3 ms (RocksDB 10M), 270.6 → 212.5 ms (Accumulo 3M); the load +8 %, the table 0.4 % of the store |
 | O7a | **Parallel reads of one large range, constant object:** a star pattern on its own (`?x a :C`: alone, counted, or driving lookups) read as a merge of one list, its subjects in slices at `spo`'s split points (section 6.6) | R2 | every server holding the list reads at once, and the client decodes no statements | O24 | 1 | Done: `query.join.mergesingle` (10,000). A whole class returned is 2.8 times faster on RocksDB and 2.3 on Accumulo at 10M, 4.9 times on RocksDB at 100M; counted without the entity index, 2.1 to 4.3 times; with a lookup per member, 13 to 16 % on RocksDB and nothing on Accumulo, where the lookups are the time (section 4.12) |
 | O7b | **Parallel reads of one large range, variable object:** `?s :p ?o` (a whole predicate, such as a filter no index covers), cut at the table's own split points, statements decoded on the slice threads (section 6.6) | R2 | every server holding the range reads at once | — | 1 | Not started: later, when a workload needs it (decided 2026-11-19) |
 | O8 | **Approximate counts from the counters** (class sizes, like `stats:approxSize`) | R12 | a count in a few reads instead of a scan | — | 5 | Done (2026-11-20, section 4.24): `stats:approxInstances` (a class's `rdf:type` statements) and `stats:approxTriples` (a predicate's statements) answered from the counters, with `stats:approxSize`, by `ApproxCountOptimizer`. A class's size: 0.4 ms and 1 cell against 12.4 ms and 53,432 cells counted (RocksDB 10M); 1.2 against 12.7 ms on Accumulo, 0.9 against 14.1 on HBase (3M) |
@@ -1265,7 +1265,53 @@ The exact count grows with the class, the counter read doesn't: at 10^12 the gap
 
 **Tests:** `ApproxCountIT` on every backend, both HBase counter modes. Every class's and predicate's approximate count equals the exact `COUNT` of the stored statements, with and without a label, and with a statement in two graphs. Constant subjects, `BIND`, `FILTER` and joins work as for any pattern, a delete counts down, and a store without statistics refuses with an explanation.
 
-**Next:** O6, text planning from per-term posting counts.
+**Next:** O6, text planning from per-term posting counts (section 4.25).
+
+## 4.25 Text planning from posting counts (O6)
+
+**The problem (R7).** An `AND` of words is driven by its smallest operand, and an operand's size was estimated by reading up to 1,000 of its entries (`PROBE_LIMIT`). Every word with more looked the same, so an `AND` of a common word and a rarer one, both above 1,000, was driven by whichever came first: at 10^12, a list of billions streamed to check a few thousand.
+
+**The counts** (`TextCounts`), a counter table of their own, `<prefix>textcount`:
+- **Keys:** one counter per word, predicate and label (row = word `00` predicate, family `n`), +1 for every posting written and −1 for every one deleted.
+- **Writes:** writers sum them per write call (`IndexManager.flushCounts`), and the bulk build and the rebuild job (O5) sum them in their files.
+- **Kept apart from the postings:** O5's replay re-applies postings, and counts with them would count twice.
+- **Drift,** as every counter's: a statement added twice counts twice, and a graph drop doesn't adjust them (dropping everything clears them). A delete made while a rebuild's sort runs, before the sort reaches its range, leaves its word one low: the job cleared the counts, and its sort never counts the deleted statement. The planner tolerates both.
+- **No storage-version bump** (AGENTS.md's VERSION rule, decided 2026-11-21): older code writing to a store with counts leaves them low, but they only steer plans, and the floor at the probe's limit bounds the harm.
+- **Accounts:** readers and writers need the new table like the others; Accumulo grants each table. A reader that may not read it still searches, and plans as without the counts.
+- **Where counters can't be imported** (HBase's increment mode), the rebuild job builds the text index without them.
+
+**Complete or not.** The counts are read only when the `ns` record (`tripatha`, `index`, `text.counts`) holds the text index's current definition:
+- **Written** with a store created with the index, or by a rebuild that counted.
+- **Dropped** when the index is redefined or a rebuild starts.
+- **A store from before the counts**, or one rebuilt where counters can't be imported, plans as before. It gets them by rebuilding the text index: delete `<prefix>text`, start the writers with the index on, and run the loader's `rebuild --text-index`.
+
+**The planner** (`IndexSearcher`) still probes first:
+- **At most 1,000 entries:** the word is small and kept in memory, as before.
+- **More:** it is sized by its count, at least the probe's limit so a stale low count never beats a small operand.
+
+`query.textcounts=false` turns this off.
+
+**Measured** on the join benchmark's new `text-and` query: the most common comment word, then one about 20 times rarer that shares comments with it, both with more than 1,000 postings. Variants of one run, counts on and off, the same rows:
+
+| Store | With counts | Without (the common word drives) |
+|---|---|---|
+| RocksDB, 10M (7,028 rows) | 112.3 ms, 23,476 cells | 291.5 ms, 161,061 cells |
+| Accumulo test cluster, 3M (2,075 rows) | 212.5 ms, 8,337 cells | 270.6 ms, 49,846 cells |
+
+**What it costs to write,** on RocksDB at 10M, the same load from `main` and from this branch, back to back:
+- the load took 120 s against 111 s (+8 %, one run each);
+- `textcount` holds 10 MB of the store's 2,796 MB (0.4 %), 2 MB at 3M on Accumulo.
+
+**Tests:**
+- **`TextPlanningIT`,** on every backend and both HBase counter modes: two words above the probe's limit, the common one first.
+  - The rare one streams, through the trace, and the rows match the query without the index.
+  - Without complete counts, or with `query.textcounts=false`, the first one drives, as before O6.
+  - Counts follow deletes and a drop of everything.
+- **`IndexVerifier.verifyTextCounts`:** counts against postings, per word, predicate and label.
+  - Every sail test checks that no count is below its postings. Run with `-Dtripatha.test.indexes=true`, the whole suite passed (244 tests).
+  - `LoaderIT` checks that `load`, `build` and `rebuild` write the same counts, equal to the postings.
+
+**Next:** phase 6, M14 (the fixed cost per query).
 
 ---
 
@@ -1279,7 +1325,7 @@ The exact count grows with the class, the counter read doesn't: at 10^12 the gap
 | R4 | Bulk ingest | Present (O3, O10); HBase in coprocessor mode | O3, O10 |
 | R5 | Statistics for join ordering, at a size that scales | Present, oversized | O1, O3 |
 | R6 | Maintenance in time proportional to what it changes | Missing | O4, O5 |
-| R7 | Search planning that tells common terms from rare ones | Partial | O6 |
+| R7 | Search planning that tells common terms from rare ones | Yes: per-word posting counts (O6, 4.25) | O6 |
 | R8 | Tablets and regions sized for 1T | Present (O2) | O2 |
 | R9 | A loader that runs at 1T | Present (O2); its rate is R4's | O2 |
 | R10 | Labels in HBase bulk files | Present (O10): tags of label ordinals, read from the canaries | O10 |
@@ -1883,10 +1929,10 @@ Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, no
 7. ~~**O4**, graph drops per D8~~: closed, D8 (c) (2026-11-20): a drop keeps scanning the tables;
 8. **O5**, index rebuilds through the bulk build: a resumable loader job that reads `spo` by split range and imports the index's sorted files, while writes go on (decided 2026-11-20: rebuilds only, purge stays as it is). **Done** (2026-11-20, section 4.23);
 9. **O8**, approximate counts. **Done** (2026-11-20, section 4.24);
-10. **O6**, text planning from posting counts.
+10. **O6**, text planning from posting counts. **Done** (2026-11-21, section 4.25).
 
 **Exit:**
-- an AND of a common and a rare word is driven by the rare one;
+- an AND of a common and a rare word is driven by the rare one (reached with O6, section 4.25: `TextPlanningIT`);
 - an index rebuild at 10^12 is a resumable batch job, not a start-up scan (reached with O5, section 4.23).
 
 ### Phase 6: smaller wins

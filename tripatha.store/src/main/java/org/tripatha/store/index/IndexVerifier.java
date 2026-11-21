@@ -16,14 +16,17 @@
 package org.tripatha.store.index;
 
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
 
 import org.tripatha.store.StoreRdfConfiguration;
 import org.tripatha.api.RdfCloudTripleStoreConstants.TABLE_LAYOUT;
+import org.tripatha.api.layout.TableLayoutStrategy;
 import org.tripatha.api.domain.RyaStatement;
 import org.tripatha.api.resolver.RyaTripleContext;
 import org.tripatha.api.resolver.triple.TripleRow;
@@ -88,6 +91,57 @@ public final class IndexVerifier {
         final Set<String> extra = new TreeSet<>(actual);
         extra.removeAll(expected);
         return new Report(missing, extra);
+    }
+
+    /**
+     * The text index's posting counts against its postings (SCALE-STUDY.md O6), word by word,
+     * predicate and label, under every label the account holds.
+     *
+     * @return the counters below their postings (a write path that doesn't count) and above them
+     *         (the drift every counter has: a statement added twice, a graph dropped), or null when
+     *         the counts aren't complete, so there is nothing to check
+     */
+    public static Report verifyTextCounts(final Store store, final StoreRdfConfiguration conf) throws Exception {
+        final TableLayoutStrategy tables = conf.getTableLayoutStrategy();
+        final IndexState state = IndexManager.readState(store, tables, IndexType.TEXT);
+        if (state == null || !store.tables().exists(tables.getTextCount())) {
+            return null;
+        }
+        final String flag = IndexManager.readFlag(store, tables, TextCounts.FLAG);
+        if (flag == null || !flag.equals(state.definition())) {
+            return null;
+        }
+        final ScanSpec everyLabel = ScanSpec.of(Auths.ALL_HELD);
+        final Map<String, Long> postings = new HashMap<>();
+        try (CellScanner cells = store.batchScan(tables.getText(), List.of(KeyRange.all()), everyLabel)) {
+            while (cells.hasNext()) {
+                final Cell c = cells.next();
+                postings.merge(IndexKeys.term(c) + "|" + IndexKeys.docKey(c).predicate() + " [" + text(c.visibility()) + "]", 1L, Long::sum);
+            }
+        }
+        final Map<String, Long> counts = new HashMap<>();
+        try (CellScanner cells = store.batchScan(tables.getTextCount(), List.of(KeyRange.all()),
+                ScanSpec.builder(Auths.ALL_HELD).column(TextCounts.FAMILY, new byte[0]).build())) {
+            while (cells.hasNext()) {
+                final Cell c = cells.next();
+                counts.merge(text(c.row()).replace(IndexKeys.SEP, '|') + " [" + text(c.visibility()) + "]", store.counterValue(c.value()),
+                        Long::sum);
+            }
+        }
+        final Set<String> below = new TreeSet<>();
+        final Set<String> above = new TreeSet<>();
+        final Set<String> keys = new HashSet<>(postings.keySet());
+        keys.addAll(counts.keySet());
+        for (final String key : keys) {
+            final long posted = postings.getOrDefault(key, 0L);
+            final long counted = counts.getOrDefault(key, 0L);
+            if (counted < posted) {
+                below.add(key + ": " + counted + " counted, " + posted + " postings");
+            } else if (counted > posted) {
+                above.add(key + ": " + counted + " counted, " + posted + " postings");
+            }
+        }
+        return new Report(below, above);
     }
 
     /** The index as it was defined when built (its stored predicate list), else as configured. */
