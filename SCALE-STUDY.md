@@ -170,6 +170,7 @@ So it is a measured go/no-go (M5), and nothing waits for it.
 | O24 | **Merge joins, part 2:** intersect a star's lists in slices of the subject space on several threads at once (cut at `spo`'s tablet splits or at sampled subjects), and read only each cell's subject instead of decoding the whole statement (section 6.10) | R2 | O22 reads one list per pattern on one thread, and decodes every cell | O22 | 1 | Done: subjects read as bytes, no statement decoding; slices cut at `spo`'s split points (`TableAdmin.splitRows`), up to `query.join.mergeslices` (4) on threads of their own. With 4 slices merges are 1.6 to 2 times faster on Accumulo and HBase and 3 times on RocksDB (section 4.9). At 100M triples the slices stalled when no lookups followed: 4 were 11 % faster than 1. Since 2026-11-18 they share one queue then: 3.7 times (section 4.11) |
 | O25 | **A real estimate for a value range:** count the range's cells up to a cap (about 10,000) when its pattern is in a join, and use the count when the range is shorter, or assume most of the predicate when it isn't. Only the join order depends on it, so a pattern on its own needs none | R2 | O14's estimate is a fixed tenth of the predicate: `class-value-wide` (`?v > 0`, 91 % pass) is 8.2 times slower on Accumulo with it, 4.1 on RocksDB and 3.6 on HBase (section 4.8) | O14 | 1 | Done: counted up to `query.valueranges.count` (10,000) for a pattern in a join. `class-value-wide` is back within 1 to 6 % of the merge plan, and the selective stars keep their gains; a condition between the cap and the star's lists (`class-value-mid`) gets the merge plan, 1.2 to 2.75 times slower than the range would be (section 4.8). Since 2026-11-18 the count stops at the shortest other pattern of the join, at most 1,000,000 cells. At 100M the fixed cap had lost `class-value-int` its plan (510 → 224 ms with the fix); `class-value-mid` now gets the range plan, 12 to 39 % faster at 10M; a wide condition pays 1 to 7.5 % for the longer count (section 4.11) |
 | O26 | **Patterns whose object is never used, counted in the servers:** a pattern whose object variable appears once and isn't returned (`SELECT ?s WHERE { ?s :p ?o … }`) only decides how many times a row comes back. Its lookups ask the store for one count per range, under the query's labels and the graph condition, instead of reading and decoding every match; the joins repeat the row that many times, and with `DISTINCT` existence is enough. Accumulo counts with an option of its iterators, RocksDB with native iteration that copies no values, HBase with the coprocessor endpoint of D14 (a client count where it isn't deployed). Never from the `eval` counters: they leave out 1s and can drift | R2 | one cell per range crosses the network instead of every match (about 10 times fewer for `?s :friendOf ?f`). On WatDiv C1 to C3, where QLever leads, decoding and row building were 29 % of C3's CPU (section 4.14) | D14 | 4 | Done on every backend (2026-11-20, section 4.22): `CountedPatternOptimizer` marks the patterns, batched joins and entity chains fetch counts with their statements, and the store counts without reading: natively on RocksDB, in Accumulo's tablet servers (`RangeCountingIterator`) and HBase's region servers (`RangeCountEndpoint`), the count running alongside the window's reads. WatDiv C3-01 in-process −37 to −49 %, and on the native executable C3 533 → 268 ms (QLever 350); on the join benchmark `star-unused` sends 23 % fewer cells to the client on Accumulo and 12 % fewer on HBase, and `chain-unused` is 20 % faster on HBase |
+| O27 | **Planning's counter reads in one round trip:** the counters every pattern's estimate needs read together, before join ordering, instead of one round trip per pattern (`RdfCloudTripleStoreEvaluationStatistics.prefetch`, `query.stats.prefetch`) | — | one batch scan per query's planning | M14 | 6 | Done (2026-11-21, section 4.26): the median plan 1.69 → 1.23 ms on the Accumulo test cluster, 0.50 → 0.37 on HBase; the same plans and rows |
 
 ### 2.2 Measurements
 
@@ -190,7 +191,7 @@ All on a real cluster with NVMe disks, unless the row says otherwise.
 | M11 | **Against other engines, on a standard benchmark:** WatDiv's 20 basic templates at about 10M triples, on Tripatha's endpoint over RocksDB, QLever and Oxigraph, over HTTP, with the same data and checked rows (`compare.sh`, tripatha.loader/README.md) | The endpoint's cost per query, O11, O22 to O24 | Done: section 4.13 |
 | M12 | **Where a query's time goes, in-process:** `QueryProfile` (tripatha.loader test sources) runs one query on a RocksDB store and splits its time between reading the rows and writing them, the store's scans by reason, and JFR CPU samples. Applied to WatDiv's complex queries | O16, O17, O11 | Done: section 4.14 |
 | M13 | **The native executable's collector and build:** its heap settings, and native-image's `-O3`, `-march=native` and profile-guided optimization, on WatDiv over HTTP against the JVM on the same path | M11 | Done: section 4.15 |
-| M14 | **The fixed cost per query:** where a small query's time goes between the request and its first scan, on the JVM endpoint that Accumulo and HBase use and on the native executable, over HTTP with warm JITs (Oxigraph answers 7 small WatDiv templates 0.02 to 1.9 ms sooner) | phase 6 | Not started |
+| M14 | **The fixed cost per query:** where a small query's time goes between the request and its first scan, on the JVM endpoint that Accumulo and HBase use and on the native executable, over HTTP with warm JITs (Oxigraph answers 7 small WatDiv templates 0.02 to 1.9 ms sooner) | phase 6 | Done (2026-11-21, section 4.26): the fixed cost is about 0.13 ms per request on the native executable and 0.14 on the JVM (Oxigraph 0.08), and Tripatha is the faster on small WatDiv queries measured warm (1.0 against 1.2 ms). On Accumulo and HBase, planning's counter reads are the fixed cost: now read together (O27) |
 
 ### 2.3 Milestones
 
@@ -1311,7 +1312,79 @@ The exact count grows with the class, the counter read doesn't: at 10^12 the gap
   - Every sail test checks that no count is below its postings. Run with `-Dtripatha.test.indexes=true`, the whole suite passed (244 tests).
   - `LoaderIT` checks that `load`, `build` and `rebuild` write the same counts, equal to the postings.
 
-**Next:** phase 6, M14 (the fixed cost per query).
+**Next:** phase 6, M14 (the fixed cost per query, section 4.26).
+
+## 4.26 The fixed cost per query (M14), and planning's reads together (O27)
+
+**The question.** Where a small query's time goes between the request and its first scan, on the JVM endpoint and the native executable. The last comparison (section 4.13) had Oxigraph answering 7 small WatDiv templates 0.02 to 1.9 ms sooner.
+
+**The tools:**
+- **`FixedCost`** (the loader's test sources): runs query files in-process on a copy of a RocksDB store. It reports the p50 of:
+  - opening the connection, parsing, the Sail's preparation;
+  - planning (with the scans it makes), the run, closing;
+  - the query untraced, and with its rows written as TSV.
+- **JoinBench `--fixed-cost`** runs the same over the join benchmark's queries, on any backend.
+- **Over HTTP,** CompareBench's `--raw` with 50 warm-up and 500 timed runs per query (the JVM: 200 warm-up), on the WatDiv store: the 85 small queries (S, L, F) and two floors. One floor is a `VALUES` query that reads nothing; the other is a lookup of a subject that doesn't exist.
+
+**In-process** (RocksDB, the JVM, the 85 small WatDiv queries), medians:
+
+| Stage | ms |
+|---|---|
+| Open, parse, prepare | 0.009, 0.034, 0.008 |
+| Plan (4 counter reads, microseconds each here) | 0.027 |
+| Run | 1.12 |
+| Close, and writing TSV | about 0 |
+
+Tracing adds 7 % (1.248 against 1.166 ms).
+
+**Over HTTP,** warm (p50 in ms):
+
+| Query | Tripatha native | Tripatha JVM | Oxigraph |
+|---|---|---|---|
+| `VALUES` floor | 0.138 | 0.142 | 0.079 |
+| Lookup floor | 0.131 | 0.143 | 0.078 |
+| L3-01 | 0.224 | 0.288 | 0.197 |
+| S7-01 | 0.156 | 0.165 | 0.093 |
+| S3-01 | 5.16 | 5.30 | 4.12 |
+| F3-03 | 1.54 | 1.63 | 0.69 |
+| F4-01 | 3.85 | 4.10 | 2.04 |
+| **All 87, geometric mean** | **1.0** | **1.1** | **1.2** |
+
+**What it shows:**
+- **The fixed cost is small:** about 0.13 ms per request on the native executable and 0.14 on the JVM, against Oxigraph's 0.08. The 0.06 ms is the Java HTTP stack (Tomcat and Spring) against Oxigraph's own server. On the JVM endpoint's request threads (JFR):
+  - the store took half the CPU;
+  - SPARQL parsing 16 %;
+  - Spring and Tomcat 9 %;
+  - the optimizers 2.5 %.
+
+  Nothing there is worth replacing.
+- **Measured the same way, Tripatha is the faster on small queries:** a geometric mean of 1.0 against 1.2 ms. Section 4.13's small-query gaps came from its method (3 warm-up and 10 timed runs) and an older build.
+- **Where Oxigraph is faster, it is the query's own work:** F3 and F4 about twice, S3 and S6 by a quarter or so. In F4, 579 driver rows make about 2,000 lookups. Building, escaping and hashing their keys takes about 40 % of the CPU (`RocksCodec.escape` 11 %, `BatchLookup.Group.add` 10 %, `KeyRange.hashCode` 6 %), where Oxigraph joins integer IDs. That is the dictionary question (M5, O11), not fixed cost.
+- **On Accumulo and HBase, planning is the fixed cost** (JoinBench `--fixed-cost`, 3M on the test clusters):
+  - each counter read is a round trip, 0.4 to 0.65 ms on Accumulo and 0.15 to 0.3 on HBase, one per pattern, one after another;
+  - the median plan took 1.69 ms on Accumulo and 0.50 on HBase;
+  - on Accumulo that is 46 % of `lookup` (0.46 of 1.08 ms) and 54 % of `range-number`.
+
+**O27: the counters read together.** `RdfCloudTripleStoreEvaluationStatistics.prefetch` runs after the rewrites that change patterns (inference, index search) and before the optimizers that estimate them:
+- it works out every pattern's counter as the estimate will, through one method both use;
+- it reads them in one batch scan (`RyaStoreEvalStatsDAO.getCardinalities`: one row per counter, the counters' columns);
+- the estimates then read that per-query map, and a counter it didn't foresee is read when asked for;
+- `query.stats.prefetch=false` turns it off.
+
+Plan times, the same queries, batch off and on:
+
+| Store | Median plan | `star-unused` | `star-optional` | `chain` |
+|---|---|---|---|---|
+| Accumulo test cluster, 3M | 1.69 → 1.23 ms (−27 %) | 2.06 → 1.23 | 2.46 → 1.68 | 2.65 → 2.13 |
+| HBase test cluster, 3M | 0.50 → 0.37 ms (−26 %) | 0.86 → 0.58 | 0.89 → 0.61 | 0.80 → 0.55 |
+
+RocksDB is unchanged, and a query with one counter reads it as before. A batch scan costs more than a plain one on the test clusters, so three reads become about one and a half; on a cluster, where each read crosses the network, the batch saves more.
+
+**Tests:** `PlanningReadsIT`, 8 query shapes (stars, a chain, a constant subject and object, `OPTIONAL`, `UNION`, `GRAPH`, a filtered type), with and without a label:
+- the rows and the optimized plan are the same with the batch on and off, and the plan's text holds every estimate;
+- with it on, one batch and no single read wherever two counters or more are read: 5 of the 8 at least.
+
+**Next:** O9, deprecating `tbl.hashprefix` (D7).
 
 ---
 
@@ -1937,7 +2010,7 @@ Every optimization must hold on Accumulo, HBase and RocksDB at 10^12 triples, no
 
 ### Phase 6: smaller wins
 
-11. **M14**, the fixed cost per query, on the JVM endpoint and the native executable; then what it shows.
+11. **M14**, the fixed cost per query, on the JVM endpoint and the native executable; then what it shows. **Done** (2026-11-21, section 4.26): small apart from planning's counter reads on Accumulo and HBase, now read together (O27).
 12. **O9**, deprecating `tbl.hashprefix` (D7).
 
 ### On a cluster, and conditional

@@ -133,6 +133,10 @@ public class RyaQueryOptimizerPipeline implements QueryOptimizerPipeline {
             // which then sees the much smaller indexed patterns.
             optimizers.add(indexSearch);
         }
+        // The counters the estimates below need, in one round trip (M14), now that the patterns are final.
+        if (statistics instanceof RdfCloudTripleStoreEvaluationStatistics<?> counted) {
+            optimizers.add((expr, dataset, bindings) -> counted.prefetch(expr));
+        }
         if (valueRanges != null) {
             // After the index search, which has its own way of narrowing a filtered pattern;
             // before join ordering, which then sees the narrowed estimate.
