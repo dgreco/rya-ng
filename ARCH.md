@@ -1976,14 +1976,14 @@ The rule for all of them: an optimization must hold on all three backends, at 10
 
 This section lists them in one place, with what each does, where it runs, its gain as measured, and where it is explained in detail. [SCALE-STUDY.md](SCALE-STUDY.md) is the tracker: its section 2 numbers them (`O…`), and its section 4 holds the measurements.
 
-**Where it stands on WatDiv** (SCALE-STUDY.md 4.22 and the README's [Benchmarks](README.md#benchmarks): 100 queries of 20 templates at scale factor 100, on one machine, 2026-11-20, with O26). p50, geometric means:
+**Where it stands on WatDiv** (SCALE-STUDY.md 4.27 and the README's [Benchmarks](README.md#benchmarks): 100 queries of 20 templates at scale factor 100, on one machine, 2026-11-21, commit `c1e1968`). p50, geometric means:
 
 | | Tripatha | QLever 0.6.0 | Oxigraph 0.5.13 |
 |---|---|---|---|
-| All 100 queries | **2.6 ms** | 10.1 ms | 4.0 ms |
-| Complex (C1 to C3) | **56.1 ms** | 67.3 ms | 417.3 ms |
-| Small (S, L, F) | **1.49 ms** | 7.26 ms | 1.73 ms |
-| Templates where it's the fastest | **10** (2 tied) | 3 | 7 |
+| All 100 queries | **2.3 ms** | 9.5 ms | 3.8 ms |
+| Complex (C1 to C3) | **54.7 ms** | 65.0 ms | 398.7 ms |
+| Small (S, L, F) | **1.28 ms** | 6.79 ms | 1.66 ms |
+| Templates where it's the fastest | **13** (5 tied) | 3 | 9 |
 
 ### 20.1 Joins: fewer round trips
 

@@ -1384,7 +1384,27 @@ RocksDB is unchanged, and a query with one counter reads it as before. A batch s
 - the rows and the optimized plan are the same with the batch on and off, and the plan's text holds every estimate;
 - with it on, one batch and no single read wherever two counters or more are read: 5 of the 8 at least.
 
+**After:** the WatDiv comparison again, at the end of phase 6 (section 4.27).
+
 **Next:** O9, deprecating `tbl.hashprefix` (D7), done the same day: its setter and resolver are `@Deprecated`, a DAO opening a store on it logs a warning, and the stores on it keep working (section 5.3). The plan's remaining items need a cluster.
+
+## 4.27 WatDiv after phases 5 and 6
+
+`compare.sh --build` on 2026-11-21, at commit `c1e1968`: the profile-guided native executable rebuilt, and the stores and queries of section 4.13 reused. The same statements on the three engines, and the same rows for every query. p50, geometric means, in ms:
+
+| Queries | Tripatha | QLever 0.6.0 | Oxigraph 0.5.13 | Tripatha on 2026-11-20 (`70ca405`) |
+|---|---|---|---|---|
+| All 100 | **2.3** | 9.5 | 3.8 | 2.6 |
+| The 85 small (S, L, F) | **1.28** | 6.79 | 1.66 | 1.49 |
+| Complex | **54.7** | 65.0 | 398.7 | 56.1 |
+| Fastest on (of 20 templates) | **13** (5 tied with Oxigraph) | 3 (L2, S4, C2) | 9 | 10 (2 tied) |
+
+**How to read the comparison with 2026-11-20:**
+- QLever and Oxigraph also measured 5 to 6 % faster this run, so part of Tripatha's 12 % is the machine.
+- O27 batches planning's counter reads, which are microseconds each on RocksDB.
+- C3 measured 290 ms against 268. Between runs on different days that is within this comparison's noise.
+
+Oxigraph's four clear wins (S3, S6, F3, F4) are the per-lookup key work of section 4.26, the dictionary question (M5).
 
 ---
 
